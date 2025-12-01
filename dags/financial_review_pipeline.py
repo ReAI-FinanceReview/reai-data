@@ -99,11 +99,9 @@ def validate_data_quality(**context):
     - 임계값 기준 검증
     """
     import sys
-    from pathlib import Path
 
     # 프로젝트 루트를 Python 경로에 추가
-    project_root = Path("/Users/hwangjonghoon/development/FinanceReview")
-    sys.path.insert(0, str(project_root))
+    sys.path.insert(0, str(PROJECT_ROOT))
 
     from src.utils.db_connector import DatabaseConnector
     from sqlalchemy import text
