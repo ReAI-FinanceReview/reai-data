@@ -1,0 +1,75 @@
+# 크롤링할 Play Store 앱 ID를 한 줄에 하나씩 입력하세요.
+
+
+### 특수 은행 ###
+
+# sh수협
+com.suhyup.psmb   # 수협 파트너뱅크 개인
+com.suhyup.pesmb  # 수협 헤이뱅크
+
+# NH
+com.nonghyup.nhallonebank       # NH올원뱅크
+nh.smart.banking                # NH스마트뱅킹
+nh.smart.nhcok                  # NH콕뱅크(농협)
+
+
+### 시중은행 (국내) ###
+
+# 신한
+com.shinhan.smartcaremgr        # 신한 슈퍼SOL - 신한 유니버설 금융 앱
+com.shinhan.sbanking            # 신한 SOL뱅크-신한은행 스마트폰 뱅킹
+com.shinhan.foreignerbank       # 신한 SOL Global
+com.shinhan.sbankmini           # 신한 쏠(SOL) mini - 신한은행 스마트폰뱅킹
+
+
+# KB국민
+com.kbstar.kbbank               # KB스타뱅킹-금융, 결제, 통신도 다 되는 은행
+com.kbstar.global               # KB Global Banking 
+
+# 하나
+com.kebhana.hanapush            # 하나은행, 하나원큐는 즐거운 혜택이 가득한 은행 앱
+kr.co.hanamembers.hmscustomer   # 하나머니(트래블로그)
+
+# 우리
+com.wooribank.smart.npib        # 우리WON뱅킹
+com.wooricard.smartapp          # 우리카드 우리WON카드
+
+# iM
+kr.co.dgb.dgbm                  # iM뱅크
+
+### 시중은행 (외국계) ###
+
+# SC제일
+com.scbank.ma                   # SC제일은행 모바일뱅킹
+
+# 한국씨티
+kr.co.citibank.citimobile       # 씨티모바일
+
+### 시중은행 (인터넷전문) ###
+
+# 카카오뱅크
+com.kakaobank.channel           # 카카오뱅크
+
+# 케이뱅크
+com.kbankwith.smartbank         # 케이뱅크
+
+# 토스뱅크
+viva.republica.toss             # 토스
+
+
+### 지방은행 ###
+
+# 부산은행
+kr.co.busanbank.mbp             # BNK부산은행 모바일뱅킹
+
+# 경남은행
+com.knb.psb                     # BNK경남은행 모바일뱅킹
+
+# 전북은행
+kr.co.jbbank.privatebank        # 전북은행 - 쏙뱅크
+
+# 광주은행
+com.kjbank.asb.pbanking         # 광주 와뱅크
+
+# 제주은행
+com.jejubank.smartnew           # 제주은행 JBANK

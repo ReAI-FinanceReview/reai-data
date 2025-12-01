@@ -1,0 +1,8 @@
+# 크롤링에서 제외할 앱 ID 목록
+# 형식: platform:app_id  # 제외 사유
+
+# App Store 제외 앱들
+# appstore:123456789  # 서비스 종료
+
+# Play Store 제외 앱들  
+# playstore:com.example.app  # 접근 불가
