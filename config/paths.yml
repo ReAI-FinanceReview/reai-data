@@ -1,0 +1,8 @@
+# Storage layout for pipeline outputs
+bronze_dir: "data/raw"
+silver_dir: "data/processed"
+gold_dir: "data/features"
+
+# Optional embeddings/output paths
+embeddings_dir: "data/embeddings"
+logs_dir: "logs"
