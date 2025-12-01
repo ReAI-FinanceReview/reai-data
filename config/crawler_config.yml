@@ -1,0 +1,41 @@
+# 크롤러 전역 설정
+global:
+  delay_between_requests: 2        # 요청 간 대기시간 (초)
+  max_retries: 3                   # 최대 재시도 횟수
+  timeout: 30                      # 요청 타임아웃 (초)
+
+# App Store 크롤러 설정
+appstore:
+  country: "kr"                    # 국가 코드
+  pages_to_crawl: 10               # 크롤링할 페이지 수
+  max_reviews_per_app: 10          # 앱당 최대 리뷰 수
+  
+# Play Store 크롤러 설정
+playstore:
+  language: "ko"                   # 언어 코드
+  country: "kr"                    # 국가 코드
+  reviews_per_app: 10              # 앱당 리뷰 수 (테스트용)
+  sort_order: "newest"             # 정렬 순서
+
+# 출력 설정
+output:
+  enabled: true                   # 출력 활성화 여부
+  base_directory: "data/raw"      # 기본 출력 디렉토리
+  file_format: "csv"              # 파일 형식
+  encoding: "utf-8-sig"           # 인코딩
+  date_format: "%Y%m%d"           # 날짜 형식
+
+# 앱 ID 파일 경로
+app_ids:
+  appstore: "config/app_ids/appstore_app_ids.txt"
+  playstore: "config/app_ids/playstore_app_ids.txt"
+  excluded: "config/app_ids/excluded_apps.txt"
+
+# 데이터베이스 설정
+database:
+  type: "<DB_TYPE>"
+  username: "<DB_USER>"
+  password: "<DB_PASSWORD>"
+  host: "<DB_HOST>"
+  port: "<DB_PORT>"
+  dbname: "<DB_NAME>"
