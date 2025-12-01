@@ -12,10 +12,13 @@ from sqlalchemy.engine.base import Engine
 
 
 def _env_db_url() -> str:
-    """환경변수에서 DB 접속 정보를 읽어 SQLAlchemy URL을 구성합니다.
-    우선순위:
-      1) DATABASE_URL (표준 URI)
-      2) DB_HOST/DB_PORT/DB_USER/DB_PASSWORD(or DB_PASS)/DB_NAME, DB_TYPE (기본 postgresql)
+    """
+    Resolve the database connection URL from environment variables.
+    
+    Prefers the standard DATABASE_URL environment variable; if not present, composes a SQLAlchemy-style URL from DB_TYPE, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, and DB_NAME. Returns an empty string when the required components are not all available.
+    
+    Returns:
+        str: Database connection URL in the form "db_type+psycopg2://user:password@host:port/dbname" if resolvable, otherwise an empty string.
     """
     # 1) 전체 URI 우선
     db_url = os.getenv("DATABASE_URL")
@@ -42,6 +45,17 @@ class DatabaseConnector:
 
     def __init__(self, config_path: str = 'config/crawler_config.yml'):
         # 환경변수 우선(DB URL 또는 개별 항목)
+        """
+        Initialize the DatabaseConnector by resolving a database URL and creating the SQLAlchemy engine and session factory.
+        
+        Resolution prioritizes an environment-provided database URL; if absent, the URL is built from the provided YAML configuration file. On success, sets instance attributes: `config_path`, `config`, `db_url`, `engine`, and `Session`.
+        
+        Parameters:
+            config_path (str): Path to the YAML configuration file used to build the DB URL when no environment URL is present.
+        
+        Raises:
+            ValueError: If no database connection URL can be determined from the environment or configuration.
+        """
         env_db_url = _env_db_url()
         self.config_path = config_path
         self.config = self._load_config(config_path) if not env_db_url else {}
@@ -54,12 +68,27 @@ class DatabaseConnector:
         self.Session = sessionmaker(bind=self.engine)
 
     def _load_config(self, config_path: str) -> dict:
-        """YAML 설정 파일을 로드합니다."""
+        """
+        Load a YAML configuration file and return its contents as a dictionary.
+        
+        Parameters:
+            config_path (str): Path to the YAML configuration file.
+        
+        Returns:
+            dict: Parsed YAML content as a Python dictionary (empty file may produce None).
+        """
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
 
     def _build_url_from_config(self) -> str:
-        """config 파일에서 DB URL 생성"""
+        """
+        Build a database connection URL from the loaded configuration's `database` section.
+        
+        Reads `database` settings from the instance config and, when all required fields are present, returns a connection URL in the form `db_type+psycopg2://username:password@host:port/dbname`. If `type` is missing it defaults to `postgresql`. If the `database` section is absent or any required field (username, password, host, port, dbname) is missing, an empty string is returned.
+        
+        Returns:
+            str: The constructed database connection URL, or an empty string if it cannot be built.
+        """
         db_config = self.config.get('database') if self.config else None
         if not db_config:
             return ""
@@ -77,9 +106,19 @@ class DatabaseConnector:
         return f"{db_type}+psycopg2://{username}:{password}@{host}:{port}/{dbname}"
 
     def get_session(self):
-        """데이터베이스 세션을 반환합니다."""
+        """
+        Return a new SQLAlchemy session bound to this connector's engine.
+        
+        Returns:
+            sqlalchemy.orm.Session: A new session instance from the connector's session factory.
+        """
         return self.Session()
 
     def create_tables(self, base):
-        """테이블을 생성합니다."""
+        """
+        Create database tables defined on the given SQLAlchemy declarative base.
+        
+        Parameters:
+            base: The SQLAlchemy declarative base (its `metadata`) whose tables will be created against the connector's engine.
+        """
         base.metadata.create_all(self.engine)

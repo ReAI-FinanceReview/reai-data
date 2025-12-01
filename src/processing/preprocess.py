@@ -30,6 +30,21 @@ class TextPreprocessor:
     """
 
     def __init__(self, config_path: str = 'config/crawler_config.yml'):
+        """
+        Initialize the TextPreprocessor and load preprocessing resources.
+        
+        Parameters:
+            config_path (str): Path to the crawler configuration YAML used to initialize the database connector and locate dictionary files.
+        
+        Description:
+            Creates a logger and a DatabaseConnector, sets the preprocessing version, and loads dictionaries:
+            - synonym_map: domain synonyms (database-first, file fallback)
+            - profanity_map: profanity replacements (database-first, file fallback)
+            - stopwords: list of stopwords loaded from file
+        
+        Attributes set:
+            logger, db_connector, preprocessing_version, synonym_map, profanity_map, stopwords
+        """
         self.logger = get_logger(__name__)
         self.db_connector = DatabaseConnector(config_path)
         self.preprocessing_version = '1.0'
@@ -40,7 +55,12 @@ class TextPreprocessor:
         self.stopwords = self._load_stopwords()
 
     def _load_synonyms_from_db(self) -> dict:
-        """Load domain synonyms from database (preferred method)"""
+        """
+        Load domain synonym mappings from the database.
+        
+        Returns:
+            dict: Mapping of variant form to canonical form (e.g., `{variant_form: canonical_form}`). Returns an empty dict if no active synonyms are found or if loading fails.
+        """
         try:
             from src.models.dictionary import Synonym
 
@@ -62,7 +82,12 @@ class TextPreprocessor:
             return {}
 
     def _load_synonyms(self) -> dict:
-        """Load domain synonyms dictionary from file (fallback method)"""
+        """
+        Load domain synonym mappings from the file config/dictionaries/domain_synonyms.json.
+        
+        Returns:
+            dict: Mapping of variant forms to canonical forms; an empty dict if the file cannot be read or parsing fails.
+        """
         try:
             path = 'config/dictionaries/domain_synonyms.json'
             with open(path, 'r', encoding='utf-8') as f:
@@ -74,10 +99,11 @@ class TextPreprocessor:
             return {}
 
     def _load_profanity_from_db(self) -> dict:
-        """Load profanity mapping from database (DB + file hybrid)
-
-        Note: DB only stores word and severity_level, not replacement tags.
-        We load active profanities from DB and map to replacements from file.
+        """
+        Load active profanity words from the database and map each to its replacement string from the profanity mapping file.
+        
+        Returns:
+            dict: Mapping of profane word to replacement string. Returns an empty dict if no active profanities are found or if loading fails.
         """
         try:
             from src.models.dictionary import Profanity
@@ -114,7 +140,11 @@ class TextPreprocessor:
             return {}
 
     def _load_profanity(self) -> dict:
-        """Load profanity mapping dictionary from file (fallback method)"""
+        """
+        Load profanity-to-replacement mappings from the file fallback.
+        
+        @returns dict: Mapping from profane word to replacement string. Returns an empty dict if the file cannot be read or parsed.
+        """
         try:
             path = 'config/dictionaries/profanity_map.json'
             with open(path, 'r', encoding='utf-8') as f:
@@ -126,7 +156,13 @@ class TextPreprocessor:
             return {}
 
     def _load_stopwords(self) -> list:
-        """Load stopwords list"""
+        """
+        Load stopwords from the file config/dictionaries/stopwords.txt.
+        
+        Reads the file and returns a list of non-empty lines with surrounding whitespace removed. If the file cannot be read or an error occurs, an empty list is returned.
+        Returns:
+            list: Stopwords as stripped strings; empty list on failure.
+        """
         try:
             path = 'config/dictionaries/stopwords.txt'
             with open(path, 'r', encoding='utf-8') as f:
@@ -139,14 +175,12 @@ class TextPreprocessor:
 
     def preprocess_text(self, text: str) -> str:
         """
-        Preprocess text (based on colleague's preprocess_for_model function)
-
-        Steps (from REFERENCE/review_analysis_pipeline.py lines 64-75):
-        1. Synonym replacement
-        2. Emoji demojize
-        3. URL/HTML removal
-        4. Repeated character normalization
-        5. Profanity masking
+        Apply a sequence of text preprocessing transformations: synonym replacement, emoji demojization (Korean), URL and HTML tag removal, repeated-character normalization, and profanity masking.
+        
+        The function performs the pipeline in that order and strips surrounding whitespace from the result.
+        
+        Returns:
+        	The preprocessed text with the transformations applied.
         """
         if not text:
             return ""
@@ -173,7 +207,15 @@ class TextPreprocessor:
         return processed_text.strip()
 
     def create_preprocessed_record(self, review: Review) -> Optional[ReviewPreprocessed]:
-        """Create preprocessed review record"""
+        """
+        Create a ReviewPreprocessed instance from a Review by applying the text preprocessing pipeline.
+        
+        Parameters:
+            review (Review): The source review object whose `review_text` will be preprocessed.
+        
+        Returns:
+            ReviewPreprocessed or None: A `ReviewPreprocessed` with `refined_text` set to the normalized, preprocessed text, or `None` if the review has no text or preprocessing fails.
+        """
         if not review.review_text:
             return None
 
@@ -197,7 +239,15 @@ class TextPreprocessor:
             return None
 
     def process_batch(self, batch_size: int = 100, limit: Optional[int] = None):
-        """Batch processing - preprocess raw reviews"""
+        """
+        Process reviews in batches and persist their preprocessed records.
+        
+        This method finds reviews that have not yet been preprocessed, applies the preprocessing pipeline to each, creates and stores ReviewPreprocessed records, and commits results to the database in batches. Progress and a final summary of successes and failures are logged. On error the database transaction is rolled back and the exception is propagated.
+        
+        Parameters:
+            batch_size (int): Number of reviews to process and commit per batch.
+            limit (Optional[int]): Optional maximum number of reviews to process; if None, all pending reviews are processed.
+        """
         self.logger.info("=" * 60)
         self.logger.info("Text Preprocessing Pipeline Started")
         self.logger.info("=" * 60)
@@ -270,7 +320,11 @@ class TextPreprocessor:
 
 
 def main():
-    """Main execution function"""
+    """
+    Entry point for command-line execution.
+    
+    Parses an optional first positional argument as an integer limit (invalid values are ignored), instantiates TextPreprocessor, and runs batch processing with batch_size=100 and the parsed limit.
+    """
     import sys
 
     limit = None

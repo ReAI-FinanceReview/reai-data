@@ -16,7 +16,19 @@ class Store(str, Enum):
 
 
 def get_crawler(store: Union[str, "Store"], config_path: Optional[str] = None):
-    """Return crawler instance for the requested store."""
+    """
+    Get a crawler instance for the specified store.
+    
+    Parameters:
+        store (str | Store): Store identifier ('appstore', 'playstore', 'unified') or the corresponding Store enum; string values are case-insensitive.
+        config_path (Optional[str]): Path to crawler configuration passed to the crawler constructor.
+    
+    Returns:
+        AppStoreCrawler | PlayStoreCrawler | UnifiedCrawler: An instance of the crawler for the requested store.
+    
+    Raises:
+        ValueError: If the provided store is not supported.
+    """
     if isinstance(store, str):
         store = store.lower()
         try:

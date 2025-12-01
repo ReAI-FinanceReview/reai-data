@@ -44,7 +44,17 @@ class EmbeddingGenerator:
                  model_name: str = 'text-embedding-3-small',
                  base_url: Optional[str] = None):
         # .env 자동 로드 (배포 패키지 루트 기준)
-        if DOTENV_AVAILABLE:
+        """
+                 Create and configure an EmbeddingGenerator instance.
+                 
+                 Initializes environment variables (if available), logger, database connector, embedding metadata (version, model name, inferred vector dimension), retry policy, and attempts to initialize the OpenAI client.
+                 
+                 Parameters:
+                     config_path (str): Path to the crawler configuration YAML used to configure the database connector.
+                     model_name (str): Embedding model identifier to use for generating vectors.
+                     base_url (Optional[str]): Optional base URL for the OpenAI API; if omitted, the value is taken from the OPENAI_BASE_URL environment variable.
+                 """
+                 if DOTENV_AVAILABLE:
             env_path = Path(__file__).resolve().parents[2] / ".env"
             if env_path.exists():
                 load_dotenv(env_path)
@@ -63,7 +73,17 @@ class EmbeddingGenerator:
         self._initialize_client()
 
     def _infer_dimension(self, model_name: str) -> int:
-        """모델명에 따른 벡터 차원 추론"""
+        """
+        Determine the embedding vector dimension for a given model name.
+        
+        Supports "text-embedding-3-small" (1536) and "text-embedding-3-large" (3072). If the model name is not recognized, defaults to 1536.
+        
+        Parameters:
+            model_name (str): Name of the embedding model.
+        
+        Returns:
+            int: The vector dimension associated with the model.
+        """
         dimension_map = {
             "text-embedding-3-small": 1536,
             "text-embedding-3-large": 3072,
@@ -71,7 +91,13 @@ class EmbeddingGenerator:
         return dimension_map.get(model_name, 1536)
 
     def _initialize_client(self):
-        """OpenAI 클라이언트 초기화"""
+        """
+        Initialize the OpenAI client used for embedding requests.
+        
+        Sets self.client to an OpenAI client configured with the instance's api_key and base_url.
+        If the OpenAI package is not available or the API key is missing, logs an error and leaves self.client unset (None).
+        On initialization failure, clears self.client and logs the error.
+        """
         if not OPENAI_AVAILABLE:
             self.logger.error("openai 패키지가 설치되지 않았습니다. `pip install openai` 후 다시 시도하세요.")
             return
@@ -90,10 +116,12 @@ class EmbeddingGenerator:
 
     def generate_embedding(self, text: str) -> Optional[List[float]]:
         """
-        텍스트를 임베딩 벡터로 변환
+        Generate an embedding vector for the given text.
+        
+        May return None if the OpenAI client is not initialized or if embedding generation fails after retries.
         
         Returns:
-            List[float]: 벡터 (차원은 모델에 따라 다름)
+            Optional[List[float]]: The embedding vector as a list of floats if successful, `None` otherwise.
         """
         if not self.client:
             self.logger.warning("OpenAI 클라이언트가 초기화되지 않았습니다.")
@@ -128,12 +156,17 @@ class EmbeddingGenerator:
                                 preprocessed: ReviewPreprocessed,
                                 source_content_type: str = 'preprocessed') -> Optional[ReviewEmbedding]:
         """
-        리뷰의 임베딩 레코드 생성
-
-        Args:
-            preprocessed: 전처리된 리뷰
-            source_content_type: 임베딩 생성 단계 ('raw', 'preprocessed', 'features')
-        """
+                                Create a ReviewEmbedding record from a preprocessed review's refined text.
+                                
+                                Attempts to generate an embedding for the review's refined_text and constructs a ReviewEmbedding (without persisting it) containing the app_review_id, source_content_type, model_name, and vector.
+                                
+                                Parameters:
+                                    preprocessed (ReviewPreprocessed): The preprocessed review containing `refined_text` and `app_review_id`.
+                                    source_content_type (str): The stage or origin of the text used for embedding (e.g., 'raw', 'preprocessed', 'features').
+                                
+                                Returns:
+                                    ReviewEmbedding | None: A ReviewEmbedding instance populated with the generated vector if successful, `None` if `refined_text` is missing or embedding generation fails.
+                                """
         if not preprocessed.refined_text:
             return None
 
@@ -168,7 +201,16 @@ class EmbeddingGenerator:
                      batch_size: int = 100, 
                      limit: Optional[int] = None,
                      stage: str = 'preprocessed'):
-        """배치 처리 - 전처리된 리뷰의 임베딩 생성"""
+        """
+                     Process preprocessed reviews in batches to generate embedding vectors and persist them as ReviewEmbedding records.
+                     
+                     Creates missing tables if needed, queries unprocessed ReviewPreprocessed rows (excluding reviews that already have embeddings), generates embeddings in batches, adds successful embedding records to the database session, commits after each batch, and logs progress and a summary of successes and failures. On error, the session is rolled back and the exception is re-raised. If the OpenAI client is not initialized, processing is aborted.
+                     
+                     Parameters:
+                         batch_size (int): Number of reviews to process per database commit.
+                         limit (Optional[int]): Optional cap on the total number of reviews to process.
+                         stage (str): Source content stage to record on each ReviewEmbedding (e.g., 'preprocessed').
+                     """
         self.logger.info("=" * 60)
         self.logger.info("임베딩 생성 파이프라인 시작")
         self.logger.info("=" * 60)
@@ -243,7 +285,11 @@ class EmbeddingGenerator:
 
 
 def main():
-    """메인 실행 함수"""
+    """
+    Run the embedding generation pipeline from the command line.
+    
+    Parses optional command-line arguments: the first argument is interpreted as an integer limit of records to process (ignored if not an integer), and the second argument is the embedding model name (defaults to "text-embedding-3-small"). Instantiates an EmbeddingGenerator with the selected model and invokes process_batch(batch_size=100, limit=limit).
+    """
     import sys
 
     limit = None

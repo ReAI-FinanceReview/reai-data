@@ -15,17 +15,35 @@ class Logger:
     _initialized = False
     
     def __new__(cls):
+        """
+        Ensure only one instance of the class is created and returned (singleton behavior).
+        
+        Returns:
+            The single instance of the class (an instance of `cls`), creating it on first call.
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
     
     def __init__(self):
+        """
+        Initialize the Logger instance and configure logging on first construction.
+        
+        Only the first initialization performs logging setup; subsequent initializations are no-ops to preserve the singleton's existing configuration.
+        """
         if not self._initialized:
             self.setup_logging()
             self._initialized = True
     
     def setup_logging(self, config_path: str = None):
-        """로깅 설정"""
+        """
+        Configure the logging system from a YAML configuration file or fall back to a basic configuration.
+        
+        If `config_path` is not provided, a default file is used at three levels up from this module into `config/logging_config.yml`. Ensures common log directories exist before attempting to load the YAML file; if loading or applying the configuration fails, applies a basic logging configuration and logs an error.
+        
+        Parameters:
+            config_path (str | Path, optional): Path to a YAML logging configuration file. If omitted, a default project-relative path is used.
+        """
         if config_path is None:
             config_path = Path(__file__).parent.parent.parent / "config" / "logging_config.yml"
         
@@ -48,7 +66,15 @@ class Logger:
             logging.error(f"로깅 설정 파일을 로드할 수 없습니다: {e}")
     
     def get_logger(self, name: str) -> logging.Logger:
-        """로거 인스턴스 반환"""
+        """
+        Retrieve a logger configured by the logging system.
+        
+        Parameters:
+            name (str): Name of the logger to retrieve.
+        
+        Returns:
+            logger (logging.Logger): Logger instance associated with the given name.
+        """
         return logging.getLogger(name)
 
 
@@ -56,5 +82,13 @@ class Logger:
 logger_manager = Logger()
 
 def get_logger(name: str) -> logging.Logger:
-    """로거 가져오기"""
+    """
+    Obtain a logger configured by the global Logger manager.
+    
+    Parameters:
+        name (str): Name of the logger (e.g., a hierarchical dot-separated name).
+    
+    Returns:
+        logging.Logger: Logger instance corresponding to the given name.
+    """
     return logger_manager.get_logger(name)

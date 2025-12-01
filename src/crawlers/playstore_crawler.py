@@ -16,6 +16,17 @@ class PlayStoreCrawler(BaseCrawler):
     """Play Store 리뷰 크롤러"""
 
     def __init__(self, config_path: str = None):
+        """
+        Initialize the PlayStoreCrawler and load Play Store–specific configuration and resources.
+        
+        Parameters:
+            config_path (str|None): Path to the crawler configuration file. If omitted, the crawler uses the default configuration resolution from the base class.
+        
+        Detailed behavior:
+            - Sets `language` (default 'ko'), `country` (default 'kr'), and `reviews_per_app` (default 100) from the 'playstore' section of the configuration.
+            - Sets `app_ids_file` from the 'app_ids.playstore' configuration entry (default 'config/app_ids/playstore_app_ids.txt').
+            - Initializes `db_connector` with `config_path` or the fallback 'config/crawler_config.yml'.
+        """
         super().__init__(config_path)
 
         # Play Store 특화 설정
@@ -31,13 +42,28 @@ class PlayStoreCrawler(BaseCrawler):
 
     def crawl_reviews(self, app_id: str) -> List[Dict[str, Any]]:
         """
-        리뷰 크롤링 (추상 메서드 구현)
+        Fetches reviews for the given Play Store app identifier.
+        
+        Parameters:
+            app_id (str): Play Store package name (e.g., "com.example.app") identifying the app to crawl.
+        
+        Returns:
+            reviews (List[Dict[str, Any]]): A list of review dictionaries returned from the Play Store; empty list if none or on error.
         """
         return self.get_playstore_reviews(app_id)
 
     def get_playstore_reviews(self, app_id: str, lang: str = None, country: str = None, count: int = None) -> List[Dict[str, Any]]:
         """
-        지정된 앱 ID로 Google Play Store 리뷰를 가져옵니다.
+        Fetches reviews for a Google Play app.
+        
+        Parameters:
+            app_id (str): The Play Store application ID to fetch reviews for.
+            lang (str, optional): Language code to request reviews in; uses the instance default if None.
+            country (str, optional): Country code to request reviews from; uses the instance default if None.
+            count (int, optional): Maximum number of reviews to retrieve; uses the instance default if None.
+        
+        Returns:
+            List[dict]: A list of review dictionaries as returned by the Play Store scraper; returns an empty list on error.
         """
         if lang is None:
             lang = self.language
@@ -65,7 +91,11 @@ class PlayStoreCrawler(BaseCrawler):
             return []
 
     def run(self) -> None:
-        """크롤러 실행"""
+        """
+        Run the Play Store crawling process for configured app IDs.
+        
+        Reads app IDs from the configured file, ensures database tables exist, and iterates over each app to fetch current app details and recent Play Store reviews. For each app found in the local database, updates its updated_at timestamp, inserts any new Review records (deduplicating by platform review ID), commits per-app changes, and rolls back on per-app errors. Waits between requests as configured and logs progress and a final summary. Raises ValueError if no valid app IDs are found.
+        """
         self.logger.info("Play Store 크롤러 실행 시작")
 
         self.db_connector.create_tables(Base)

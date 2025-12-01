@@ -13,6 +13,12 @@ class UnifiedCrawler(BaseCrawler):
     """App Store와 Play Store를 통합으로 크롤링하는 클래스"""
 
     def __init__(self, config_path: str = None):
+        """
+        Initialize the UnifiedCrawler and instantiate App Store and Play Store crawler components.
+        
+        Parameters:
+            config_path (str | None): Optional path to a configuration file used to initialize the base crawler and to pass to the AppStoreCrawler and PlayStoreCrawler instances. If None, defaults from the base class are used.
+        """
         super().__init__(config_path)
 
         # 개별 크롤러 인스턴스 생성
@@ -23,13 +29,22 @@ class UnifiedCrawler(BaseCrawler):
 
     def crawl_reviews(self, app_id: str) -> List[Dict[str, Any]]:
         """
-        리뷰 크롤링 (통합 크롤러에서는 사용하지 않음)
-        UnifiedCrawler는 개별 크롤러들을 오케스트레이션만 함
+        Placeholder method for crawling reviews for a single app; UnifiedCrawler does not implement per-app crawling.
+        
+        Parameters:
+            app_id (str): Identifier of the app whose reviews would be crawled.
+        
+        Raises:
+            NotImplementedError: Always raised. Use UnifiedCrawler.run() to perform crawling across stores.
         """
         raise NotImplementedError("UnifiedCrawler는 crawl_reviews를 직접 호출하지 않습니다. run()을 사용하세요.")
 
     def run(self) -> None:
-        """통합 크롤러 실행"""
+        """
+        Run the unified crawler by executing App Store and Play Store crawls and reporting results.
+        
+        Triggers each internal crawler's run() method in sequence, logs start and completion messages, records the total elapsed time, and logs any failures encountered during each store's crawl.
+        """
         self.logger.info("=" * 60)
         self.logger.info("통합 크롤러 실행 시작")
         self.logger.info("=" * 60)

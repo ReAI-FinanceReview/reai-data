@@ -13,7 +13,17 @@ class DataProcessor:
     
     @staticmethod
     def flatten_entry(entry: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
-        """중첩된 딕셔너리를 평면화"""
+        """
+        Flatten a nested dictionary into a single-level dictionary with joined key paths.
+        
+        Parameters:
+            entry (Dict[str, Any]): The dictionary to flatten.
+            parent_key (str): Optional key prefix used when building joined key paths during recursion.
+            sep (str): String inserted between joined key components.
+        
+        Returns:
+            Dict[str, Any]: A flat dictionary where nested keys are joined by `sep` to form single keys.
+        """
         items = []
         for k, v in entry.items():
             new_key = f"{parent_key}{sep}{k}" if parent_key else k
@@ -25,7 +35,16 @@ class DataProcessor:
     
     @staticmethod
     def normalize_appstore_review(entry: Dict[str, Any], app_id: str, app_name: str) -> Dict[str, Any]:
-        """App Store 리뷰 데이터 정규화"""
+        """
+        Normalize an App Store review dict into a flattened, standardized review record.
+        
+        Returns:
+            A dictionary representing the flattened review with added fields:
+            - `review_id` (str): a generated UUID string
+            - `app_id` (str): the provided app identifier
+            - `app_name` (str): the provided app name
+            - `platform` (str): the value 'APPSTORE'
+        """
         flat = DataProcessor.flatten_entry(entry)
         flat['review_id'] = str(uuid.uuid4())
         flat['app_id'] = app_id
@@ -35,7 +54,16 @@ class DataProcessor:
     
     @staticmethod
     def normalize_playstore_review(review_data: Dict[str, Any], app_id: str) -> Dict[str, Any]:
-        """Play Store 리뷰 데이터를 App Store 형식과 일치하도록 정규화"""
+        """
+        Normalize a Play Store review into a flat dictionary compatible with the App Store review schema.
+        
+        Parameters:
+            review_data (Dict[str, Any]): Raw review object from Play Store (fields like `userName`, `content`, `score`, `at`, etc.).
+            app_id (str): Application identifier used to set `app_id`, `app_name`, and Play Store link fields.
+        
+        Returns:
+            Dict[str, Any]: A flattened dictionary containing normalized review metadata (e.g. `review_id`, `app_id`, `platform`, `app_name`), mapped App Store-style fields (e.g. `author.name.label`, `content.label`, `im:rating.label`, `updated.label`), preserved Play Store-specific fields when present (`replyContent`, `repliedAt`, `appVersion`), and default App Store-aligned fields.
+        """
         # 기본 메타데이터
         normalized_review = {
             'review_id': str(uuid.uuid4()),
@@ -95,7 +123,15 @@ class DataProcessor:
     
     @staticmethod
     def create_unified_dataframe(reviews: List[Dict[str, Any]]) -> pd.DataFrame:
-        """통합 데이터프레임 생성"""
+        """
+        Builds a unified pandas DataFrame from a list of review dictionaries, placing key meta columns first.
+        
+        Parameters:
+            reviews (List[Dict[str, Any]]): List of review records where each record is a dictionary of fields.
+        
+        Returns:
+            pd.DataFrame: DataFrame containing the provided review records. If input is empty, returns an empty DataFrame. Columns are ordered with ['review_id', 'app_id', 'app_name', 'platform'] first (when present), followed by the remaining columns in their original order; only columns that exist in the data are included.
+        """
         if not reviews:
             return pd.DataFrame()
         
@@ -113,7 +149,14 @@ class DataProcessor:
     
     @staticmethod
     def clean_text(text: str) -> str:
-        """텍스트 정리"""
+        """
+        Clean and normalize a text value for downstream processing.
+        
+        Converts non-string inputs to a string (returns an empty string for None). For string inputs, trims leading and trailing whitespace, replaces line breaks with spaces, and collapses consecutive whitespace into single spaces.
+        
+        Returns:
+            Cleaned text string.
+        """
         if not isinstance(text, str):
             return str(text) if text is not None else ""
         
@@ -126,7 +169,15 @@ class DataProcessor:
     
     @staticmethod
     def extract_app_info(apps_data: List[Dict[str, Any]]) -> pd.DataFrame:
-        """앱 정보 추출"""
+        """
+        Extracts app identifiers, names, platform, and a crawl timestamp from a list of app records.
+        
+        Parameters:
+            apps_data (List[Dict[str, Any]]): Iterable of app records; only entries containing both `'app_id'` and `'app_name'` are included.
+        
+        Returns:
+            pd.DataFrame: DataFrame with columns `app_id`, `app_name`, `platform`, and `last_crawled`. Rows are deduplicated by `app_id` and `platform`.
+        """
         app_info = []
         for app_data in apps_data:
             if 'app_id' in app_data and 'app_name' in app_data:

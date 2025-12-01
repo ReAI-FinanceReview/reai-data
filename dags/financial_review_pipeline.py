@@ -92,11 +92,18 @@ crawl_reviews >> preprocess_reviews >> parallel_processing
 
 def validate_data_quality(**context):
     """
-    데이터 품질 검증 함수
-
-    - 각 단계별 레코드 개수 확인
-    - 성공률 계산
-    - 임계값 기준 검증
+    Check record counts across ETL stages and validate the feature-generation success rate.
+    
+    Queries counts from the bronze (app_reviews), silver/preprocessed (reviews_preprocessed),
+    features (reviews_features), and embeddings (review_embeddings) tables, prints a simple
+    data quality report, and verifies that (features_count / bronze_count) * 100 is at least 80%.
+    If the bronze count is zero, the success-rate check is skipped.
+    
+    Returns:
+        dict: A mapping with keys 'bronze', 'preprocessed', 'features', and 'embeddings' containing the respective record counts.
+    
+    Raises:
+        ValueError: If the computed success rate is below 80%.
     """
     import sys
 

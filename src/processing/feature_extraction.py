@@ -38,6 +38,17 @@ class FeatureExtractor:
     """
 
     def __init__(self, config_path: str = 'config/crawler_config.yml'):
+        """
+        Initialize a FeatureExtractor instance and prepare runtime dependencies.
+        
+        Parameters:
+            config_path (str): Path to the crawler/database configuration YAML used to initialize the DatabaseConnector.
+        
+        Description:
+            - Sets up the instance logger, database connector, and extraction version.
+            - Attempts to initialize an optional transformers-based sentiment analysis pipeline; if unavailable or initialization fails, a warning is logged and sentiment analysis remains disabled.
+            - Attempts to initialize an optional Korean morphological analyzer (Okt); if unavailable or initialization fails, a warning is logged and keyword extraction remains disabled.
+        """
         self.logger = get_logger(__name__)
         self.db_connector = DatabaseConnector(config_path)
         self.extraction_version = '1.0'
@@ -68,13 +79,13 @@ class FeatureExtractor:
 
     def analyze_sentiment(self, text: str) -> Tuple[str, float, float]:
         """
-        감성 분석 수행
+        Perform rule-based sentiment analysis on the given text and return a label, a normalized score, and a confidence.
         
         Returns:
             (sentiment_label, sentiment_score, confidence)
-            - sentiment_label: 'positive', 'negative', 'neutral'
-            - sentiment_score: -1.0 ~ 1.0
-            - confidence: 0.0 ~ 1.0
+            - sentiment_label: 'positive', 'negative', or 'neutral'
+            - sentiment_score: float in -1.0 to 1.0 where positive values indicate positive sentiment
+            - confidence: float in 0.0 to 1.0 representing confidence in the assigned label
         """
         # 간단한 규칙 기반 감성 분석 (실제로는 모델 사용)
         positive_words = ['좋', '훌륭', '편리', '만족', '추천', '빠르', '쉽', '감사']
@@ -104,10 +115,19 @@ class FeatureExtractor:
 
     def extract_keywords(self, text: str, top_n: int = 10) -> List[Dict]:
         """
-        키워드 추출 (명사 기반)
+        Extracts noun-based keywords from Korean text.
+        
+        Uses a morphological analyzer to collect nouns, counts their frequencies, and returns the top N nouns (excluding single-character nouns).
+        
+        Parameters:
+            text (str): Preprocessed Korean text to analyze.
+            top_n (int): Maximum number of keywords to return.
         
         Returns:
-            List of {word: str, score: float}
+            List[Dict]: A list of dictionaries each with keys:
+                - 'word' (str): the extracted noun.
+                - 'score' (int): the noun's occurrence count in the text.
+            Returns an empty list if the morphological analyzer is unavailable or if an error occurs (errors are logged).
         """
         if not self.okt:
             return []
@@ -136,10 +156,16 @@ class FeatureExtractor:
 
     def extract_topic(self, text: str) -> Tuple[int, str, float, List]:
         """
-        토픽 모델링 (간단한 규칙 기반)
+        Map a review text to the most relevant predefined topic.
+        
+        Determines which predefined financial-app topic best matches the input text by comparing keyword occurrences and returns the chosen topic with a normalized match score.
         
         Returns:
-            (topic_id, topic_label, probability, topic_keywords)
+            (topic_id, topic_label, probability, topic_keywords): 
+                topic_id (int): Identifier of the selected topic (0 if none matched).
+                topic_label (str): Human-readable label of the selected topic ('unknown' if none matched).
+                probability (float): Match score between 0.0 and 1.0 representing keyword match ratio.
+                topic_keywords (List): The list of keywords associated with the selected topic.
         """
         # 금융 앱 관련 토픽
         topics = {
@@ -166,10 +192,13 @@ class FeatureExtractor:
 
     def calculate_text_stats(self, text: str) -> Tuple[int, int, float]:
         """
-        텍스트 통계 계산
+        Compute basic text statistics for the given text.
         
         Returns:
-            (word_count, sentence_count, avg_word_length)
+            tuple: (word_count, sentence_count, avg_word_length)
+                - word_count (int): Number of words obtained by splitting on whitespace.
+                - sentence_count (int): Number of sentences obtained by splitting on period characters and trimming empty parts.
+                - avg_word_length (float): Average number of characters per word; 0.0 when there are no words.
         """
         # 단어 수
         words = text.split()
@@ -185,7 +214,15 @@ class FeatureExtractor:
         return word_count, sentence_count, avg_word_length
 
     def extract_features(self, preprocessed: ReviewPreprocessed) -> Optional[ReviewFeature]:
-        """리뷰 한 건의 특성 추출 (matching DBinit.sql schema)"""
+        """
+        Extract sentiment, keywords, and topic features from a preprocessed review and return a ReviewFeature entity.
+        
+        Parameters:
+            preprocessed (ReviewPreprocessed): Preprocessed review record; must provide `refined_text` and `id`.
+        
+        Returns:
+            ReviewFeature | None: A ReviewFeature instance populated with `review_preprocessed_id`, `sentiment` (a SentimentType or `None` if unmapped), `sentiment_score`, `keywords` (list of keyword strings), and `topics` (list of topic labels). Returns `None` if `refined_text` is missing or if feature extraction fails.
+        """
         if not preprocessed.refined_text:
             return None
 
@@ -226,7 +263,18 @@ class FeatureExtractor:
             return None
 
     def process_batch(self, batch_size: int = 100, limit: Optional[int] = None):
-        """배치 처리 - Silver 전처리 데이터에서 특성 추출"""
+        """
+        Run feature extraction over preprocessed reviews in batches and persist results to the database.
+        
+        Processes ReviewPreprocessed records that have not yet been converted into ReviewFeature, iterating in batches, invoking extract_features for each item, adding successful features to the session, and committing each batch. Logs progress, counts of successes/failures, and sentiment distribution. On any error the session is rolled back and the exception is re-raised.
+        
+        Parameters:
+            batch_size (int): Number of reviews to process per database batch. Defaults to 100.
+            limit (Optional[int]): Optional maximum number of reviews to process overall. If None, all eligible reviews are processed.
+        
+        Raises:
+            Exception: Re-raises any exception encountered during processing after rolling back the database session.
+        """
         self.logger.info("=" * 60)
         self.logger.info("특성 추출 파이프라인 시작")
         self.logger.info("=" * 60)
@@ -304,7 +352,11 @@ class FeatureExtractor:
 
 
 def main():
-    """메인 실행 함수"""
+    """
+    Run the feature extraction batch process, optionally limited by a CLI argument.
+    
+    If a single command-line argument is provided, it is parsed as an integer and used as the processing limit. The function instantiates FeatureExtractor and invokes its process_batch method with batch_size set to 100 and the parsed limit (or None if not provided).
+    """
     import sys
 
     limit = None

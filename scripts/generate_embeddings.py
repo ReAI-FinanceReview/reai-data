@@ -10,6 +10,15 @@ from src.pipeline.steps import run_generate_embeddings  # noqa: E402
 
 
 def main(argv=None) -> int:
+    """
+    Run the embedding generation step with optional command-line-like arguments.
+    
+    Parameters:
+        argv (list[str] | None): Optional list of arguments where the first element, if present, is parsed as an integer limit for items to process, and the second element, if present, is the embedding model name to use.
+    
+    Returns:
+        int: Exit status code — `0` if embedding generation completed with status "success", `1` otherwise (including when `argv[0]` cannot be parsed as an integer).
+    """
     limit = None
     model_name = "text-embedding-3-small"
     if argv and len(argv) > 0:

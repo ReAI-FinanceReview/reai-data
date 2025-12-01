@@ -19,6 +19,11 @@ logger = get_logger(__name__)
 
 
 def _load_dotenv_if_present() -> None:
+    """
+    Load environment variables from a .env file located three directories above this file, if python-dotenv is installed and the file exists.
+    
+    If the dotenv package is not available or the .env file is absent, this function does nothing.
+    """
     if not DOTENV_AVAILABLE:
         return
     env_path = Path(__file__).parent.parent.parent / ".env"
@@ -27,11 +32,33 @@ def _load_dotenv_if_present() -> None:
 
 
 def _parse_steps(steps_str: str) -> List[str]:
+    """
+    Normalize a comma-separated steps string into a list of step names.
+    
+    Parameters:
+        steps_str (str): Comma-separated step names; may contain whitespace and mixed casing.
+    
+    Returns:
+        List[str]: Step names trimmed of whitespace, converted to lowercase, and excluding empty entries.
+    """
     steps = [step.strip().lower() for step in steps_str.split(",") if step.strip()]
     return steps
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    """
+    Create an ArgumentParser configured with command-line options for running pipeline steps.
+    
+    The parser defines the following options with their defaults:
+    - --steps: Comma-separated steps to run (default: "crawl,preprocess,features,embed").
+    - --batch-size: Batch size for processing steps (default: 100).
+    - --limit: Optional limit for records processed (default: None).
+    - --model-name: Embedding model name (default: "text-embedding-3-small").
+    - --config: Path to crawler/config file (default: "config/crawler_config.yml").
+    
+    Returns:
+        argparse.ArgumentParser: A parser configured with the CLI options described above.
+    """
     parser = argparse.ArgumentParser(description="Run pipeline steps sequentially.")
     parser.add_argument(
         "--steps",
@@ -46,6 +73,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """
+    Run the configured pipeline steps from command-line arguments and return an exit code.
+    
+    Loads environment variables if a .env file is present, parses CLI arguments (or the provided argv list), executes the selected pipeline steps, logs each step's status and result, and returns a non-zero exit code if any step failed.
+    
+    Parameters:
+        argv (Optional[List[str]]): Command-line arguments to parse. If None, the process's command-line arguments are used.
+    
+    Returns:
+        int: Exit code — 0 if all steps succeeded, 1 if any step's status is not "success".
+    """
     _load_dotenv_if_present()
     parser = build_arg_parser()
     args = parser.parse_args(argv)

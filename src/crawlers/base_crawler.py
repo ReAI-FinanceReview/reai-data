@@ -21,6 +21,23 @@ class BaseCrawler(ABC):
     """기본 크롤러 추상 클래스"""
     
     def __init__(self, config_path: str = None):
+        """
+        Initialize the BaseCrawler instance, loading configuration and creating its logger, file manager, and data processor.
+        
+        If a YAML configuration path is provided, it will be loaded; otherwise the default configuration path or defaults are used. The constructor also reads output and global settings from the loaded configuration to initialize the FileManager and set request pacing and retry parameters.
+        
+        Parameters:
+            config_path (str, optional): Path to a YAML configuration file. If omitted, a default config path is used or a built-in default configuration is applied when the file cannot be read.
+        
+        Attributes:
+            logger: Logger named after the crawler class.
+            config (dict): Loaded configuration dictionary (or default config on failure).
+            file_manager (FileManager): Manages output storage using the configured base directory and enabled flag.
+            data_processor (DataProcessor): Processor instance for handling crawled data.
+            delay (int): Seconds to wait between requests (from config 'global.delay_between_requests', defaults to 2).
+            max_retries (int): Maximum retry attempts for requests (from config 'global.max_retries', defaults to 3).
+            timeout (int): Request timeout in seconds (from config 'global.timeout', defaults to 30).
+        """
         self.logger = get_logger(self.__class__.__name__.lower())
 
         # 설정 로드
@@ -39,7 +56,15 @@ class BaseCrawler(ABC):
         self.timeout = self.config.get('global', {}).get('timeout', 30)
     
     def _load_config(self, config_path: str = None) -> Dict[str, Any]:
-        """설정 파일 로드"""
+        """
+        Load the crawler configuration from a YAML file or fall back to the built-in defaults.
+        
+        Parameters:
+            config_path (str): Filesystem path to a YAML config file. If None, uses the package's default config path.
+        
+        Returns:
+            Dict[str, Any]: Configuration dictionary (typically containing `global` and `output` sections). If PyYAML is not available or the file cannot be loaded, returns the default configuration.
+        """
         if config_path is None:
             config_path = Path(__file__).parent.parent.parent / "config" / "crawler_config.yml"
         
@@ -55,7 +80,20 @@ class BaseCrawler(ABC):
             return self._get_default_config()
     
     def _get_default_config(self) -> Dict[str, Any]:
-        """기본 설정 반환"""
+        """
+        Return the default configuration used by the crawler.
+        
+        Returns:
+            dict: A configuration dictionary with two keys:
+                - 'global': contains timing and retry defaults:
+                    - 'delay_between_requests' (int): seconds to wait between requests.
+                    - 'max_retries' (int): number of retry attempts.
+                    - 'timeout' (int): request timeout in seconds.
+                - 'output': contains output file settings:
+                    - 'base_directory' (str): base path for saved data.
+                    - 'file_format' (str): default output file format.
+                    - 'encoding' (str): file encoding to use.
+        """
         return {
             'global': {
                 'delay_between_requests': 2,
@@ -70,7 +108,20 @@ class BaseCrawler(ABC):
         }
     
     def read_app_ids(self, filename: str) -> List[str]:
-        """앱 ID 파일 읽기"""
+        """
+        Parse app IDs from a text file, ignoring blank lines and comments.
+        
+        Reads the file using UTF-8 encoding. Lines that are empty or start with '#' are skipped.
+        Inline comments (text after a '#') are removed before trimming; non-empty tokens remaining
+        after stripping are collected in order.
+        
+        Parameters:
+            filename (str): Path to the file containing one app ID per line (may include comments).
+        
+        Returns:
+            List[str]: Collected app IDs in file order. Returns an empty list if the file is not found
+            or if an error occurs while reading (errors are logged).
+        """
         app_ids = []
         try:
             with open(filename, encoding="utf-8") as f:
@@ -90,15 +141,31 @@ class BaseCrawler(ABC):
         return app_ids
     
     def wait_between_requests(self):
-        """요청 간 대기"""
+        """
+        Pause execution for the configured delay between requests.
+        
+        Blocks the current thread for self.delay seconds, using the instance's configured delay value.
+        """
         time.sleep(self.delay)
     
     @abstractmethod
     def crawl_reviews(self, app_id: str) -> List[Dict[str, Any]]:
-        """리뷰 크롤링 (하위 클래스에서 구현)"""
+        """
+        Crawl and return reviews for the given app identifier.
+        
+        Subclasses must implement this method to fetch reviews for the specified app_id.
+        
+        Returns:
+            List[Dict[str, Any]]: A list of review records where each record is a dictionary containing review fields (for example: author, rating, title, content, timestamp).
+        """
         pass
     
     @abstractmethod
     def run(self) -> str:
-        """크롤러 실행 (하위 클래스에서 구현)"""
+        """
+        Execute the crawler's run cycle; intended to be implemented by subclasses.
+        
+        Returns:
+            result (str): A status message or the path to the produced output.
+        """
         pass

@@ -17,6 +17,19 @@ class AppStoreCrawler(BaseCrawler):
     """App Store 리뷰 크롤러"""
 
     def __init__(self, config_path: str = None):
+        """
+        Initialize the AppStoreCrawler, load App Store-specific configuration, and initialize the database connector.
+        
+        Parameters:
+            config_path (str, optional): Path to the crawler configuration file used to read App Store settings and database configuration. If omitted, the superclass or default configuration is used.
+        
+        Attributes set:
+            country (str): Country code for App Store requests (default 'kr').
+            pages_to_crawl (int): Number of pages to fetch per app (default 10).
+            max_reviews_per_app (int): Maximum number of reviews to collect per app (default 500).
+            app_ids_file (str): File path that contains App Store app IDs.
+            db_connector (DatabaseConnector): Connector used for database access and session management.
+        """
         super().__init__(config_path)
 
         # App Store 특화 설정
@@ -32,14 +45,32 @@ class AppStoreCrawler(BaseCrawler):
 
     def crawl_reviews(self, app_id: str) -> List[Dict[str, Any]]:
         """
-        리뷰 크롤링 (추상 메서드 구현)
+        Fetches reviews for the specified App Store application identifier.
+        
+        Parameters:
+            app_id (str): The App Store application identifier (e.g., numeric app ID).
+        
+        Returns:
+            List[Dict[str, Any]]: A list of raw review entries obtained from the App Store feed; each entry is a dictionary matching the feed's JSON structure.
         """
         _, reviews = self.get_app_store_reviews_and_appname(app_id)
         return reviews
 
     def get_app_store_reviews_and_appname(self, app_id: str, country: str = None, pages: int = None) -> Tuple[Optional[str], List[Dict[str, Any]]]:
         """
-        지정된 앱 ID와 국가 코드로 App Store 리뷰와 앱 이름을 가져옵니다.
+        Fetches App Store reviews for the given app ID across multiple RSS pages and returns the detected app name and collected review entries.
+        
+        This method pages through Apple's RSS customer reviews feed (up to `pages`), normalizes entries, stops when no more entries are found or when `self.max_reviews_per_app` is reached, and returns the app name detected from the first page together with the raw review entry dictionaries.
+        
+        Parameters:
+            app_id (str): The App Store application ID to crawl.
+            country (str, optional): Two-letter country code to use for the feed; defaults to the crawler's configured country.
+            pages (int, optional): Maximum number of pages to request; defaults to the crawler's configured pages_to_crawl.
+        
+        Returns:
+            tuple:
+                app_name (Optional[str]): The app name extracted from the first page, or None if not found.
+                reviews (List[Dict[str, Any]]): Collected raw review entry dictionaries (truncated to `self.max_reviews_per_app` if necessary).
         """
         if country is None:
             country = self.country
@@ -109,7 +140,14 @@ class AppStoreCrawler(BaseCrawler):
         return app_name, all_reviews
 
     def run(self) -> None:
-        """크롤러 실행"""
+        """
+        Run the App Store crawler to fetch reviews for configured app IDs and persist new reviews to the database.
+        
+        Reads app IDs from the configured file, ensures database tables exist, then iterates each app ID: fetches the app name and reviews, updates the App's updated_at timestamp, inserts new Review records while skipping duplicates and entries missing required fields, commits successful changes, and logs progress and errors. Waits between requests when crawling multiple apps and closes the session when finished.
+        
+        Raises:
+            ValueError: If no valid app IDs are found in the configured app IDs file.
+        """
         self.logger.info("App Store 크롤러 실행 시작")
         
         self.db_connector.create_tables(Base)

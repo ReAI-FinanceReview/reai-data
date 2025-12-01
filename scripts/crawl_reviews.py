@@ -10,6 +10,12 @@ from src.pipeline.steps import run_crawl  # noqa: E402
 
 
 def main() -> int:
+    """
+    Run the pipeline crawl step and map its outcome to a process exit code.
+    
+    Returns:
+        int: 0 if the crawl step succeeded, 1 otherwise.
+    """
     result = run_crawl()
     if result.status != "success":
         return 1
