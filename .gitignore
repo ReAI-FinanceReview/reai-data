@@ -216,6 +216,7 @@ $RECYCLE.BIN/
 AGENTS.md
 
 # Database files
+sql/
 *.sql
 
 # Logs and data
