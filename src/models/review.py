@@ -4,19 +4,12 @@ This module defines the Review model representing raw review data.
 Note: This table is stored as Parquet on NAS, not actively queried in DB.
 """
 
-import enum
-
 from sqlalchemy import Column, String, SmallInteger, Text, DateTime, Boolean, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from .base import Base
-
-
-class PlatformType(enum.Enum):
-    """플랫폼 타입 ENUM"""
-    APPSTORE = "APPSTORE"
-    PLAYSTORE = "PLAYSTORE"
+from .enums import PlatformType
 
 
 class Review(Base):

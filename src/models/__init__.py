@@ -7,13 +7,22 @@ __version__ = "4.0.0"  # Bump version for major schema change
 
 from .base import Base
 
+# Central ENUM definitions
+from .enums import (
+    PlatformType,
+    AppType,
+    ProcessingStatusType,
+    AnalysisStatusType,
+    SentimentType,
+)
+
 # App-related models
 from .app_service import AppService
-from .app import App
-from .app_metadata import AppMetadata, AppType
+from .apps import App
+from .app_metadata import AppMetadata
 
 # Review master index
-from .review_master_index import ReviewMasterIndex, PlatformType, ProcessingStatusType
+from .review_master_index import ReviewMasterIndex
 
 # Bronze Layer (NAS Parquet)
 from .review import Review
@@ -23,7 +32,7 @@ from .review_preprocessed import ReviewPreprocessed
 from .review_embedding import ReviewEmbedding
 from .review_aspects import ReviewAspect
 from .review_action_analysis import ReviewActionAnalysis
-from .llm_analysis_log import LLMAnalysisLog, AnalysisStatusType
+from .llm_analysis_log import LLMAnalysisLog
 
 # Gold Layer
 from .review_assigned import ReviewAssigned
@@ -34,15 +43,18 @@ from .organizations import Organization
 
 __all__ = [
     'Base',
+    # ENUMs
+    'PlatformType',
+    'AppType',
+    'ProcessingStatusType',
+    'AnalysisStatusType',
+    'SentimentType',
     # App
     'AppService',
     'App',
     'AppMetadata',
-    'AppType',
     # Review Index
     'ReviewMasterIndex',
-    'PlatformType',
-    'ProcessingStatusType',
     # Bronze (NAS)
     'Review',
     # Silver
@@ -51,7 +63,6 @@ __all__ = [
     'ReviewAspect',
     'ReviewActionAnalysis',
     'LLMAnalysisLog',
-    'AnalysisStatusType',
     # Gold
     'ReviewAssigned',
     # Reference

@@ -4,19 +4,11 @@ This module defines the AppMetadata model that links physical apps to logical se
 and tracks historical changes using Slowly Changing Dimension Type 2 pattern.
 """
 
-import enum
-
 from sqlalchemy import Column, Integer, Text, Date, Boolean, Enum as SQLEnum, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 
 from .base import Base
-
-
-class AppType(enum.Enum):
-    """앱 타입 ENUM"""
-    CONSUMER = "CONSUMER"
-    CORPORATE = "CORPORATE"
-    GLOBAL = "GLOBAL"
+from .enums import AppType
 
 
 class AppMetadata(Base):

@@ -4,26 +4,11 @@ This module defines the ReviewMasterIndex model, which serves as the central hub
 for all review-related data across the pipeline (Bronze → Silver → Gold).
 """
 
-import enum
-
 from sqlalchemy import Column, Text, DateTime, Boolean, Enum as SQLEnum, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 
 from .base import Base
-
-
-class PlatformType(enum.Enum):
-    """플랫폼 타입 ENUM"""
-    APPSTORE = "APPSTORE"
-    PLAYSTORE = "PLAYSTORE"
-
-
-class ProcessingStatusType(enum.Enum):
-    """처리 상태 타입 ENUM"""
-    RAW = "RAW"
-    CLEANED = "CLEANED"
-    ANALYZED = "ANALYZED"
-    FAILED = "FAILED"
+from .enums import PlatformType, ProcessingStatusType
 
 
 class ReviewMasterIndex(Base):

@@ -3,21 +3,12 @@
 This module defines the LLMAnalysisLog model for tracking LLM API calls and results.
 """
 
-import enum
-
 from sqlalchemy import Column, String, Integer, DateTime, Text, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
 from .base import Base
-
-
-class AnalysisStatusType(enum.Enum):
-    """분석 상태 타입 ENUM"""
-    PENDING = "PENDING"
-    PROCESSING = "PROCESSING"
-    SUCCESS = "SUCCESS"
-    FAILED = "FAILED"
+from .enums import AnalysisStatusType
 
 
 class LLMAnalysisLog(Base):
