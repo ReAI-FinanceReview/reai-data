@@ -6,7 +6,7 @@ Note: This table is stored as Parquet on NAS, not actively queried in DB.
 
 import enum
 
-from sqlalchemy import Column, BigInteger, String, SmallInteger, Text, DateTime, Boolean, Enum as SQLEnum
+from sqlalchemy import Column, String, SmallInteger, Text, DateTime, Boolean, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
