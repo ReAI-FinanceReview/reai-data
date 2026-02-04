@@ -1,46 +1,71 @@
+"""LLM 분석 로그 모델 (Audit)
+
+This module defines the LLMAnalysisLog model for tracking LLM API calls and results.
 """
-LLM 분석 로그 모델 (Silver Layer)
-"""
-from sqlalchemy import Column, String, Integer, DateTime, Text, BigInteger, Float, JSON
+
+import enum
+
+from sqlalchemy import Column, String, Integer, DateTime, Text, Enum as SQLEnum
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.sql import func
+
 from .base import Base
 
 
+class AnalysisStatusType(enum.Enum):
+    """분석 상태 타입 ENUM"""
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+
+
 class LLMAnalysisLog(Base):
-    """LLM 분석 과정 로깅 모델"""
+    """LLM 분석 로그 테이블 (Audit)
+
+    LLM API 호출 및 분석 결과를 추적하는 감사 로그 테이블입니다.
+    """
     __tablename__ = 'review_llm_analysis_logs'
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    review_id = Column(String, nullable=False)
-    app_id = Column(String, nullable=False)
-    platform = Column(String, nullable=False)
+    id = Column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+        comment='로그 ID'
+    )
+    source_table = Column(Text, comment='소스 테이블 이름')
+    source_record_id = Column(
+        Text,
+        comment='소스 레코드 ID (UUID 또는 INT 지원)'
+    )
+    model_name = Column(Text, comment='사용한 모델 이름')
+    params = Column(Text, comment='모델 파라미터 (JSON 문자열)')
+    result_payload = Column(JSONB, comment='분석 결과 (JSONB)')
+    status = Column(
+        SQLEnum(AnalysisStatusType, name='analysis_status_type', create_type=False),
+        comment='분석 상태 (PENDING, PROCESSING, SUCCESS, FAILED)'
+    )
+    error_message = Column(Text, comment='에러 메시지 (실패 시)')
+    processed_at = Column(
+        DateTime(timezone=True),
+        comment='처리 완료 시각'
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        comment='생성 시각'
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+        comment='수정 시각'
+    )
 
-    # 분석 타입
-    analysis_type = Column(String, nullable=False)  # 'sentiment', 'keyword', 'topic', 'embedding'
-
-    # 모델 정보
-    model_provider = Column(String, nullable=False)  # 'openai', 'huggingface', 'anthropic'
-    model_name = Column(String, nullable=False)  # 'gpt-4', 'claude-3', 'bert-base'
-    model_version = Column(String)
-
-    # 요청/응답 정보
-    input_text = Column(Text)
-    input_tokens = Column(Integer)
-    output_result = Column(JSON)
-    output_tokens = Column(Integer)
-
-    # 성능 메트릭
-    latency_ms = Column(Integer)  # 응답 시간 (밀리초)
-    cost_usd = Column(Float)  # API 호출 비용 (USD)
-
-    # 상태 및 에러
-    status = Column(String, nullable=False, default='success')  # 'success', 'failed', 'partial'
-    error_message = Column(Text)
-
-    # 품질 메트릭
-    confidence_score = Column(Float)
-    quality_score = Column(Float)
-
-    # 메타데이터
-    created_at = Column(DateTime, nullable=False)
-    processing_pipeline_version = Column(String, default='1.0')
-    additional_metadata = Column(JSON)
+    def __repr__(self):
+        return (
+            f"<LLMAnalysisLog(id={self.id}, source_table='{self.source_table}', "
+            f"source_id='{self.source_record_id}', status={self.status})>"
+        )
