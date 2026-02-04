@@ -43,7 +43,7 @@ class Profanity(Base):
     id = Column(Integer, primary_key=True, autoincrement=True, comment='비속어 ID')
     word = Column(Text, nullable=False, comment='비속어 단어')
     normalized_form = Column(Text, comment='정규화 형태 (optional)')
-    severity_level = Column(SmallInteger, nullable=False, comment='심각도 (1=낮음, 2=중간, 3=높음)')
+    severity_level = Column(SmallInteger, nullable=False, comment='심각도 (1=매우 낮음, 2=낮음, 3=중간, 4=높음, 5=매우 높음)')
     is_active = Column(Boolean, nullable=False, server_default='true', comment='활성 여부')
     created_at = Column(
         DateTime(timezone=True),
