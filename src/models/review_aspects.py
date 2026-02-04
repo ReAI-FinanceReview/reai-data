@@ -30,7 +30,7 @@ class ReviewAspect(Base):
         comment='리뷰 ID (FK to review_master_index)'
     )
     keyword = Column(Text, comment='추출된 키워드/애스펙트')
-    sentiment_score = Column(Float, comment='감성 점수 (-1.0 ~ 1.0)')
+    sentiment_score = Column(Float, comment='감성 점수 (0.0 ~ 1.0)')
     category = Column(Text, comment='카테고리 (기능, UI/UX, 성능, 고객서비스 등)')
 
     def __repr__(self):
