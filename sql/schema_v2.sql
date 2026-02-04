@@ -50,7 +50,7 @@ CREATE TABLE apps
 (
   app_id          UUID         NOT NULL,
   platform_app_id TEXT         NOT NULL,
-  platform        platform_type,
+  platform_type   platform_type,
   name            TEXT         NOT NULL,
   PRIMARY KEY (app_id)
 );
@@ -58,7 +58,7 @@ CREATE TABLE apps
 COMMENT ON TABLE apps IS '물리적 앱 인스턴스';
 COMMENT ON COLUMN apps.app_id IS '시스템 고유 식별자';
 COMMENT ON COLUMN apps.platform_app_id IS 'store ID, package name';
-COMMENT ON COLUMN apps.platform IS 'PLAYSTORE / APPSTORE';
+COMMENT ON COLUMN apps.platform_type IS 'PLAYSTORE / APPSTORE';
 COMMENT ON COLUMN apps.name IS '스토어에 표시된 앱 이름';
 
 -- ----------------------------------------
@@ -123,7 +123,7 @@ CREATE TABLE app_reviews
 (
   review_id          UUID         NOT NULL,
   app_id             UUID         NOT NULL,
-  platform           platform_type NOT NULL,
+  platform_type      platform_type NOT NULL,
   country_code       TEXT         NOT NULL DEFAULT 'kr',
   platform_review_id TEXT         NOT NULL,
   reviewer_name      TEXT,
@@ -140,7 +140,7 @@ CREATE TABLE app_reviews
 COMMENT ON TABLE app_reviews IS '리뷰 원본 데이터 (Bronze), NAS Parquet 저장';
 COMMENT ON COLUMN app_reviews.review_id IS 'Global ID (UUID v7)';
 COMMENT ON COLUMN app_reviews.app_id IS '앱 ID';
-COMMENT ON COLUMN app_reviews.platform IS 'PLAYSTORE / APPSTORE';
+COMMENT ON COLUMN app_reviews.platform_type IS 'PLAYSTORE / APPSTORE';
 COMMENT ON COLUMN app_reviews.country_code IS 'MVP에서 kr로 고정 (kr, us, uk ...)';
 COMMENT ON COLUMN app_reviews.platform_review_id IS '해당 스토어의 리뷰 고유 ID';
 COMMENT ON COLUMN app_reviews.reviewer_name IS '작성자 이름';
@@ -436,7 +436,7 @@ CREATE INDEX idx_reviews_assigned_review_id ON reviews_assigned(review_id);
 -- ----------------------------------------
 
 -- Apps table
-CREATE INDEX idx_apps_platform ON apps(platform);
+CREATE INDEX idx_apps_platform ON apps(platform_type);
 CREATE INDEX idx_apps_platform_app_id ON apps(platform_app_id);
 
 -- Review master index
