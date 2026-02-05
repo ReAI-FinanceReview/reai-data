@@ -7,7 +7,7 @@ with support for partitioning and batch operations.
 import os
 from pathlib import Path
 from typing import List, Optional, Union, Literal
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -112,7 +112,7 @@ class ParquetWriter:
             raise ValueError("Cannot write empty batch")
 
         if partition_date is None:
-            partition_date = datetime.utcnow()
+            partition_date = datetime.now(timezone.utc)
 
         # Convert Pydantic models to dictionaries
         data_dicts = [record.model_dump() for record in records]
@@ -125,8 +125,8 @@ class ParquetWriter:
         output_path.mkdir(parents=True, exist_ok=True)
 
         # Generate filename with timestamp (including microseconds for uniqueness)
-        now = datetime.utcnow()
-        timestamp = now.strftime('%Y%m%d_%H%M%S')
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime('%Y%m%d_%H%M%S_%f')
         microseconds = f"{now.microsecond:06d}"
         filename = f"data_{timestamp}_{microseconds}.parquet"
         file_path = output_path / filename
