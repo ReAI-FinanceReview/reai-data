@@ -1,41 +1,73 @@
-"""
-데이터 모델 패키지 초기화
+"""데이터 모델 패키지 초기화
+
+SQLAlchemy models for schema_v2.sql (hybrid DB+NAS architecture)
 """
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"  # Bump version for major schema change
 
-# Bronze Layer Models
 from .base import Base
-from .app import App
+
+# Central ENUM definitions
+from .enums import (
+    PlatformType,
+    AppType,
+    ProcessingStatusType,
+    AnalysisStatusType,
+    SentimentType,
+)
+
+# App-related models
+from .app_service import AppService
+from .apps import App
+from .app_metadata import AppMetadata
+
+# Review master index
+from .review_master_index import ReviewMasterIndex
+
+# Bronze Layer (NAS Parquet)
 from .review import Review
 
-# Silver Layer Models
+# Silver Layer
 from .review_preprocessed import ReviewPreprocessed
-from .review_feature import ReviewFeature
 from .review_embedding import ReviewEmbedding
+from .review_aspects import ReviewAspect
+from .review_action_analysis import ReviewActionAnalysis
 from .llm_analysis_log import LLMAnalysisLog
 
-# Gold Layer Models
-from .review_assigned import ReviewAssigned, DepartmentMapping
+# Gold Layer
+from .review_assigned import ReviewAssigned
 
-# Reference Data Models
+# Reference Data
 from .dictionary import Synonym, Profanity, FinancialTerm
+from .organizations import Organization
 
 __all__ = [
     'Base',
-    # Bronze
+    # ENUMs
+    'PlatformType',
+    'AppType',
+    'ProcessingStatusType',
+    'AnalysisStatusType',
+    'SentimentType',
+    # App
+    'AppService',
     'App',
+    'AppMetadata',
+    # Review Index
+    'ReviewMasterIndex',
+    # Bronze (NAS)
     'Review',
     # Silver
     'ReviewPreprocessed',
-    'ReviewFeature',
     'ReviewEmbedding',
+    'ReviewAspect',
+    'ReviewActionAnalysis',
     'LLMAnalysisLog',
     # Gold
     'ReviewAssigned',
-    'DepartmentMapping',
     # Reference
     'Synonym',
     'Profanity',
     'FinancialTerm',
+    'Organization',
 ]
