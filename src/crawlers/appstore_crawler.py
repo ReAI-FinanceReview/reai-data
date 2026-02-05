@@ -82,6 +82,31 @@ class AppStoreCrawler(BaseCrawler):
         _, reviews = self.get_app_store_reviews_and_appname(app_id)
         return reviews
 
+    def _parse_reviewed_at(self, review_data: Dict[str, Any]) -> datetime:
+        """Parse reviewed_at timestamp from App Store review data.
+
+        Extracts timestamp from 'updated' -> 'label' field and ensures
+        timezone-aware datetime. Falls back to current UTC time if parsing fails.
+
+        Args:
+            review_data: Review dictionary from App Store API
+
+        Returns:
+            Timezone-aware datetime object
+        """
+        reviewed_at = None
+        if 'updated' in review_data and 'label' in review_data['updated']:
+            try:
+                reviewed_at = datetime.fromisoformat(
+                    review_data['updated']['label'].replace('Z', '+00:00')
+                )
+            except (ValueError, TypeError):
+                # If timestamp is malformed, fall back to current UTC time
+                pass
+        if not reviewed_at:
+            reviewed_at = datetime.now(timezone.utc)
+        return reviewed_at
+
     def get_app_store_reviews_and_appname(
         self,
         app_id: str,
@@ -246,20 +271,11 @@ class AppStoreCrawler(BaseCrawler):
                     continue
 
                 # Generate UUID v7 (time-sortable)
-                review_id = str(uuid7())
+                review_id = uuid7()
                 review_id_map[platform_review_id] = review_id
 
                 # Parse reviewed_at
-                reviewed_at = None
-                if 'updated' in review_data and 'label' in review_data['updated']:
-                    try:
-                        reviewed_at = datetime.fromisoformat(
-                            review_data['updated']['label'].replace('Z', '+00:00')
-                        )
-                    except (ValueError, TypeError):
-                        pass
-                if not reviewed_at:
-                    reviewed_at = datetime.now(timezone.utc)
+                reviewed_at = self._parse_reviewed_at(review_data)
 
                 # Parse review_text
                 review_text = review_data.get('content', {}).get('label', '')
@@ -268,7 +284,7 @@ class AppStoreCrawler(BaseCrawler):
 
                 # Create Parquet record
                 parquet_record = AppReviewSchema(
-                    review_id=review_id,
+                    review_id=str(review_id),
                     app_id=str(app.app_id),
                     platform_type='APPSTORE',
                     platform_review_id=platform_review_id,
@@ -280,6 +296,11 @@ class AppStoreCrawler(BaseCrawler):
                     reply_comment=None
                 )
                 parquet_records.append(parquet_record)
+
+            if not parquet_records:
+                self.logger.info(f"No valid reviews to write for app {app_id}")
+                session.commit()  # Commit app if new
+                return 0
 
             # Write to Parquet (MUST succeed before DB commit)
             if not self.enable_parquet:
@@ -310,17 +331,8 @@ class AppStoreCrawler(BaseCrawler):
 
                 review_id = review_id_map[platform_review_id]
 
-                # Parse reviewed_at again (same as above)
-                reviewed_at = None
-                if 'updated' in review_data and 'label' in review_data['updated']:
-                    try:
-                        reviewed_at = datetime.fromisoformat(
-                            review_data['updated']['label'].replace('Z', '+00:00')
-                        )
-                    except (ValueError, TypeError):
-                        pass
-                if not reviewed_at:
-                    reviewed_at = datetime.now(timezone.utc)
+                # Parse reviewed_at
+                reviewed_at = self._parse_reviewed_at(review_data)
 
                 master_index = ReviewMasterIndex(
                     review_id=review_id,
@@ -371,17 +383,120 @@ class AppStoreCrawler(BaseCrawler):
         finally:
             session.close()
 
-    def retry_failed_reviews(self, max_retries: int = 3) -> int:
-        """Retry failed reviews (Parquet write failures).
+    def _mark_reviews_as_failed(
+        self,
+        app_id: str,
+        reviews_data: List[Dict[str, Any]],
+        error_message: str,
+        failure_reason: str
+    ) -> None:
+        """Mark reviews as FAILED in DB when Parquet or DB commit fails.
 
-        Query reviews with processing_status = FAILED and retry_count < max_retries.
-        Attempt to re-write to Parquet and update DB status.
+        This enables the retry mechanism to find and retry failed reviews.
+
+        Args:
+            app_id: App Store app ID
+            reviews_data: List of review dictionaries from API
+            error_message: Error details from the exception
+            failure_reason: Short description (e.g., "PARQUET_WRITE_FAILED")
+        """
+        session = self.db_connector.get_session()
+        try:
+            # Find or create the App record
+            app = session.query(App).filter_by(
+                platform_app_id=app_id,
+                platform_type=PlatformType.APPSTORE
+            ).first()
+
+            if not app:
+                # Create minimal app record for failure tracking
+                app = App(
+                    app_id=uuid7(),
+                    platform_app_id=app_id,
+                    name=f'app_{app_id}',
+                    platform_type=PlatformType.APPSTORE
+                )
+                session.add(app)
+                session.flush()
+
+            now = datetime.now(timezone.utc)
+            failed_records = []
+
+            for review_data in reviews_data:
+                platform_review_id = review_data.get('id', {}).get('label', '')
+                if not platform_review_id:
+                    continue
+
+                # Check if already tracked
+                existing = session.query(ReviewMasterIndex).filter_by(
+                    app_id=app.app_id,
+                    platform_review_id=platform_review_id
+                ).first()
+
+                if existing:
+                    # Update existing record to FAILED
+                    existing.processing_status = ProcessingStatusType.FAILED
+                    existing.error_message = f"{failure_reason}: {error_message}"
+                    existing.retry_count = 0
+                else:
+                    # Create new FAILED record
+                    review_id = uuid7()
+
+                    # Parse reviewed_at
+                    reviewed_at = self._parse_reviewed_at(review_data)
+
+                    failed_record = ReviewMasterIndex(
+                        review_id=review_id,
+                        app_id=app.app_id,
+                        platform_review_id=platform_review_id,
+                        platform_type=PlatformType.APPSTORE,
+                        review_created_at=reviewed_at,
+                        ingested_at=now,
+                        processing_status=ProcessingStatusType.FAILED,
+                        parquet_written_at=None,  # Failed to write
+                        is_active=True,
+                        is_reply=False,
+                        error_message=f"{failure_reason}: {error_message}",
+                        retry_count=0
+                    )
+                    failed_records.append(failed_record)
+
+            if failed_records:
+                session.add_all(failed_records)
+
+            session.commit()
+            self.logger.info(
+                f"Marked {len(failed_records)} reviews as FAILED for app {app_id} ({failure_reason})"
+            )
+
+        except Exception as e:
+            session.rollback()
+            self.logger.error(f"Failed to mark reviews as FAILED: {e}")
+        finally:
+            session.close()
+
+    def retry_failed_reviews(self, max_retries: int = 3) -> int:
+        """Mark failed reviews for retry (Phase 3 MVP - tracking only).
+
+        IMPORTANT LIMITATION (Phase 3):
+        This method only increments retry_count for failed reviews but does NOT
+        actually re-crawl or re-write data. Full retry implementation (re-fetch
+        from API and re-write to Parquet/DB) is planned for Phase 4.
+
+        Current behavior:
+        - Finds reviews with processing_status=FAILED and retry_count < max_retries
+        - Increments retry_count and updates error_message
+        - Logs warning that manual intervention is needed
+        - Does NOT re-crawl or re-write Parquet/DB data
 
         Args:
             max_retries: Maximum retry attempts (default: 3)
 
         Returns:
-            Number of reviews retried
+            Number of reviews marked for retry (NOT actually retried)
+
+        Raises:
+            NotImplementedError: If you need actual retry, implement re-crawl logic
         """
         session = self.db_connector.get_session()
 
@@ -412,14 +527,23 @@ class AppStoreCrawler(BaseCrawler):
                     # Increment retry count
                     failed_review.retry_count += 1
                     failed_review.error_message = f"Retry {failed_review.retry_count}/{max_retries} pending"
+
+                    # Commit per review for atomicity
+                    session.commit()
                     retried_count += 1
 
                 except Exception as e:
+                    session.rollback()
                     self.logger.error(f"Retry failed for {failed_review.review_id}: {e}")
-                    failed_review.retry_count += 1
-                    failed_review.error_message = str(e)
+                    # Try to update error on this review
+                    try:
+                        failed_review.retry_count += 1
+                        failed_review.error_message = str(e)
+                        session.commit()
+                    except Exception as commit_err:
+                        session.rollback()
+                        self.logger.error(f"Failed to update error for {failed_review.review_id}: {commit_err}")
 
-            session.commit()
             return retried_count
 
         finally:
@@ -466,12 +590,14 @@ class AppStoreCrawler(BaseCrawler):
 
             except ParquetWriteError as e:
                 self.logger.error(f"앱 ID {app_id} Parquet 쓰기 실패: {e}")
-                # Mark as failed in DB (if possible)
+                # Mark as failed in DB for retry mechanism
+                self._mark_reviews_as_failed(app_id, reviews_data, str(e), "PARQUET_WRITE_FAILED")
                 continue
 
             except DBCommitError as e:
                 self.logger.error(f"앱 ID {app_id} DB commit 실패: {e}")
-                # Parquet OK, DB failed - can retry later
+                # Parquet OK, DB failed - mark for retry
+                self._mark_reviews_as_failed(app_id, reviews_data, str(e), "DB_COMMIT_FAILED")
                 continue
 
             except Exception as e:
