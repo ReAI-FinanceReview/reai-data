@@ -4,7 +4,7 @@ This module provides common utilities for Parquet schema definitions,
 including UUID v7 generation and timestamp utilities.
 """
 
-import uuid
+import uuid6
 from datetime import datetime, timezone
 
 
@@ -35,7 +35,7 @@ def generate_uuid_v7() -> str:
     # TODO: Replace with proper UUID v7 implementation
     # Option 1: pip install uuid6; return str(uuid6.uuid7())
     # Option 2: Use PostgreSQL gen_random_uuid() via server_default
-    return str(uuid.uuid1())
+    return str(uuid6.uuid7())
 
 
 def utc_now() -> datetime:
