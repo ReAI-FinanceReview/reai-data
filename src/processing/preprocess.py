@@ -268,6 +268,46 @@ class TextPreprocessor:
         finally:
             session.close()
 
+    def get_reviews_to_preprocess(self, batch_size: int = 100):
+        """Get reviews ready for preprocessing (Phase 3: NAS-first Architecture).
+
+        Only returns reviews that are:
+        - Status: RAW (successfully ingested to Bronze)
+        - Parquet written (parquet_written_at IS NOT NULL)
+
+        This ensures Silver layer only processes reviews with confirmed
+        Parquet writes, preventing Ghost Records issues.
+
+        Args:
+            batch_size: Number of reviews to fetch
+
+        Returns:
+            List[ReviewMasterIndex]: Reviews ready for preprocessing
+        """
+        from src.models.review_master_index import ReviewMasterIndex
+        from src.models.enums import ProcessingStatusType
+
+        session = self.db_connector.get_session()
+
+        try:
+            reviews = session.query(ReviewMasterIndex).filter(
+                ReviewMasterIndex.processing_status == ProcessingStatusType.RAW,
+                ReviewMasterIndex.parquet_written_at.isnot(None),  # Parquet confirmed
+                ReviewMasterIndex.is_active == True
+            ).order_by(
+                ReviewMasterIndex.ingested_at.asc()
+            ).limit(batch_size).all()
+
+            self.logger.info(
+                f"Found {len(reviews)} reviews ready for preprocessing "
+                f"(status=RAW, parquet_written=True)"
+            )
+
+            return reviews
+
+        finally:
+            session.close()
+
 
 def main():
     """Main execution function"""
