@@ -4,7 +4,7 @@ This module defines the ReviewMasterIndex model, which serves as the central hub
 for all review-related data across the pipeline (Bronze → Silver → Gold).
 """
 
-from sqlalchemy import Column, Text, DateTime, Boolean, Enum as SQLEnum, ForeignKey
+from sqlalchemy import Column, Text, DateTime, Boolean, Integer, Enum as SQLEnum, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 
 from .base import Base
@@ -55,6 +55,19 @@ class ReviewMasterIndex(Base):
     processing_status = Column(
         SQLEnum(ProcessingStatusType, name='processing_status_type', create_type=False),
         comment='처리 상태 (RAW, CLEANED, ANALYZED, FAILED)'
+    )
+    parquet_written_at = Column(
+        DateTime(timezone=True),
+        comment='Parquet 쓰기 성공 시각 (Phase 1 of 2-phase commit)'
+    )
+    error_message = Column(
+        Text,
+        comment='실패 사유 (Parquet write / DB commit 에러 메시지)'
+    )
+    retry_count = Column(
+        Integer,
+        default=0,
+        comment='재시도 횟수 (최대 3회, 초과 시 DLQ)'
     )
     is_active = Column(Boolean, comment='활성 여부')
     is_reply = Column(Boolean, comment='답글 여부')

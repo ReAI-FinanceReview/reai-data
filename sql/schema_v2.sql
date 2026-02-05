@@ -100,25 +100,31 @@ CREATE TABLE review_master_index
   review_created_at  TIMESTAMPTZ,
   ingested_at        TIMESTAMPTZ,
   processing_status  processing_status_type,
+  parquet_written_at TIMESTAMPTZ,
+  error_message      TEXT,
+  retry_count        INTEGER                DEFAULT 0,
   is_active          BOOLEAN,
   is_reply           BOOLEAN,
   PRIMARY KEY (review_id)
 );
 
-COMMENT ON TABLE review_master_index IS '리뷰 중앙 인덱스 (DB)';
+COMMENT ON TABLE review_master_index IS '리뷰 중앙 인덱스 (Central Orchestration Hub)';
 COMMENT ON COLUMN review_master_index.review_id IS 'Global ID (UUID v7)';
 COMMENT ON COLUMN review_master_index.app_id IS '각 앱 버전 고유 ID';
 COMMENT ON COLUMN review_master_index.service_id IS '논리적 동일 앱 ID';
 COMMENT ON COLUMN review_master_index.platform_review_id IS '플랫폼 원본 리뷰 ID (중복 방지)';
 COMMENT ON COLUMN review_master_index.platform_type IS 'PLAYSTORE | APPSTORE';
-COMMENT ON COLUMN review_master_index.processing_status IS 'RAW / CLEANED / ANALYZED / FAILED';
+COMMENT ON COLUMN review_master_index.processing_status IS 'RAW (Bronze Parquet 저장 완료) / CLEANED (Silver 전처리 완료) / ANALYZED (Gold 분석 완료) / FAILED (실패)';
+COMMENT ON COLUMN review_master_index.parquet_written_at IS 'Parquet 쓰기 성공 시각 (Phase 1 of 2-phase commit)';
+COMMENT ON COLUMN review_master_index.error_message IS '실패 사유 (Parquet write / DB commit 에러 메시지)';
+COMMENT ON COLUMN review_master_index.retry_count IS '재시도 횟수 (최대 3회, 초과 시 DLQ)';
 COMMENT ON COLUMN review_master_index.is_active IS 'T / F';
 COMMENT ON COLUMN review_master_index.is_reply IS 'T / F';
 
 -- ----------------------------------------
 -- App Reviews (Bronze - NAS Parquet)
 -- ----------------------------------------
-review_llm_analysis_logs
+
 CREATE TABLE app_reviews
 (
   review_id          UUID         NOT NULL,
@@ -444,6 +450,11 @@ CREATE INDEX idx_review_master_index_processing_status ON review_master_index(pr
 CREATE INDEX idx_review_master_index_is_active ON review_master_index(is_active);
 CREATE INDEX idx_review_master_index_platform_type ON review_master_index(platform_type);
 CREATE INDEX idx_review_master_index_review_created_at ON review_master_index(review_created_at);
+
+-- Phase 3: Distributed consistency indexes
+CREATE INDEX idx_review_master_index_failed ON review_master_index(processing_status) WHERE processing_status = 'FAILED';
+CREATE INDEX idx_review_master_index_retry ON review_master_index(retry_count, processing_status) WHERE processing_status = 'FAILED' AND retry_count < 3;
+CREATE INDEX idx_review_master_index_parquet_written ON review_master_index(parquet_written_at) WHERE parquet_written_at IS NOT NULL;
 
 -- App metadata
 CREATE INDEX idx_app_metadata_is_active ON app_metadata(is_active);
