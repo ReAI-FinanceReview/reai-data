@@ -39,7 +39,7 @@ class Review(Base):
     country_code = Column(
         String,
         nullable=False,
-        server_default='kr',
+        server_default="'kr'",
         comment='국가 코드'
     )
     platform_review_id = Column(
