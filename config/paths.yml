@@ -1,8 +1,16 @@
-# Storage layout for pipeline outputs
-bronze_dir: "data/raw"
-silver_dir: "data/processed"
-gold_dir: "data/features"
+# Storage layout for pipeline outputs (Medallion Architecture)
+# Use ${VARIABLE} syntax for environment variable substitution
+# Set PARQUET_BASE_PATH in .env for environment-specific paths
 
-# Optional embeddings/output paths
-embeddings_dir: "data/embeddings"
-logs_dir: "logs"
+# Parquet storage paths (NAS or local)
+bronze_dir: "${PARQUET_BASE_PATH}/bronze"
+silver_dir: "${PARQUET_BASE_PATH}/silver"
+gold_dir: "${PARQUET_BASE_PATH}/gold"
+
+# Additional output paths
+embeddings_dir: "${PARQUET_BASE_PATH}/embeddings"
+logs_dir: "${PARQUET_BASE_PATH}/logs"
+
+# Default fallback (if PARQUET_BASE_PATH not set)
+# Development: ./data/parquet
+# Production: /mnt/nas/reai-data
