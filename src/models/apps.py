@@ -29,7 +29,7 @@ class App(Base):
         nullable=False,
         comment='플랫폼별 앱 ID (App Store ID 또는 Play Store 패키지명)'
     )
-    platform = Column(
+    platform_type = Column(
         SQLEnum(PlatformType, name='platform_type', create_type=False),
         comment='플랫폼 타입 (APPSTORE, PLAYSTORE)'
     )
@@ -42,5 +42,5 @@ class App(Base):
     def __repr__(self):
         return (
             f"<App(app_id={self.app_id}, name='{self.name}', "
-            f"platform={self.platform}, platform_app_id='{self.platform_app_id}')>"
+            f"platform_type={self.platform_type}, platform_app_id='{self.platform_app_id}')>"   
         )
