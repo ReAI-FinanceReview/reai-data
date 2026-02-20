@@ -214,11 +214,15 @@ $RECYCLE.BIN/
 
 # Agents file
 AGENTS.md
+*.md
 
-# Database files
-sql/
+# SQL
 *.sql
+!schema_v3.sql
 
 # Logs and data
 logs/
 data/
+
+# ERD
+*.vuerd.json
