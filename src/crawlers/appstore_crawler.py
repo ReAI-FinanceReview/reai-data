@@ -82,6 +82,14 @@ class AppStoreCrawler(BaseCrawler):
         _, reviews = self.get_app_store_reviews_and_appname(app_id)
         return reviews
 
+    def _get_platform_type(self) -> PlatformType:
+        """Get platform type for AppStore."""
+        return PlatformType.APPSTORE
+
+    def _extract_platform_review_id(self, review_data: Dict[str, Any]) -> str:
+        """Extract review ID from App Store review data."""
+        return review_data.get('id', {}).get('label', '')
+
     def _parse_reviewed_at(self, review_data: Dict[str, Any]) -> datetime:
         """Parse reviewed_at timestamp from App Store review data.
 
@@ -217,44 +225,22 @@ class AppStoreCrawler(BaseCrawler):
 
         try:
             # ========================================
-            # 0. App 확인/생성
+            # 0. App 확인/생성 (using base class helper)
             # ========================================
-            app = session.query(App).filter_by(
-                platform_app_id=app_id,
-                platform_type=PlatformType.APPSTORE
-            ).first()
-
-            if not app:
-                app = App(
-                    app_id=uuid7(),
-                    platform_app_id=app_id,
-                    name=reviews_data[0].get('im:name', {}).get('label', f'app_{app_id}') if reviews_data else f'app_{app_id}',
-                    platform_type=PlatformType.APPSTORE
-                )
-                session.add(app)
-                session.flush()
-                self.logger.info(f"Created new app: {app.name} ({app_id})")
+            platform_type = self._get_platform_type()
+            # Extract app name from reviews_data if available
+            app_name = reviews_data[0].get('im:name', {}).get('label') if reviews_data else None
+            app = self._get_or_create_app(session, app_id, app_name, platform_type)
 
             # ========================================
-            # 1. Idempotency Check (중복 방지)
+            # 1. Idempotency Check (using base class helpers)
             # ========================================
-            existing_platform_ids = set(
-                row.platform_review_id for row in
-                session.query(ReviewMasterIndex.platform_review_id).filter_by(
-                    app_id=app.app_id,
-                    platform_type=PlatformType.APPSTORE
-                ).all()
-            )
-
-            new_reviews_data = []
-            for review in reviews_data:
-                platform_review_id = review.get('id', {}).get('label', '')
-                if platform_review_id and platform_review_id not in existing_platform_ids:
-                    new_reviews_data.append(review)
+            existing_platform_ids = self._get_existing_platform_ids(session, app.app_id, platform_type)
+            new_reviews_data = self._filter_new_reviews(reviews_data, existing_platform_ids)
 
             if not new_reviews_data:
                 self.logger.info(f"No new reviews for app {app_id} (all duplicates)")
-                session.commit()  # Commit app if new
+                session.close()  # No new data to commit
                 return 0
 
             self.logger.info(f"Found {len(new_reviews_data)} new reviews for {app_id}")
@@ -262,20 +248,20 @@ class AppStoreCrawler(BaseCrawler):
             # ========================================
             # 2. PHASE 1: Write to Parquet (NAS-first)
             # ========================================
-            parquet_records = []
-            review_id_map = {}  # platform_review_id → review_id
+            # Create ID and timestamp caches (using base class helper)
+            review_id_map, reviewed_at_cache = self._create_review_id_and_timestamp_caches(
+                new_reviews_data,
+                self._parse_reviewed_at
+            )
 
+            parquet_records = []
             for review_data in new_reviews_data:
-                platform_review_id = review_data.get('id', {}).get('label', '')
-                if not platform_review_id:
+                platform_review_id = self._extract_platform_review_id(review_data)
+                if not platform_review_id or platform_review_id not in review_id_map:
                     continue
 
-                # Generate UUID v7 (time-sortable)
-                review_id = uuid7()
-                review_id_map[platform_review_id] = review_id
-
-                # Parse reviewed_at
-                reviewed_at = self._parse_reviewed_at(review_data)
+                review_id = review_id_map[platform_review_id]
+                reviewed_at = reviewed_at_cache[platform_review_id]
 
                 # Parse review_text
                 review_text = review_data.get('content', {}).get('label', '')
@@ -299,7 +285,7 @@ class AppStoreCrawler(BaseCrawler):
 
             if not parquet_records:
                 self.logger.info(f"No valid reviews to write for app {app_id}")
-                session.commit()  # Commit app if new
+                session.close()  # No valid data to commit
                 return 0
 
             # Write to Parquet (MUST succeed before DB commit)
@@ -321,34 +307,15 @@ class AppStoreCrawler(BaseCrawler):
             # ========================================
             # 3. PHASE 2: Write to DB (only if Phase 1 succeeded)
             # ========================================
-            master_index_records = []
-            now = datetime.now(timezone.utc)
-
-            for review_data in new_reviews_data:
-                platform_review_id = review_data.get('id', {}).get('label', '')
-                if not platform_review_id or platform_review_id not in review_id_map:
-                    continue
-
-                review_id = review_id_map[platform_review_id]
-
-                # Parse reviewed_at
-                reviewed_at = self._parse_reviewed_at(review_data)
-
-                master_index = ReviewMasterIndex(
-                    review_id=review_id,
-                    app_id=app.app_id,
-                    platform_review_id=platform_review_id,
-                    platform_type=PlatformType.APPSTORE,
-                    review_created_at=reviewed_at,
-                    ingested_at=now,
-                    processing_status=ProcessingStatusType.RAW,  # State Machine
-                    parquet_written_at=now if self.enable_parquet else None,  # Track Parquet write
-                    is_active=True,
-                    is_reply=False,
-                    error_message=None,  # No error
-                    retry_count=0
-                )
-                master_index_records.append(master_index)
+            # Create master index records (using base class helper)
+            master_index_records = self._create_master_index_records(
+                new_reviews_data,
+                app.app_id,
+                platform_type,
+                review_id_map,
+                reviewed_at_cache,
+                self.enable_parquet
+            )
 
             try:
                 session.add_all(master_index_records)
@@ -476,32 +443,25 @@ class AppStoreCrawler(BaseCrawler):
             session.close()
 
     def retry_failed_reviews(self, max_retries: int = 3) -> int:
-        """Mark failed reviews for retry (Phase 3 MVP - tracking only).
+        """Retry failed reviews by re-crawling from App Store RSS feed.
 
-        IMPORTANT LIMITATION (Phase 3):
-        This method only increments retry_count for failed reviews but does NOT
-        actually re-crawl or re-write data. Full retry implementation (re-fetch
-        from API and re-write to Parquet/DB) is planned for Phase 4.
-
-        Current behavior:
-        - Finds reviews with processing_status=FAILED and retry_count < max_retries
-        - Increments retry_count and updates error_message
-        - Logs warning that manual intervention is needed
-        - Does NOT re-crawl or re-write Parquet/DB data
+        Strategy:
+        1. Find failed reviews grouped by app_id
+        2. For each app with failed reviews, re-crawl all reviews
+        3. Idempotency check will skip already-processed reviews
+        4. Failed reviews will be re-attempted with 2-phase commit
+        5. Update retry_count and status based on outcome
 
         Args:
             max_retries: Maximum retry attempts (default: 3)
 
         Returns:
-            Number of reviews marked for retry (NOT actually retried)
-
-        Raises:
-            NotImplementedError: If you need actual retry, implement re-crawl logic
+            Number of apps re-crawled (not individual reviews)
         """
         session = self.db_connector.get_session()
 
         try:
-            # Query failed reviews
+            # Query failed reviews grouped by app
             failed_reviews = session.query(ReviewMasterIndex).filter(
                 ReviewMasterIndex.processing_status == ProcessingStatusType.FAILED,
                 ReviewMasterIndex.retry_count < max_retries,
@@ -512,39 +472,91 @@ class AppStoreCrawler(BaseCrawler):
                 self.logger.info("No failed reviews to retry")
                 return 0
 
-            self.logger.info(f"Found {len(failed_reviews)} failed reviews to retry")
-
-            retried_count = 0
+            # Group failed reviews by app_id
+            from collections import defaultdict
+            failed_by_app = defaultdict(list)
             for failed_review in failed_reviews:
+                # Get the App record to find platform_app_id
+                app = session.query(App).filter_by(app_id=failed_review.app_id).first()
+                if app:
+                    failed_by_app[app.platform_app_id].append(failed_review)
+
+            self.logger.info(
+                f"Found {len(failed_reviews)} failed reviews across {len(failed_by_app)} apps. "
+                f"Will re-crawl these apps."
+            )
+
+            retried_apps = 0
+            for platform_app_id, failed_reviews_for_app in failed_by_app.items():
                 try:
-                    # For MVP, just increment retry count
-                    # Full implementation would re-crawl or reconstruct data
-                    self.logger.warning(
-                        f"Retry not fully implemented for review {failed_review.review_id}. "
-                        f"Manual intervention needed."
+                    self.logger.info(
+                        f"Retrying app {platform_app_id} "
+                        f"({len(failed_reviews_for_app)} failed reviews)"
                     )
 
-                    # Increment retry count
-                    failed_review.retry_count += 1
-                    failed_review.error_message = f"Retry {failed_review.retry_count}/{max_retries} pending"
+                    # Re-crawl all reviews for this app
+                    app_name, reviews_data = self.get_app_store_reviews_and_appname(platform_app_id)
 
-                    # Commit per review for atomicity
+                    if not reviews_data:
+                        self.logger.warning(f"No reviews found for app {platform_app_id} during retry")
+                        # Mark as failed with updated message
+                        for failed_review in failed_reviews_for_app:
+                            failed_review.retry_count += 1
+                            failed_review.error_message = (
+                                f"Retry {failed_review.retry_count}: No reviews found from API"
+                            )
+                        session.commit()
+                        continue
+
+                    # Re-attempt 2-phase commit
+                    # Idempotency check will skip already-processed reviews
+                    reviews_added = self.save_to_parquet_and_database(platform_app_id, reviews_data)
+
+                    # If we got here, retry was successful
+                    # The failed reviews should now be in RAW status (re-created by save_to_parquet_and_database)
+                    # We need to clean up the old FAILED records
+                    for failed_review in failed_reviews_for_app:
+                        # Check if review was successfully re-processed
+                        updated_review = session.query(ReviewMasterIndex).filter_by(
+                            app_id=failed_review.app_id,
+                            platform_review_id=failed_review.platform_review_id,
+                            processing_status=ProcessingStatusType.RAW
+                        ).first()
+
+                        if updated_review:
+                            # Success! Delete the old failed record
+                            session.delete(failed_review)
+                            self.logger.info(
+                                f"Successfully retried review {failed_review.platform_review_id}"
+                            )
+                        else:
+                            # Still failed, increment retry count
+                            failed_review.retry_count += 1
+                            failed_review.error_message = (
+                                f"Retry {failed_review.retry_count}: Re-crawl completed but review not found"
+                            )
+
                     session.commit()
-                    retried_count += 1
+                    retried_apps += 1
+                    self.logger.info(f"Successfully retried app {platform_app_id}")
 
                 except Exception as e:
                     session.rollback()
-                    self.logger.error(f"Retry failed for {failed_review.review_id}: {e}")
-                    # Try to update error on this review
+                    self.logger.error(f"Retry failed for app {platform_app_id}: {e}")
+                    # Increment retry count for all failed reviews of this app
+                    for failed_review in failed_reviews_for_app:
+                        try:
+                            failed_review.retry_count += 1
+                            failed_review.error_message = f"Retry {failed_review.retry_count}: {str(e)}"
+                        except Exception:
+                            pass
                     try:
-                        failed_review.retry_count += 1
-                        failed_review.error_message = str(e)
                         session.commit()
                     except Exception as commit_err:
                         session.rollback()
-                        self.logger.error(f"Failed to update error for {failed_review.review_id}: {commit_err}")
+                        self.logger.error(f"Failed to update retry count: {commit_err}")
 
-            return retried_count
+            return retried_apps
 
         finally:
             session.close()
@@ -566,6 +578,9 @@ class AppStoreCrawler(BaseCrawler):
 
         for i, app_id in enumerate(app_ids, 1):
             self.logger.info(f"[{i}/{len(app_ids)}] 앱 ID: {app_id} 크롤링 시작...")
+
+            # Initialize reviews_data before try block to avoid undefined reference in exception handlers
+            reviews_data = []
 
             try:
                 app_name, reviews_data = self.get_app_store_reviews_and_appname(app_id)
@@ -591,13 +606,15 @@ class AppStoreCrawler(BaseCrawler):
             except ParquetWriteError as e:
                 self.logger.error(f"앱 ID {app_id} Parquet 쓰기 실패: {e}")
                 # Mark as failed in DB for retry mechanism
-                self._mark_reviews_as_failed(app_id, reviews_data, str(e), "PARQUET_WRITE_FAILED")
+                # Pass only the root cause to avoid redundant error message
+                self._mark_reviews_as_failed(app_id, reviews_data, str(e.__cause__ or e), "PARQUET_WRITE_FAILED")
                 continue
 
             except DBCommitError as e:
                 self.logger.error(f"앱 ID {app_id} DB commit 실패: {e}")
                 # Parquet OK, DB failed - mark for retry
-                self._mark_reviews_as_failed(app_id, reviews_data, str(e), "DB_COMMIT_FAILED")
+                # Pass only the root cause to avoid redundant error message
+                self._mark_reviews_as_failed(app_id, reviews_data, str(e.__cause__ or e), "DB_COMMIT_FAILED")
                 continue
 
             except Exception as e:

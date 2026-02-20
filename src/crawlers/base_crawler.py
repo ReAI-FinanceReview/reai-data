@@ -3,8 +3,11 @@
 """
 import time
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple, Set
 from pathlib import Path
+from datetime import datetime, timezone
+from uuid import UUID
+from uuid6 import uuid7
 
 try:
     import yaml
@@ -102,3 +105,180 @@ class BaseCrawler(ABC):
     def run(self) -> str:
         """크롤러 실행 (하위 클래스에서 구현)"""
         pass
+
+    # ========================================
+    # Common Helper Methods (Issue #6 Fix)
+    # ========================================
+
+    @abstractmethod
+    def _get_platform_type(self):
+        """Get platform type enum (APPSTORE or PLAYSTORE)."""
+        pass
+
+    @abstractmethod
+    def _extract_platform_review_id(self, review_data: Dict[str, Any]) -> str:
+        """Extract platform-specific review ID from review data."""
+        pass
+
+    def _get_or_create_app(self, session, app_id: str, app_name: Optional[str], platform_type) -> Any:
+        """Get existing app or create new one.
+
+        Args:
+            session: Database session
+            app_id: Platform-specific app ID
+            app_name: App display name (optional)
+            platform_type: PlatformType enum
+
+        Returns:
+            App record
+        """
+        from ..models.apps import App
+
+        app = session.query(App).filter_by(
+            platform_app_id=app_id,
+            platform_type=platform_type
+        ).first()
+
+        if not app:
+            app = App(
+                app_id=uuid7(),
+                platform_app_id=app_id,
+                name=app_name or f'app_{app_id}',
+                platform_type=platform_type
+            )
+            session.add(app)
+            session.flush()
+            self.logger.info(f"Created new app: {app.name} ({app_id})")
+
+        return app
+
+    def _get_existing_platform_ids(self, session, app_uuid: UUID, platform_type) -> Set[str]:
+        """Get set of existing platform_review_ids for idempotency check.
+
+        Args:
+            session: Database session
+            app_uuid: App UUID (not platform_app_id)
+            platform_type: PlatformType enum
+
+        Returns:
+            Set of existing platform_review_ids
+        """
+        from ..models.review_master_index import ReviewMasterIndex
+
+        existing_platform_ids = set(
+            row.platform_review_id for row in
+            session.query(ReviewMasterIndex.platform_review_id).filter_by(
+                app_id=app_uuid,
+                platform_type=platform_type
+            ).all()
+        )
+
+        return existing_platform_ids
+
+    def _filter_new_reviews(
+        self,
+        reviews_data: List[Dict[str, Any]],
+        existing_platform_ids: Set[str]
+    ) -> List[Dict[str, Any]]:
+        """Filter out duplicate reviews based on platform_review_id.
+
+        Args:
+            reviews_data: List of review dictionaries from API
+            existing_platform_ids: Set of existing platform_review_ids
+
+        Returns:
+            List of new (non-duplicate) reviews
+        """
+        new_reviews = []
+        for review in reviews_data:
+            platform_review_id = self._extract_platform_review_id(review)
+            if platform_review_id and platform_review_id not in existing_platform_ids:
+                new_reviews.append(review)
+
+        return new_reviews
+
+    def _create_review_id_and_timestamp_caches(
+        self,
+        new_reviews_data: List[Dict[str, Any]],
+        parse_reviewed_at_func
+    ) -> Tuple[Dict[str, UUID], Dict[str, datetime]]:
+        """Create caches for review_ids and parsed timestamps.
+
+        Args:
+            new_reviews_data: List of new review dictionaries
+            parse_reviewed_at_func: Function to parse reviewed_at timestamp
+
+        Returns:
+            Tuple of (review_id_map, reviewed_at_cache)
+        """
+        review_id_map = {}
+        reviewed_at_cache = {}
+
+        for review_data in new_reviews_data:
+            platform_review_id = self._extract_platform_review_id(review_data)
+            if not platform_review_id:
+                continue
+
+            # Generate UUID v7 (time-sortable)
+            review_id = uuid7()
+            review_id_map[platform_review_id] = review_id
+
+            # Parse and cache reviewed_at timestamp
+            reviewed_at = parse_reviewed_at_func(review_data)
+            reviewed_at_cache[platform_review_id] = reviewed_at
+
+        return review_id_map, reviewed_at_cache
+
+    def _create_master_index_records(
+        self,
+        new_reviews_data: List[Dict[str, Any]],
+        app_uuid: UUID,
+        platform_type,
+        review_id_map: Dict[str, UUID],
+        reviewed_at_cache: Dict[str, datetime],
+        enable_parquet: bool
+    ) -> List[Any]:
+        """Create ReviewMasterIndex records for Phase 2 (DB commit).
+
+        Args:
+            new_reviews_data: List of new review dictionaries
+            app_uuid: App UUID
+            platform_type: PlatformType enum
+            review_id_map: Map of platform_review_id → review_id
+            reviewed_at_cache: Map of platform_review_id → reviewed_at
+            enable_parquet: Whether Parquet write is enabled
+
+        Returns:
+            List of ReviewMasterIndex records
+        """
+        from ..models.review_master_index import ReviewMasterIndex
+        from ..models.enums import ProcessingStatusType
+
+        master_index_records = []
+        now = datetime.now(timezone.utc)
+
+        for review_data in new_reviews_data:
+            platform_review_id = self._extract_platform_review_id(review_data)
+            if not platform_review_id or platform_review_id not in review_id_map:
+                continue
+
+            review_id = review_id_map[platform_review_id]
+            reviewed_at = reviewed_at_cache[platform_review_id]
+
+            master_index = ReviewMasterIndex(
+                review_id=review_id,
+                app_id=app_uuid,
+                platform_review_id=platform_review_id,
+                platform_type=platform_type,
+                review_created_at=reviewed_at,
+                ingested_at=now,
+                processing_status=ProcessingStatusType.RAW,
+                parquet_written_at=now if enable_parquet else None,
+                is_active=True,
+                is_reply=False,
+                error_message=None,
+                retry_count=0
+            )
+            master_index_records.append(master_index)
+
+        return master_index_records
