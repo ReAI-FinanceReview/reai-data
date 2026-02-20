@@ -212,9 +212,9 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
-# Agents file
-AGENTS.md
+# Markdown files
 *.md
+!README.md
 
 # SQL
 *.sql
@@ -223,6 +223,3 @@ AGENTS.md
 # Logs and data
 logs/
 data/
-
-# ERD
-*.vuerd.json
