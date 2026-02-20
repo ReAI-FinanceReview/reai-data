@@ -218,8 +218,11 @@ AGENTS.md
 
 # SQL
 *.sql
-!schema_v2.sql
+!schema_v3.sql
 
 # Logs and data
 logs/
 data/
+
+# ERD
+*.vuerd.json
