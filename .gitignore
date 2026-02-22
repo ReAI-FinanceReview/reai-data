@@ -223,3 +223,6 @@ $RECYCLE.BIN/
 # Logs and data
 logs/
 data/
+
+# Git worktrees
+.worktrees/
