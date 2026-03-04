@@ -46,10 +46,13 @@ def test_db_url() -> str:
 
     Priority:
     1. TEST_DATABASE_URL environment variable
-    2. Default: postgresql://testuser:testpass@localhost:5433/testdb
+       - 서버 개발 시 (VS Code Remote SSH): postgresql://vector_mgr:...@reai.kro.kr:55000/testdb
+       - 로컬 개발 시: docker-compose.test.yml 실행 후 localhost:5433/testdb
+    2. Default: postgresql://testuser:testpass@localhost:5433/testdb (docker-compose.test.yml 기본값)
 
     Note: Tests require a real PostgreSQL database (not SQLite).
-    Use docker-compose.test.yml to start a test database.
+    testdb는 프로덕션 DB(postgres)와 완전히 분리된 전용 테스트 DB여야 한다.
+    DROP SCHEMA public CASCADE가 실행되므로 절대 프로덕션 DB를 가리켜선 안 된다.
     """
     default_url = "postgresql://testuser:testpass@localhost:5433/testdb"
     return os.getenv("TEST_DATABASE_URL", default_url)
@@ -76,53 +79,48 @@ def test_db_engine(test_db_url: str):
 
 @pytest.fixture(scope="session")
 def test_db_schema(test_db_engine):
-    """Initialize test database schema using SQLAlchemy models.
+    """Initialize test database schema from sql/schema_v3.sql.
 
     This fixture:
-    1. Drops all tables if they exist
-    2. Creates tables from SQLAlchemy models (Base.metadata.create_all)
+    1. Drops the public schema and recreates it (clean slate)
+    2. Executes schema_v3.sql to create all 18 tables, 5 ENUMs, and indexes
     3. Runs once per test session
 
-    Note: This is a session-scoped fixture to avoid recreating
-    schema for every test (expensive operation).
-
-    This approach avoids requiring pgvector extension which is only
-    needed for embeddings (Silver/Gold layer), not for Bronze layer
-    crawler tests.
+    Note: uuid-ossp extension line is filtered out because Python uuid7()
+    is used for UUID generation and the DB extension is not required.
     """
-    with test_db_engine.connect() as conn:
-        # Drop all tables (clean slate)
-        conn.execute(text("DROP SCHEMA public CASCADE;"))
-        conn.execute(text("CREATE SCHEMA public;"))
+    schema_file = Path(__file__).parent.parent / "sql" / "schema_v3.sql"
+    sql_content = schema_file.read_text()
 
-        # Create uuid-ossp extension (required for UUID generation)
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"))
+    # Filter/replace lines incompatible with test server:
+    # - uuid-ossp: not installed (Python uuid7() handles UUID generation)
+    # - ltree: not available on test server (org_id column replaced with TEXT)
+    filtered_lines = []
+    for line in sql_content.splitlines():
+        code = line.split('--')[0]  # strip inline comments
+        if 'uuid-ossp' in code:
+            continue  # skip uuid-ossp extension
+        if 'ltree' in code and 'CREATE EXTENSION' in code:
+            continue  # skip ltree extension
+        if 'USING GIST' in code and 'org_id' in code:
+            continue  # skip ltree GIST index (not supported without ltree)
+        if 'ltree' in code and 'COMMENT' not in code:
+            line = line.replace('ltree', 'TEXT')  # replace ltree type with TEXT
+        filtered_lines.append(line)
+    sql_filtered = '\n'.join(filtered_lines)
 
-        # Create ENUM types (required by models)
-        conn.execute(text("""
-            CREATE TYPE platform_type AS ENUM ('APPSTORE', 'PLAYSTORE');
-        """))
-        conn.execute(text("""
-            CREATE TYPE processing_status_type AS ENUM ('RAW', 'CLEANED', 'ANALYZED', 'FAILED');
-        """))
-        conn.execute(text("""
-            CREATE TYPE app_type AS ENUM ('CONSUMER', 'CORPORATE', 'GLOBAL');
-        """))
-
-        conn.commit()
-
-    # Create only the tables needed for crawler tests (not all tables)
-    # This avoids requiring pgvector extension which is only for embeddings
-    from src.models.apps import App
-    from src.models.review_master_index import ReviewMasterIndex
-
-    # Create tables individually
-    App.__table__.create(bind=test_db_engine, checkfirst=True)
-    ReviewMasterIndex.__table__.create(bind=test_db_engine, checkfirst=True)
+    # Use raw psycopg2 connection to execute multi-statement SQL
+    raw_conn = test_db_engine.raw_connection()
+    try:
+        cursor = raw_conn.cursor()
+        cursor.execute("DROP SCHEMA public CASCADE;")
+        cursor.execute("CREATE SCHEMA public;")
+        cursor.execute(sql_filtered)
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
 
     yield
-
-    # No cleanup needed - session-scoped
 
 
 @pytest.fixture

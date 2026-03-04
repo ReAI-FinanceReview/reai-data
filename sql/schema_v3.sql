@@ -121,7 +121,7 @@ CREATE TABLE review_master_index
   platform_review_id TEXT                   NOT NULL UNIQUE,
   platform_type      platform_type,
   review_created_at  TIMESTAMPTZ,
-  last_ingested_at   TIMESTAMPTZ,
+  ingested_at        TIMESTAMPTZ,
   processing_status  processing_status_type,
   parquet_written_at TIMESTAMPTZ,
   storage_path       TEXT,
@@ -139,7 +139,7 @@ COMMENT ON COLUMN review_master_index.service_id IS '논리적 동일 앱 ID';
 COMMENT ON COLUMN review_master_index.platform_review_id IS '플랫폼 원본 리뷰 ID (중복 방지)';
 COMMENT ON COLUMN review_master_index.platform_type IS 'PLAYSTORE | APPSTORE';
 COMMENT ON COLUMN review_master_index.review_created_at IS '리뷰 작성 시각 (플랫폼 기준)';
-COMMENT ON COLUMN review_master_index.last_ingested_at IS '마지막 수집 시각 (renamed from ingested_at for clarity)';
+COMMENT ON COLUMN review_master_index.ingested_at IS '수집 시각';
 COMMENT ON COLUMN review_master_index.processing_status IS 'RAW (Bronze Parquet 저장 완료) / CLEANED (Silver 전처리 완료) / ANALYZED (Gold 분석 완료) / FAILED (실패)';
 COMMENT ON COLUMN review_master_index.parquet_written_at IS 'Parquet 쓰기 성공 시각 (Phase 1 of 2-phase commit)';
 COMMENT ON COLUMN review_master_index.storage_path IS 'MinIO object storage path (s3://bucket/path/file.parquet) - tracks Orphan Parquet when DB commit fails after NAS write';

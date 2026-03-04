@@ -4,8 +4,8 @@
   "settings": {
     "width": 3000,
     "height": 3000,
-    "scrollTop": -844.787,
-    "scrollLeft": -860,
+    "scrollTop": -566,
+    "scrollLeft": 0,
     "zoomLevel": 1,
     "show": 511,
     "database": 16,
@@ -3036,20 +3036,20 @@
       "TB3bYz2ZzhhVq_PHLK9rL": {
         "id": "TB3bYz2ZzhhVq_PHLK9rL",
         "tableId": "bm5meyQEBUppktp8WBt3V",
-        "name": "last_ingested_at",
+        "name": "ingested_at",
         "comment": "마지막 처리된 시간",
         "dataType": "TIMESTAMPTZ",
         "default": "",
         "options": 0,
         "ui": {
           "keys": 0,
-          "widthName": 96,
+          "widthName": 69,
           "widthComment": 92,
           "widthDataType": 86,
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1771213085296,
+          "updateAt": 1772538573671,
           "createAt": 1770110184064
         }
       },
@@ -5141,22 +5141,6 @@
         "meta": {
           "updateAt": 1771212814838,
           "createAt": 1770029270504
-        }
-      },
-      "AdH5YvTkLq_uBbQoezpTo": {
-        "id": "AdH5YvTkLq_uBbQoezpTo",
-        "value": "클렌징된 텍스트 db에 있어야함",
-        "ui": {
-          "x": 1727.1053,
-          "y": 1476.1579,
-          "zIndex": 1420,
-          "width": 116,
-          "height": 100,
-          "color": ""
-        },
-        "meta": {
-          "updateAt": 1771203655935,
-          "createAt": 1770520105726
         }
       },
       "pqflrNBf2kUCIUzC7llPC": {
