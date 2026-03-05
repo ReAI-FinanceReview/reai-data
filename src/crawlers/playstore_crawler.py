@@ -137,7 +137,10 @@ class PlayStoreCrawler(BaseCrawler):
             if not review_text or not review_text.strip():
                 continue
 
-            rating = review_data.get('score', 0)
+            try:
+                rating = int(review_data.get('score') or 1)
+            except (TypeError, ValueError):
+                rating = 1
             if rating < 1:
                 rating = 1
             elif rating > 5:

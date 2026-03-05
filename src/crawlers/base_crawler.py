@@ -319,7 +319,7 @@ class BaseCrawler(ABC):
                 record_count=len(parquet_records),
                 status=IngestionBatchStatusType.PENDING,
                 retry_count=0,
-                max_retries=3,
+                max_retries=self.max_retries,
                 created_at=now,
                 updated_at=now
             )

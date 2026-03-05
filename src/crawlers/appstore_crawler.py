@@ -184,7 +184,7 @@ class AppStoreCrawler(BaseCrawler):
                 platform_review_id=platform_review_id,
                 reviewer_name=review_data.get('author', {}).get('name', {}).get('label'),
                 review_text=review_text,
-                rating=int(review_data.get('im:rating', {}).get('label', 0)),
+                rating=max(1, min(5, int(review_data.get('im:rating', {}).get('label', 1) or 1))),
                 reviewed_at=reviewed_at_cache[platform_review_id],
                 is_reply=False,
                 reply_comment=None
