@@ -59,6 +59,12 @@ def run_generate_embeddings(
     )
 
 
+def run_load(batch_size: int = 100, config_path: Optional[str] = None) -> RunResult:
+    """Run Parquet batch → DB load step."""
+    from src.loaders.batch_loader import BatchLoader
+    return _handle_step("load", lambda: BatchLoader(config_path).load_pending_batches(limit=batch_size))
+
+
 def run_steps(
     steps: List[str],
     batch_size: int = 100,
@@ -69,6 +75,7 @@ def run_steps(
     """Run multiple steps in sequence; stop on first failure."""
     step_funcs: Dict[str, Callable[[], RunResult]] = {
         "crawl": lambda: run_crawl(config_path),
+        "load": lambda: run_load(batch_size=batch_size, config_path=config_path),
         "preprocess": lambda: run_preprocess(batch_size=batch_size, limit=limit, config_path=config_path),
         "features": lambda: run_extract_features(batch_size=batch_size, limit=limit, config_path=config_path),
         "embed": lambda: run_generate_embeddings(batch_size=batch_size, limit=limit, model_name=model_name, config_path=config_path),
