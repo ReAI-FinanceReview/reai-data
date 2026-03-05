@@ -44,6 +44,7 @@ class BatchLoader:
                         IngestionBatchStatusType.FAILED
                     ])
                 )
+                .filter(IngestionBatch.retry_count < IngestionBatch.max_retries)
                 .order_by(IngestionBatch.created_at.asc())
                 .limit(limit)
                 .all()
@@ -61,6 +62,7 @@ class BatchLoader:
                     self._load_single_batch(session, batch)
                     loaded += 1
                 except Exception as e:
+                    session.rollback()
                     self.logger.error(f"Failed to load batch {batch.batch_id}: {e}")
                     self._mark_batch_failed(session, batch, str(e))
 
