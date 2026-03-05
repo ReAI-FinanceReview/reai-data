@@ -494,11 +494,10 @@ def db_with_pending_batches(test_db_session: Session, temp_bronze_dir) -> Sessio
     """Create ingestion_batch records in PENDING state.
 
     Creates:
-    - 1 App
-    - 2 IngestionBatch records with status=PENDING
-    - Matching Parquet files in temp_bronze_dir
+    - 1 IngestionBatch record with status=PENDING
+    - Matching Parquet file in temp_bronze_dir
 
-    Returns: Session with pending batches pre-loaded
+    Returns: Session with pending batch pre-loaded
     """
     from src.utils.parquet_writer import ParquetWriter
 

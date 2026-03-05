@@ -27,7 +27,7 @@ def _make_crawler(test_db_session, temp_bronze_dir, enable_parquet=True):
     """Helper: create AppStoreCrawler with mocked dependencies."""
     from src.utils.parquet_writer import ParquetWriter
 
-    with patch.object(AppStoreCrawler, '__init__', lambda self, config_path: None):
+    with patch.object(AppStoreCrawler, '__init__', lambda self, *args, **kwargs: None):
         crawler = AppStoreCrawler()
         crawler.logger = MagicMock()
         crawler.enable_parquet = enable_parquet
