@@ -60,6 +60,10 @@ class ReviewMasterIndex(Base):
         DateTime(timezone=True),
         comment='Parquet 쓰기 성공 시각 (Phase 1 of 2-phase commit)'
     )
+    storage_path = Column(
+        Text,
+        comment='Parquet 파일 경로 (MinIO 또는 로컬)'
+    )
     error_message = Column(
         Text,
         comment='실패 사유 (Parquet write / DB commit 에러 메시지)'
