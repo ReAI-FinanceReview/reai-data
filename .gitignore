@@ -219,6 +219,7 @@ $RECYCLE.BIN/
 # SQL
 *.sql
 !schema_v3.sql
+!schema_v4.sql
 
 # Logs and data
 logs/
