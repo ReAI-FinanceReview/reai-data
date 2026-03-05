@@ -34,6 +34,7 @@ def _make_crawler(test_db_session, temp_bronze_dir, enable_parquet=True):
         crawler.config = {}
         crawler.db_connector = MagicMock()
         crawler.db_connector.get_session.return_value = test_db_session
+        crawler.max_retries = 3
 
         if enable_parquet:
             crawler.parquet_writer = ParquetWriter(

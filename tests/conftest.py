@@ -101,6 +101,8 @@ def test_db_schema(test_db_engine):
         code = line.split('--')[0]  # strip inline comments
         if 'uuid-ossp' in code:
             continue  # skip uuid-ossp extension
+        if 'uuid_generate_v4()' in code:
+            line = line.replace('DEFAULT uuid_generate_v4()', '')  # uuid-ossp not installed in test DB
         if 'ltree' in code and 'CREATE EXTENSION' in code:
             continue  # skip ltree extension
         if 'USING GIST' in code and 'org_id' in code:
