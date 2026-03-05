@@ -42,3 +42,12 @@ class SentimentType(enum.Enum):
     POSITIVE = "POSITIVE"
     NEGATIVE = "NEGATIVE"
     NEUTRAL = "NEUTRAL"
+
+
+class IngestionBatchStatusType(enum.Enum):
+    """Status of Parquet batch ingestion (DLQ management)."""
+    PENDING = "PENDING"
+    LOADED = "LOADED"
+    FAILED = "FAILED"
+    RETRYING = "RETRYING"
+    DEAD_LETTER = "DEAD_LETTER"

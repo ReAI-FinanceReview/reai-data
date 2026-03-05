@@ -3,7 +3,7 @@
 SQLAlchemy models for schema_v2.sql (hybrid DB+NAS architecture)
 """
 
-__version__ = "4.0.0"  # Bump version for major schema change
+__version__ = "5.0.0"  # Bump version for schema v4 (ingestion_batch)
 
 from .base import Base
 
@@ -14,6 +14,7 @@ from .enums import (
     ProcessingStatusType,
     AnalysisStatusType,
     SentimentType,
+    IngestionBatchStatusType,
 )
 
 # App-related models
@@ -23,6 +24,9 @@ from .app_metadata import AppMetadata
 
 # Review master index
 from .review_master_index import ReviewMasterIndex
+
+# Ingestion DLQ
+from .ingestion_batch import IngestionBatch
 
 # Bronze Layer (NAS Parquet)
 from .review import Review
@@ -49,12 +53,15 @@ __all__ = [
     'ProcessingStatusType',
     'AnalysisStatusType',
     'SentimentType',
+    'IngestionBatchStatusType',
     # App
     'AppService',
     'App',
     'AppMetadata',
     # Review Index
     'ReviewMasterIndex',
+    # Ingestion DLQ
+    'IngestionBatch',
     # Bronze (NAS)
     'Review',
     # Silver
