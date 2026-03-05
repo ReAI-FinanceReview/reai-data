@@ -1,49 +1,30 @@
-"""Play Store 크롤러 클래스 (Phase 3: NAS-first Architecture)
+"""Play Store 크롤러 클래스 (Issue #19: Batch DLQ)
 
-This module implements the Play Store crawler with NAS-first dual-write pattern
-to ensure distributed consistency between PostgreSQL and Parquet storage.
-
-Key Features:
-- 2-Phase Commit: Parquet write → DB commit
-- Idempotency via platform_review_id
-- State machine tracking via processing_status
-- Lightweight retry mechanism
+Crawl 단계: API → Parquet 쓰기 + ingestion_batch PENDING 등록
+Load 단계(BatchLoader)에서 Parquet → ReviewMasterIndex 적재
 """
 
 import os
 from google_play_scraper import reviews, Sort, app as gp_app
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional
-from uuid6 import uuid7
+from uuid import UUID
 
 from .base_crawler import BaseCrawler
+from .exceptions import ParquetWriteError
 from src.utils.db_connector import DatabaseConnector
 from src.utils.parquet_writer import ParquetWriter
 from src.utils.path_resolver import get_medallion_paths
 from src.models.base import Base
-from src.models.apps import App
-from src.models.review_master_index import ReviewMasterIndex
-from src.models.enums import PlatformType, ProcessingStatusType
+from src.models.enums import PlatformType
 from src.schemas.parquet.app_review import AppReviewSchema
 
 
-class ParquetWriteError(Exception):
-    """Raised when Parquet write fails (Phase 1)."""
-    pass
-
-
-class DBCommitError(Exception):
-    """Raised when DB commit fails after Parquet success (Phase 2)."""
-    pass
-
-
 class PlayStoreCrawler(BaseCrawler):
-    """Play Store 리뷰 크롤러 (NAS-first Architecture)
+    """Play Store 리뷰 크롤러 (Batch DLQ Architecture)
 
-    Features:
-    - NAS-first dual-write pattern
-    - Distributed consistency guarantees
-    - Retry mechanism for failed writes
+    crawl 단계에서 Parquet 파일을 생성하고 ingestion_batch PENDING 레코드를 등록합니다.
+    ReviewMasterIndex 생성은 load 단계(BatchLoader)에서 처리합니다.
     """
 
     def __init__(self, config_path: str = None):
@@ -89,22 +70,11 @@ class PlayStoreCrawler(BaseCrawler):
         return review_data.get('reviewId', '')
 
     def _parse_reviewed_at(self, review_data: Dict[str, Any]) -> datetime:
-        """Parse reviewed_at timestamp from Play Store review data.
-
-        Extracts timestamp from 'at' field and ensures timezone-aware datetime.
-        Falls back to current UTC time if parsing fails.
-
-        Args:
-            review_data: Review dictionary from Play Store API
-
-        Returns:
-            Timezone-aware datetime object
-        """
+        """Parse reviewed_at timestamp from Play Store review data."""
         reviewed_at = review_data.get('at')
         if not isinstance(reviewed_at, datetime):
             reviewed_at = datetime.now(timezone.utc)
         elif reviewed_at.tzinfo is None:
-            # Ensure timezone-aware
             reviewed_at = reviewed_at.replace(tzinfo=timezone.utc)
         return reviewed_at
 
@@ -115,17 +85,7 @@ class PlayStoreCrawler(BaseCrawler):
         country: str = None,
         count: int = None
     ) -> List[Dict[str, Any]]:
-        """지정된 앱 ID로 Google Play Store 리뷰를 가져옵니다.
-
-        Args:
-            app_id: Play Store app package name
-            lang: Language code (default: self.language)
-            country: Country code (default: self.country)
-            count: Number of reviews to fetch (default: self.reviews_per_app)
-
-        Returns:
-            List of review dictionaries from the API
-        """
+        """지정된 앱 ID로 Google Play Store 리뷰를 가져옵니다."""
         if lang is None:
             lang = self.language
         if country is None:
@@ -152,401 +112,54 @@ class PlayStoreCrawler(BaseCrawler):
             return []
 
     def get_app_details(self, app_id: str) -> Optional[Dict[str, Any]]:
-        """Play Store 앱 상세 정보를 가져옵니다.
-
-        Args:
-            app_id: Play Store app package name
-
-        Returns:
-            App details dictionary or None if failed
-        """
+        """Play Store 앱 상세 정보를 가져옵니다."""
         try:
             return gp_app(app_id, lang=self.language, country=self.country)
         except Exception as e:
             self.logger.error(f"앱 상세 정보 가져오기 실패 - {app_id}: {e}")
             return None
 
-    def save_to_parquet_and_database(
+    def _build_parquet_records(
         self,
-        app_id: str,
-        app_name: str,
-        reviews_data: List[Dict[str, Any]]
-    ) -> int:
-        """NAS-first dual-write: Parquet → DB (2-phase commit)
-
-        Phase 1: Write to Parquet (NAS)
-        Phase 2: Commit to DB (only if Phase 1 succeeds)
-
-        This ensures no Ghost Records (DB without Parquet data).
-
-        Args:
-            app_id: Play Store app package name
-            app_name: App display name
-            reviews_data: List of review dictionaries from API
-
-        Returns:
-            Number of new reviews added
-
-        Raises:
-            ParquetWriteError: If Parquet write fails
-            DBCommitError: If DB commit fails (Parquet already written)
-        """
-        session = self.db_connector.get_session()
-
-        try:
-            # ========================================
-            # 0. App 확인/생성 (using base class helper)
-            # ========================================
-            platform_type = self._get_platform_type()
-            app = self._get_or_create_app(session, app_id, app_name, platform_type)
-
-            # ========================================
-            # 1. Idempotency Check (using base class helpers)
-            # ========================================
-            existing_platform_ids = self._get_existing_platform_ids(session, app.app_id, platform_type)
-            new_reviews_data = self._filter_new_reviews(reviews_data, existing_platform_ids)
-
-            if not new_reviews_data:
-                self.logger.info(f"No new reviews for app {app_id} (all duplicates)")
-                session.close()  # No new data to commit
-                return 0
-
-            self.logger.info(f"Found {len(new_reviews_data)} new reviews for {app_id}")
-
-            # ========================================
-            # 2. PHASE 1: Write to Parquet (NAS-first)
-            # ========================================
-            # Create ID and timestamp caches (using base class helper)
-            review_id_map, reviewed_at_cache = self._create_review_id_and_timestamp_caches(
-                new_reviews_data,
-                self._parse_reviewed_at
-            )
-
-            parquet_records = []
-            for review_data in new_reviews_data:
-                platform_review_id = self._extract_platform_review_id(review_data)
-                if not platform_review_id or platform_review_id not in review_id_map:
-                    continue
-
-                review_id = review_id_map[platform_review_id]
-                reviewed_at = reviewed_at_cache[platform_review_id]
-
-                # Parse review_text
-                review_text = review_data.get('content', '')
-                if not review_text or not review_text.strip():
-                    continue  # Skip empty reviews
-
-                # Parse rating (Play Store uses 'score')
-                rating = review_data.get('score', 0)
-                if rating < 1:
-                    rating = 1
-                elif rating > 5:
-                    rating = 5
-
-                # Create Parquet record
-                parquet_record = AppReviewSchema(
-                    review_id=str(review_id),
-                    app_id=str(app.app_id),
-                    platform_type='PLAYSTORE',
-                    platform_review_id=platform_review_id,
-                    reviewer_name=review_data.get('userName'),
-                    review_text=review_text,
-                    rating=rating,
-                    reviewed_at=reviewed_at,
-                    is_reply=False,
-                    reply_comment=review_data.get('replyContent')
-                )
-                parquet_records.append(parquet_record)
-
-            if not parquet_records:
-                self.logger.info(f"No valid reviews to write for {app_id}")
-                session.close()  # No valid data to commit
-                return 0
-
-            # Write to Parquet (MUST succeed before DB commit)
-            if not self.enable_parquet:
-                self.logger.warning("Parquet write disabled (ENABLE_PARQUET_WRITE=false)")
-                # Skip Parquet, proceed to DB (legacy mode for dev)
-            else:
-                try:
-                    parquet_file_path = self.parquet_writer.write_batch(parquet_records)
-                    self.logger.info(
-                        f"✅ PHASE 1 SUCCESS: Wrote {len(parquet_records)} reviews "
-                        f"to Parquet: {parquet_file_path}"
-                    )
-                except Exception as e:
-                    self.logger.error(f"❌ PHASE 1 FAILED: Parquet write error: {e}")
-                    # DO NOT proceed to DB commit
-                    raise ParquetWriteError(f"Parquet write failed: {e}") from e
-
-            # ========================================
-            # 3. PHASE 2: Write to DB (only if Phase 1 succeeded)
-            # ========================================
-            # Create master index records (using base class helper)
-            master_index_records = self._create_master_index_records(
-                new_reviews_data,
-                app.app_id,
-                platform_type,
-                review_id_map,
-                reviewed_at_cache,
-                self.enable_parquet
-            )
-
-            try:
-                session.add_all(master_index_records)
-                session.commit()
-
-                self.logger.info(
-                    f"✅ PHASE 2 SUCCESS: Committed {len(master_index_records)} reviews "
-                    f"to DB (status=RAW)"
-                )
-                return len(master_index_records)
-
-            except Exception as e:
-                session.rollback()
-                self.logger.error(
-                    f"❌ PHASE 2 FAILED: DB commit error: {e}\n"
-                    f"WARNING: Parquet data already written! Manual cleanup may be needed."
-                )
-                # Parquet already written, but DB failed
-                # This is acceptable - can retry DB commit later
-                raise DBCommitError(f"DB commit failed (Parquet OK): {e}") from e
-
-        except ParquetWriteError:
-            # Phase 1 failed - nothing committed
-            session.rollback()
-            raise
-
-        except DBCommitError:
-            # Phase 2 failed - Parquet OK, DB failed
-            # Can retry DB commit later using platform_review_id
-            raise
-
-        finally:
-            session.close()
-
-    def _mark_reviews_as_failed(
-        self,
-        app_id: str,
         reviews_data: List[Dict[str, Any]],
-        error_message: str,
-        failure_reason: str
-    ) -> None:
-        """Mark reviews as FAILED in DB when Parquet or DB commit fails.
+        review_id_map: Dict[str, UUID],
+        reviewed_at_cache: Dict[str, datetime],
+        app
+    ) -> List[AppReviewSchema]:
+        """Play Store 전용 Parquet 레코드 빌더."""
+        parquet_records = []
+        for review_data in reviews_data:
+            platform_review_id = self._extract_platform_review_id(review_data)
+            if not platform_review_id or platform_review_id not in review_id_map:
+                continue
 
-        This enables the retry mechanism to find and retry failed reviews.
+            review_text = review_data.get('content', '')
+            if not review_text or not review_text.strip():
+                continue
 
-        Args:
-            app_id: Play Store app ID (package name)
-            reviews_data: List of review dictionaries from API
-            error_message: Error details from the exception
-            failure_reason: Short description (e.g., "PARQUET_WRITE_FAILED")
-        """
-        session = self.db_connector.get_session()
-        try:
-            # Find or create the App record
-            app = session.query(App).filter_by(
-                platform_app_id=app_id,
-                platform_type=PlatformType.PLAYSTORE
-            ).first()
+            rating = review_data.get('score', 0)
+            if rating < 1:
+                rating = 1
+            elif rating > 5:
+                rating = 5
 
-            if not app:
-                # Create minimal app record for failure tracking
-                app = App(
-                    app_id=uuid7(),
-                    platform_app_id=app_id,
-                    name=f'app_{app_id}',
-                    platform_type=PlatformType.PLAYSTORE
-                )
-                session.add(app)
-                session.flush()
-
-            now = datetime.now(timezone.utc)
-            failed_records = []
-
-            for review_data in reviews_data:
-                platform_review_id = review_data.get('reviewId', '')
-                if not platform_review_id:
-                    continue
-
-                # Check if already tracked
-                existing = session.query(ReviewMasterIndex).filter_by(
-                    app_id=app.app_id,
-                    platform_review_id=platform_review_id
-                ).first()
-
-                if existing:
-                    # Update existing record to FAILED
-                    existing.processing_status = ProcessingStatusType.FAILED
-                    existing.error_message = f"{failure_reason}: {error_message}"
-                    existing.retry_count = 0
-                else:
-                    # Create new FAILED record
-                    review_id = uuid7()
-
-                    # Parse reviewed_at
-                    reviewed_at = self._parse_reviewed_at(review_data)
-
-                    failed_record = ReviewMasterIndex(
-                        review_id=review_id,
-                        app_id=app.app_id,
-                        platform_review_id=platform_review_id,
-                        platform_type=PlatformType.PLAYSTORE,
-                        review_created_at=reviewed_at,
-                        ingested_at=now,
-                        processing_status=ProcessingStatusType.FAILED,
-                        parquet_written_at=None,  # Failed to write
-                        is_active=True,
-                        is_reply=False,
-                        error_message=f"{failure_reason}: {error_message}",
-                        retry_count=0
-                    )
-                    failed_records.append(failed_record)
-
-            if failed_records:
-                session.add_all(failed_records)
-
-            session.commit()
-            self.logger.info(
-                f"Marked {len(failed_records)} reviews as FAILED for app {app_id} ({failure_reason})"
-            )
-
-        except Exception as e:
-            session.rollback()
-            self.logger.error(f"Failed to mark reviews as FAILED: {e}")
-        finally:
-            session.close()
-
-    def retry_failed_reviews(self, max_retries: int = 3) -> int:
-        """Retry failed reviews by re-crawling from Play Store API.
-
-        Strategy:
-        1. Find failed reviews grouped by app_id
-        2. For each app with failed reviews, re-crawl all reviews
-        3. Idempotency check will skip already-processed reviews
-        4. Failed reviews will be re-attempted with 2-phase commit
-        5. Update retry_count and status based on outcome
-
-        Args:
-            max_retries: Maximum retry attempts (default: 3)
-
-        Returns:
-            Number of apps re-crawled (not individual reviews)
-        """
-        session = self.db_connector.get_session()
-
-        try:
-            # Query failed reviews grouped by app
-            failed_reviews = session.query(ReviewMasterIndex).filter(
-                ReviewMasterIndex.processing_status == ProcessingStatusType.FAILED,
-                ReviewMasterIndex.retry_count < max_retries,
-                ReviewMasterIndex.platform_type == PlatformType.PLAYSTORE
-            ).all()
-
-            if not failed_reviews:
-                self.logger.info("No failed reviews to retry")
-                return 0
-
-            # Group failed reviews by app_id
-            from collections import defaultdict
-            failed_by_app = defaultdict(list)
-            for failed_review in failed_reviews:
-                # Get the App record to find platform_app_id
-                app = session.query(App).filter_by(app_id=failed_review.app_id).first()
-                if app:
-                    failed_by_app[app.platform_app_id].append(failed_review)
-
-            self.logger.info(
-                f"Found {len(failed_reviews)} failed reviews across {len(failed_by_app)} apps. "
-                f"Will re-crawl these apps."
-            )
-
-            retried_apps = 0
-            for platform_app_id, failed_reviews_for_app in failed_by_app.items():
-                try:
-                    self.logger.info(
-                        f"Retrying app {platform_app_id} "
-                        f"({len(failed_reviews_for_app)} failed reviews)"
-                    )
-
-                    # Get app details
-                    app_details = self.get_app_details(platform_app_id)
-                    app_name = app_details.get('title') if app_details else f'app_{platform_app_id}'
-
-                    # Re-crawl all reviews for this app
-                    reviews_data = self.get_playstore_reviews(platform_app_id)
-
-                    if not reviews_data:
-                        self.logger.warning(f"No reviews found for app {platform_app_id} during retry")
-                        # Mark as failed with updated message
-                        for failed_review in failed_reviews_for_app:
-                            failed_review.retry_count += 1
-                            failed_review.error_message = (
-                                f"Retry {failed_review.retry_count}: No reviews found from API"
-                            )
-                        session.commit()
-                        continue
-
-                    # Re-attempt 2-phase commit
-                    # Idempotency check will skip already-processed reviews
-                    reviews_added = self.save_to_parquet_and_database(
-                        platform_app_id,
-                        app_name,
-                        reviews_data
-                    )
-
-                    # If we got here, retry was successful
-                    # The failed reviews should now be in RAW status (re-created by save_to_parquet_and_database)
-                    # We need to clean up the old FAILED records
-                    for failed_review in failed_reviews_for_app:
-                        # Check if review was successfully re-processed
-                        updated_review = session.query(ReviewMasterIndex).filter_by(
-                            app_id=failed_review.app_id,
-                            platform_review_id=failed_review.platform_review_id,
-                            processing_status=ProcessingStatusType.RAW
-                        ).first()
-
-                        if updated_review:
-                            # Success! Delete the old failed record
-                            session.delete(failed_review)
-                            self.logger.info(
-                                f"Successfully retried review {failed_review.platform_review_id}"
-                            )
-                        else:
-                            # Still failed, increment retry count
-                            failed_review.retry_count += 1
-                            failed_review.error_message = (
-                                f"Retry {failed_review.retry_count}: Re-crawl completed but review not found"
-                            )
-
-                    session.commit()
-                    retried_apps += 1
-                    self.logger.info(f"Successfully retried app {platform_app_id}")
-
-                except Exception as e:
-                    session.rollback()
-                    self.logger.error(f"Retry failed for app {platform_app_id}: {e}")
-                    # Increment retry count for all failed reviews of this app
-                    for failed_review in failed_reviews_for_app:
-                        try:
-                            failed_review.retry_count += 1
-                            failed_review.error_message = f"Retry {failed_review.retry_count}: {str(e)}"
-                        except Exception:
-                            pass
-                    try:
-                        session.commit()
-                    except Exception as commit_err:
-                        session.rollback()
-                        self.logger.error(f"Failed to update retry count: {commit_err}")
-
-            return retried_apps
-
-        finally:
-            session.close()
+            parquet_records.append(AppReviewSchema(
+                review_id=str(review_id_map[platform_review_id]),
+                app_id=str(app.app_id),
+                platform_type='PLAYSTORE',
+                platform_review_id=platform_review_id,
+                reviewer_name=review_data.get('userName'),
+                review_text=review_text,
+                rating=rating,
+                reviewed_at=reviewed_at_cache[platform_review_id],
+                is_reply=False,
+                reply_comment=review_data.get('replyContent')
+            ))
+        return parquet_records
 
     def run(self) -> None:
-        """크롤러 실행 (NAS-first Architecture)"""
-        self.logger.info("Play Store 크롤러 실행 시작 (NAS-first mode)")
+        """크롤러 실행 (Batch DLQ Architecture)"""
+        self.logger.info("Play Store 크롤러 실행 시작 (Batch DLQ mode)")
 
         self.db_connector.create_tables(Base)
 
@@ -557,48 +170,34 @@ class PlayStoreCrawler(BaseCrawler):
         self.logger.info(f"총 {len(app_ids)}개 앱의 리뷰를 크롤링합니다.")
 
         successful_apps = 0
-        total_reviews_added = 0
+        total_records = 0
 
         for i, app_id in enumerate(app_ids, 1):
             self.logger.info(f"[{i}/{len(app_ids)}] 앱 ID: {app_id} 크롤링 시작...")
 
-            # Initialize reviews_data before try block to avoid undefined reference in exception handlers
-            reviews_data = []
-
             try:
-                # Get app details for name
                 app_details = self.get_app_details(app_id)
                 app_name = app_details.get('title') if app_details else f'app_{app_id}'
 
-                # Get reviews
                 reviews_data = self.get_playstore_reviews(app_id)
 
                 if not reviews_data:
                     self.logger.warning(f"앱 ID {app_id}: 수집된 리뷰 없음")
                     continue
 
-                # NAS-first dual-write
-                reviews_added = self.save_to_parquet_and_database(app_id, app_name, reviews_data)
+                _, count, _ = self.save_crawl_batch(
+                    app_id, app_name, reviews_data, self._build_parquet_records
+                )
 
-                if reviews_added > 0:
-                    self.logger.info(f"앱 ID {app_id}: {reviews_added}개의 새로운 리뷰 추가")
-                    total_reviews_added += reviews_added
+                if count > 0:
+                    self.logger.info(f"앱 ID {app_id}: {count}개 배치 등록 완료")
+                    total_records += count
                     successful_apps += 1
                 else:
                     self.logger.info(f"앱 ID {app_id}: 새로운 리뷰 없음")
 
             except ParquetWriteError as e:
                 self.logger.error(f"앱 ID {app_id} Parquet 쓰기 실패: {e}")
-                # Mark as failed in DB for retry mechanism
-                # Pass only the root cause to avoid redundant error message
-                self._mark_reviews_as_failed(app_id, reviews_data, str(e.__cause__ or e), "PARQUET_WRITE_FAILED")
-                continue
-
-            except DBCommitError as e:
-                self.logger.error(f"앱 ID {app_id} DB commit 실패: {e}")
-                # Parquet OK, DB failed - mark for retry
-                # Pass only the root cause to avoid redundant error message
-                self._mark_reviews_as_failed(app_id, reviews_data, str(e.__cause__ or e), "DB_COMMIT_FAILED")
                 continue
 
             except Exception as e:
@@ -609,5 +208,5 @@ class PlayStoreCrawler(BaseCrawler):
                 self.wait_between_requests()
 
         self.logger.info(f"크롤링 완료 - 성공: {successful_apps}/{len(app_ids)}개 앱")
-        self.logger.info(f"총 {total_reviews_added}개 리뷰가 추가되었습니다.")
+        self.logger.info(f"총 {total_records}개 리뷰 배치 등록 완료")
         self.logger.info(f"Parquet: {self.parquet_writer.base_path if self.parquet_writer else 'Disabled'}")
