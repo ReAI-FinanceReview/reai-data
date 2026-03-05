@@ -159,7 +159,7 @@ COMMENT ON COLUMN review_master_index.is_reply IS '개발자 답글 여부 (T / 
 
 CREATE TABLE ingestion_batch
 (
-  batch_id        UUID                        NOT NULL DEFAULT gen_random_uuid(),
+  batch_id        UUID                        NOT NULL DEFAULT uuid_generate_v4(),
   source_type     platform_type               NOT NULL,
   platform_app_id TEXT                        NOT NULL,
   app_name        TEXT,
