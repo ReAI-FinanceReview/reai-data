@@ -32,7 +32,8 @@ from sqlalchemy.pool import NullPool
 from src.models.base import Base
 from src.models.apps import App
 from src.models.review_master_index import ReviewMasterIndex
-from src.models.enums import PlatformType, ProcessingStatusType
+from src.models.ingestion_batch import IngestionBatch
+from src.models.enums import PlatformType, ProcessingStatusType, IngestionBatchStatusType
 from src.schemas.parquet.app_review import AppReviewSchema
 
 
@@ -79,17 +80,17 @@ def test_db_engine(test_db_url: str):
 
 @pytest.fixture(scope="session")
 def test_db_schema(test_db_engine):
-    """Initialize test database schema from sql/schema_v3.sql.
+    """Initialize test database schema from sql/schema_v4.sql.
 
     This fixture:
     1. Drops the public schema and recreates it (clean slate)
-    2. Executes schema_v3.sql to create all 18 tables, 5 ENUMs, and indexes
+    2. Executes schema_v4.sql to create all 19 tables, 6 ENUMs, and indexes
     3. Runs once per test session
 
     Note: uuid-ossp extension line is filtered out because Python uuid7()
     is used for UUID generation and the DB extension is not required.
     """
-    schema_file = Path(__file__).parent.parent / "sql" / "schema_v3.sql"
+    schema_file = Path(__file__).parent.parent / "sql" / "schema_v4.sql"
     sql_content = schema_file.read_text()
 
     # Filter/replace lines incompatible with test server:
@@ -100,6 +101,8 @@ def test_db_schema(test_db_engine):
         code = line.split('--')[0]  # strip inline comments
         if 'uuid-ossp' in code:
             continue  # skip uuid-ossp extension
+        if 'uuid_generate_v4()' in code:
+            line = line.replace('DEFAULT uuid_generate_v4()', '')  # uuid-ossp not installed in test DB
         if 'ltree' in code and 'CREATE EXTENSION' in code:
             continue  # skip ltree extension
         if 'USING GIST' in code and 'org_id' in code:
@@ -482,6 +485,129 @@ def mock_playstore_api(monkeypatch):
     monkeypatch.setattr('google_play_scraper.app', mock_app)
 
     return monkeypatch
+
+
+# ========================================
+# INGESTION BATCH FIXTURES (Issue #19)
+# ========================================
+
+@pytest.fixture
+def db_with_pending_batches(test_db_session: Session, temp_bronze_dir) -> Session:
+    """Create ingestion_batch records in PENDING state.
+
+    Creates:
+    - 1 IngestionBatch record with status=PENDING
+    - Matching Parquet file in temp_bronze_dir
+
+    Returns: Session with pending batch pre-loaded
+    """
+    from src.utils.parquet_writer import ParquetWriter
+
+    now = datetime.now(timezone.utc)
+
+    # Create a Parquet file
+    writer = ParquetWriter(base_path=str(temp_bronze_dir), partition_by='year_month')
+
+    records_1 = [
+        AppReviewSchema(
+            review_id=str(uuid7()),
+            app_id=str(uuid7()),
+            platform_type='APPSTORE',
+            platform_review_id=f'pending_review_{i}',
+            reviewer_name=f'User{i}',
+            review_text=f'Review {i}',
+            rating=5,
+            reviewed_at=datetime(2026, 2, 4, 12, i, tzinfo=timezone.utc),
+            is_reply=False,
+            reply_comment=None
+        )
+        for i in range(3)
+    ]
+    parquet_path_1 = writer.write_batch(records_1)
+
+    batch_1 = IngestionBatch(
+        batch_id=uuid7(),
+        source_type=PlatformType.APPSTORE,
+        platform_app_id='123456789',
+        app_name='Test App',
+        storage_path=str(parquet_path_1),
+        file_format='parquet',
+        record_count=len(records_1),
+        status=IngestionBatchStatusType.PENDING,
+        retry_count=0,
+        max_retries=3,
+        created_at=now,
+        updated_at=now
+    )
+    test_db_session.add(batch_1)
+    test_db_session.commit()
+    return test_db_session
+
+
+@pytest.fixture
+def db_with_failed_batches(test_db_session: Session, temp_bronze_dir) -> Session:
+    """Create ingestion_batch records with various failure states.
+
+    Creates:
+    - 3 IngestionBatch records:
+      - status=FAILED, retry_count=0
+      - status=FAILED, retry_count=1
+      - status=DEAD_LETTER, retry_count=3 (max reached)
+
+    Returns: Session with failed batches pre-loaded
+    """
+    now = datetime.now(timezone.utc)
+
+    batches = [
+        IngestionBatch(
+            batch_id=uuid7(),
+            source_type=PlatformType.APPSTORE,
+            platform_app_id='111111111',
+            app_name='Failed App 1',
+            storage_path='/tmp/fake_batch_0.parquet',
+            file_format='parquet',
+            record_count=5,
+            status=IngestionBatchStatusType.FAILED,
+            retry_count=0,
+            max_retries=3,
+            error_message='DB connection failed',
+            created_at=now,
+            updated_at=now
+        ),
+        IngestionBatch(
+            batch_id=uuid7(),
+            source_type=PlatformType.APPSTORE,
+            platform_app_id='222222222',
+            app_name='Failed App 2',
+            storage_path='/tmp/fake_batch_1.parquet',
+            file_format='parquet',
+            record_count=3,
+            status=IngestionBatchStatusType.FAILED,
+            retry_count=1,
+            max_retries=3,
+            error_message='Parquet parse error',
+            created_at=now,
+            updated_at=now
+        ),
+        IngestionBatch(
+            batch_id=uuid7(),
+            source_type=PlatformType.APPSTORE,
+            platform_app_id='333333333',
+            app_name='Dead Letter App',
+            storage_path='/tmp/fake_batch_3.parquet',
+            file_format='parquet',
+            record_count=2,
+            status=IngestionBatchStatusType.DEAD_LETTER,
+            retry_count=3,
+            max_retries=3,
+            error_message='Max retries reached',
+            created_at=now,
+            updated_at=now
+        ),
+    ]
+    test_db_session.add_all(batches)
+    test_db_session.commit()
+    return test_db_session
 
 
 # ========================================

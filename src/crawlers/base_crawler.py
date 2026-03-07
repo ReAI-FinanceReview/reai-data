@@ -3,7 +3,7 @@
 """
 import time
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Tuple, Set
+from typing import Callable, List, Dict, Any, Optional, Tuple, Set
 from pathlib import Path
 from datetime import datetime, timezone
 from uuid import UUID
@@ -229,56 +229,111 @@ class BaseCrawler(ABC):
 
         return review_id_map, reviewed_at_cache
 
-    def _create_master_index_records(
+    def save_crawl_batch(
         self,
-        new_reviews_data: List[Dict[str, Any]],
-        app_uuid: UUID,
-        platform_type,
-        review_id_map: Dict[str, UUID],
-        reviewed_at_cache: Dict[str, datetime],
-        enable_parquet: bool
-    ) -> List[Any]:
-        """Create ReviewMasterIndex records for Phase 2 (DB commit).
+        app_id: str,
+        app_name: Optional[str],
+        reviews_data: List[Dict[str, Any]],
+        build_parquet_records_func: Callable
+    ) -> Tuple[Optional[UUID], int, Optional[Path]]:
+        """Crawl 단계: Parquet 쓰기 + ingestion_batch PENDING 등록.
+
+        DB write는 App 레코드 확인/생성(경량)과 ingestion_batch INSERT만 수행.
+        ReviewMasterIndex 생성은 load 단계(BatchLoader)에서 처리.
 
         Args:
-            new_reviews_data: List of new review dictionaries
-            app_uuid: App UUID
-            platform_type: PlatformType enum
-            review_id_map: Map of platform_review_id → review_id
-            reviewed_at_cache: Map of platform_review_id → reviewed_at
-            enable_parquet: Whether Parquet write is enabled
+            app_id: Platform-specific app ID
+            app_name: App display name (optional)
+            reviews_data: List of review dictionaries from API
+            build_parquet_records_func: Platform-specific function to build Parquet records.
+                Signature: (reviews_data, review_id_map, reviewed_at_cache, app) → List[AppReviewSchema]
 
         Returns:
-            List of ReviewMasterIndex records
+            Tuple of (batch_id, record_count, parquet_path).
+            Returns (None, 0, None) if no new reviews.
+
+        Raises:
+            ParquetWriteError: If Parquet write fails (ingestion_batch NOT created)
         """
-        from ..models.review_master_index import ReviewMasterIndex
-        from ..models.enums import ProcessingStatusType
+        from ..crawlers.exceptions import ParquetWriteError
+        from ..models.ingestion_batch import IngestionBatch
+        from ..models.enums import IngestionBatchStatusType
 
-        master_index_records = []
-        now = datetime.now(timezone.utc)
+        session = self.db_connector.get_session()
+        try:
+            platform_type = self._get_platform_type()
+            app = self._get_or_create_app(session, app_id, app_name, platform_type)
 
-        for review_data in new_reviews_data:
-            platform_review_id = self._extract_platform_review_id(review_data)
-            if not platform_review_id or platform_review_id not in review_id_map:
-                continue
+            # Idempotency: skip already-indexed reviews
+            existing_platform_ids = self._get_existing_platform_ids(session, app.app_id, platform_type)
+            new_reviews_data = self._filter_new_reviews(reviews_data, existing_platform_ids)
 
-            review_id = review_id_map[platform_review_id]
-            reviewed_at = reviewed_at_cache[platform_review_id]
+            if not new_reviews_data:
+                self.logger.info(f"No new reviews for app {app_id} (all duplicates)")
+                session.close()
+                return None, 0, None
 
-            master_index = ReviewMasterIndex(
-                review_id=review_id,
-                app_id=app_uuid,
-                platform_review_id=platform_review_id,
-                platform_type=platform_type,
-                review_created_at=reviewed_at,
-                ingested_at=now,
-                processing_status=ProcessingStatusType.RAW,
-                parquet_written_at=now if enable_parquet else None,
-                is_active=True,
-                is_reply=False,
-                error_message=None,
-                retry_count=0
+            self.logger.info(f"Found {len(new_reviews_data)} new reviews for {app_id}")
+
+            # Build review UUID and timestamp caches
+            review_id_map, reviewed_at_cache = self._create_review_id_and_timestamp_caches(
+                new_reviews_data,
+                self._parse_reviewed_at
             )
-            master_index_records.append(master_index)
 
-        return master_index_records
+            # Build platform-specific Parquet records
+            parquet_records = build_parquet_records_func(
+                new_reviews_data, review_id_map, reviewed_at_cache, app
+            )
+
+            if not parquet_records:
+                self.logger.info(f"No valid reviews to write for app {app_id}")
+                session.close()
+                return None, 0, None
+
+            # ENABLE_PARQUET_WRITE=false: skip Parquet and ingestion_batch (dev mode)
+            if not self.enable_parquet:
+                self.logger.warning("Parquet write disabled (ENABLE_PARQUET_WRITE=false) — skipping batch")
+                session.close()
+                return None, 0, None
+
+            # Write to Parquet
+            try:
+                parquet_path = self.parquet_writer.write_batch(parquet_records)
+                self.logger.info(
+                    f"Parquet write OK: {len(parquet_records)} reviews → {parquet_path}"
+                )
+            except Exception as e:
+                self.logger.error(f"Parquet write FAILED: {e}")
+                raise ParquetWriteError(f"Parquet write failed: {e}") from e
+
+            # Register ingestion_batch as PENDING
+            now = datetime.now(timezone.utc)
+            batch = IngestionBatch(
+                batch_id=uuid7(),
+                source_type=platform_type,
+                platform_app_id=app_id,
+                app_name=app.name,
+                storage_path=str(parquet_path),
+                file_format='parquet',
+                record_count=len(parquet_records),
+                status=IngestionBatchStatusType.PENDING,
+                retry_count=0,
+                max_retries=self.max_retries,
+                created_at=now,
+                updated_at=now
+            )
+            session.add(batch)
+            session.commit()
+
+            self.logger.info(
+                f"ingestion_batch PENDING registered: batch_id={batch.batch_id}, "
+                f"records={len(parquet_records)}"
+            )
+            return batch.batch_id, len(parquet_records), Path(parquet_path)
+
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
