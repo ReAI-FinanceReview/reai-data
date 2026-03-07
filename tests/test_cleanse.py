@@ -121,3 +121,74 @@ def test_mask_pii_preserves_name():
     result = mask_pii('홍길동씨가 계좌 1234567890으로 이체')
     assert '홍길동' in result
     assert '[ACC]' in result
+
+
+# ========================================
+# ReviewCleaner
+# ========================================
+
+import json
+import tempfile
+from pathlib import Path
+from src.processing.cleanse import ReviewCleaner
+
+
+@pytest.fixture
+def tmp_synonyms(tmp_path):
+    data = {"게좌이체": "계좌이체", "이채": "이체"}
+    (tmp_path / "synonyms.json").write_text(json.dumps(data, ensure_ascii=False))
+    return str(tmp_path / "synonyms.json")
+
+
+@pytest.fixture
+def tmp_profanity(tmp_path):
+    # list 형식으로 테스트 (dict 형식도 지원해야 함)
+    data = ["욕설1", "욕설2"]
+    (tmp_path / "profanity.json").write_text(json.dumps(data, ensure_ascii=False))
+    return str(tmp_path / "profanity.json")
+
+
+def test_cleaner_synonym_correction(tmp_synonyms, tmp_profanity):
+    cleaner = ReviewCleaner(synonyms_path=tmp_synonyms, profanity_path=tmp_profanity)
+    result = cleaner.clean('게좌이체가 안 돼요')
+    assert '계좌이체' in result
+    assert '게좌이체' not in result
+
+
+def test_cleaner_profanity_masking(tmp_synonyms, tmp_profanity):
+    cleaner = ReviewCleaner(synonyms_path=tmp_synonyms, profanity_path=tmp_profanity)
+    result = cleaner.clean('욕설1 진짜 별로야')
+    assert '[SLANG]' in result
+    assert '욕설1' not in result
+
+
+def test_cleaner_full_pipeline(tmp_synonyms, tmp_profanity):
+    cleaner = ReviewCleaner(synonyms_path=tmp_synonyms, profanity_path=tmp_profanity)
+    text = '게좌이체😊ㅋㅋㅋㅋ 욕설1 010-1234-5678'
+    result = cleaner.clean(text)
+    assert '계좌이체' in result
+    assert '😊' not in result
+    assert 'ㅋㅋㅋㅋ' not in result
+    assert '[SLANG]' in result
+    assert '[TEL]' in result
+
+
+def test_cleaner_empty_text(tmp_synonyms, tmp_profanity):
+    cleaner = ReviewCleaner(synonyms_path=tmp_synonyms, profanity_path=tmp_profanity)
+    assert cleaner.clean('') == ''
+    assert cleaner.clean(None) is None
+
+
+@pytest.fixture
+def tmp_profanity_dict(tmp_path):
+    # dict 형식 profanity도 지원 확인
+    data = {"욕설A": "[MASK]", "욕설B": "[MASK]"}
+    (tmp_path / "profanity_dict.json").write_text(json.dumps(data, ensure_ascii=False))
+    return str(tmp_path / "profanity_dict.json")
+
+
+def test_cleaner_profanity_dict_format(tmp_synonyms, tmp_profanity_dict):
+    cleaner = ReviewCleaner(synonyms_path=tmp_synonyms, profanity_path=tmp_profanity_dict)
+    result = cleaner.clean('욕설A 이 앱은 별로')
+    assert '[SLANG]' in result
+    assert '욕설A' not in result

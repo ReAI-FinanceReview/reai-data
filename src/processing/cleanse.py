@@ -61,3 +61,55 @@ def mask_pii(text: str) -> str:
     text = _PHONE_PATTERN.sub('[TEL]', text)
     text = _ACCOUNT_PATTERN.sub('[ACC]', text)
     return text
+
+
+# =========================================================
+# ReviewCleaner: 7-step 정제 파이프라인 클래스
+# =========================================================
+
+import json
+from flashtext import KeywordProcessor
+
+
+class ReviewCleaner:
+    """텍스트 정제 파이프라인 클래스.
+
+    정제 순서: NFKC → 이모지 제거 → 반복문자 축약 → 특수문자 제거
+               → 오타 교정 → PII 마스킹 → 비속어 마스킹
+    """
+
+    def __init__(self, synonyms_path: str, profanity_path: str):
+        self._synonym_processor = self._load_synonyms(synonyms_path)
+        self._profanity_processor = self._load_profanity(profanity_path)
+
+    def _load_synonyms(self, path: str) -> KeywordProcessor:
+        processor = KeywordProcessor()
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # dict 형식: {"오타": "정답", ...}
+        for wrong, correct in data.items():
+            processor.add_keyword(wrong, correct)
+        return processor
+
+    def _load_profanity(self, path: str) -> KeywordProcessor:
+        processor = KeywordProcessor()
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # list 또는 dict 형식 모두 지원
+        words = data.keys() if isinstance(data, dict) else data
+        for word in words:
+            processor.add_keyword(word, '[SLANG]')
+        return processor
+
+    def clean(self, text: str) -> str:
+        """텍스트에 전체 정제 파이프라인을 적용한다."""
+        if not text:
+            return text
+        text = normalize_unicode(text)
+        text = remove_emojis(text)
+        text = reduce_repeated_chars(text)
+        text = remove_special_chars(text)
+        text = self._synonym_processor.replace_keywords(text)
+        text = mask_pii(text)
+        text = self._profanity_processor.replace_keywords(text)
+        return text.strip()
