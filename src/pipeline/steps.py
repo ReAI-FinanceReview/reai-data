@@ -1,4 +1,5 @@
 """Pipeline step wrappers used by CLI and Airflow."""
+import warnings
 from dataclasses import asdict, dataclass
 from typing import Callable, Dict, List, Optional
 
@@ -40,10 +41,13 @@ def run_crawl(config_path: Optional[str] = None) -> RunResult:
 
 def run_preprocess(batch_size: int = 100, limit: Optional[int] = None, config_path: Optional[str] = None) -> RunResult:
     """Run preprocessing step (deprecated: replaced by Bronze-to-Silver cleansing pipeline)."""
-    raise NotImplementedError(
-        "preprocess step has been replaced by the Bronze-to-Silver cleansing pipeline "
-        "(scripts/cleanse_reviews.py)"
+    msg = (
+        "run_preprocess is deprecated and has no effect. "
+        "Use scripts/cleanse_reviews.py for Bronze-to-Silver cleansing."
     )
+    warnings.warn(msg, DeprecationWarning, stacklevel=2)
+    logger.warning(msg)
+    return RunResult(step="preprocess", status="failed", message=msg)
 
 
 def run_extract_features(batch_size: int = 100, limit: Optional[int] = None, config_path: Optional[str] = None) -> RunResult:
