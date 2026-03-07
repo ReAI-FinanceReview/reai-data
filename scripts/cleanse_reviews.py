@@ -3,12 +3,18 @@
 """Bronze-to-Silver Review Cleansing Pipeline CLI.
 
 Usage:
-    PYTHONPATH=src python scripts/cleanse_reviews.py
-    PYTHONPATH=src python scripts/cleanse_reviews.py --date 2026-03-04
+    python scripts/cleanse_reviews.py
+    python scripts/cleanse_reviews.py --date 2026-03-04
 """
 import argparse
 import sys
 from datetime import date, timedelta
+from pathlib import Path
+
+# Ensure project root is on sys.path so src.* imports work regardless of CWD
+_PROJECT_ROOT = Path(__file__).parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -20,8 +26,9 @@ from src.processing.cleanse import ReviewCleaningPipeline
 
 logger = get_logger(__name__)
 
-SYNONYMS_PATH = 'config/dictionaries/domain_synonyms.json'
-PROFANITY_PATH = 'config/dictionaries/profanity_map.json'
+_CONFIG_DIR = _PROJECT_ROOT / 'config' / 'dictionaries'
+SYNONYMS_PATH = str(_CONFIG_DIR / 'domain_synonyms.json')
+PROFANITY_PATH = str(_CONFIG_DIR / 'profanity_map.json')
 
 
 def main():
