@@ -5,7 +5,6 @@ from typing import Callable, Dict, List, Optional
 from src.crawlers.unified_crawler import UnifiedCrawler
 from src.processing.embedding import EmbeddingGenerator
 from src.processing.feature_extraction import FeatureExtractor
-from src.processing.preprocess import TextPreprocessor
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -40,8 +39,11 @@ def run_crawl(config_path: Optional[str] = None) -> RunResult:
 
 
 def run_preprocess(batch_size: int = 100, limit: Optional[int] = None, config_path: Optional[str] = None) -> RunResult:
-    """Run preprocessing step."""
-    return _handle_step("preprocess", lambda: TextPreprocessor(config_path).process_batch(batch_size=batch_size, limit=limit))
+    """Run preprocessing step (deprecated: replaced by Bronze-to-Silver cleansing pipeline)."""
+    raise NotImplementedError(
+        "preprocess step has been replaced by the Bronze-to-Silver cleansing pipeline "
+        "(scripts/cleanse_reviews.py)"
+    )
 
 
 def run_extract_features(batch_size: int = 100, limit: Optional[int] = None, config_path: Optional[str] = None) -> RunResult:

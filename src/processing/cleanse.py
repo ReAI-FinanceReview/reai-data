@@ -35,10 +35,10 @@ def reduce_repeated_chars(text: str) -> str:
 
 
 def remove_special_chars(text: str) -> str:
-    """문장부호(!?.,)를 제외한 특수기호를 제거한다."""
+    """문장부호(!?.,)와 PII 플레이스홀더 괄호([])를 제외한 특수기호를 제거한다."""
     if not text:
         return text
-    return re.sub(r'[^\w\s!?.,]', '', text)
+    return re.sub(r'[^\w\s!?.,\[\]]', '', text)
 
 
 _ACCOUNT_PATTERN = re.compile(
@@ -108,9 +108,9 @@ class ReviewCleaner:
         text = normalize_unicode(text)
         text = remove_emojis(text)
         text = reduce_repeated_chars(text)
+        text = mask_pii(text)
         text = remove_special_chars(text)
         text = self._synonym_processor.replace_keywords(text)
-        text = mask_pii(text)
         text = self._profanity_processor.replace_keywords(text)
         return text.strip()
 
@@ -215,6 +215,7 @@ class ReviewCleaningPipeline:
         processed = 0
         skipped = 0
         groups: Dict[str, List[Dict]] = defaultdict(list)
+        processed_review_ids: List[str] = []
 
         for row in bronze_rows:
             text = row.get('review_text') or ''
@@ -227,13 +228,14 @@ class ReviewCleaningPipeline:
                 'platform_review_id': row['platform_review_id'],
                 'refined_text': cleaned,
             })
+            processed_review_ids.append(row['review_id'])
             processed += 1
 
         for app_id, records in groups.items():
             write_silver_parquet(self.minio, app_id, target_date, records)
             logger.info(f"  Wrote {len(records)} rows → Silver (app_id={app_id})")
 
-        self._update_db_status(bronze_rows)
+        self._update_db_status(processed_review_ids)
 
         elapsed = round(time.time() - start, 2)
         logger.info(
@@ -242,12 +244,11 @@ class ReviewCleaningPipeline:
         )
         return {'processed': processed, 'skipped': skipped, 'elapsed_sec': elapsed}
 
-    def _update_db_status(self, bronze_rows: List[Dict]) -> None:
+    def _update_db_status(self, review_ids: List[str]) -> None:
         """ReviewMasterIndex의 처리 상태를 RAW → CLEANED로 업데이트한다."""
         from src.models.review_master_index import ReviewMasterIndex
         from src.models.enums import ProcessingStatusType
 
-        review_ids = [row['review_id'] for row in bronze_rows if row.get('review_id')]
         if not review_ids:
             return
 

@@ -313,3 +313,46 @@ def test_pipeline_returns_stats(pipeline):
     assert result['processed'] == 2
     assert result['skipped'] == 0
     assert 'elapsed_sec' in result
+
+
+def test_cleaner_email_pii_before_special_char_removal(tmp_synonyms, tmp_profanity):
+    """이메일 PII 마스킹이 특수문자 제거 전에 적용되어야 한다."""
+    cleaner = ReviewCleaner(synonyms_path=tmp_synonyms, profanity_path=tmp_profanity)
+    result = cleaner.clean('문의: user@example.com 으로 연락주세요')
+    assert '[EMAIL]' in result
+    assert 'user@example.com' not in result
+    assert '@' not in result  # @ 제거됨 (마스킹 후 special char 제거)
+
+
+def test_pipeline_skipped_rows_not_updated_to_cleaned(tmp_path):
+    """빈 텍스트 행은 DB CLEANED 업데이트에서 제외된다."""
+    synonyms = {}
+    profanity = []
+    (tmp_path / "synonyms.json").write_text(json.dumps(synonyms))
+    (tmp_path / "profanity.json").write_text(json.dumps(profanity))
+
+    # 2개 중 1개가 빈 텍스트
+    bronze = pa.table({
+        'review_id': ['r1', 'r2'],
+        'app_id': ['app1', 'app1'],
+        'platform_review_id': ['p1', 'p2'],
+        'review_text': ['좋은 앱', ''],  # r2 는 빈 텍스트
+    })
+    mock_minio = _make_bronze_minio(bronze)
+    mock_db = MagicMock()
+    mock_session = MagicMock()
+    mock_db.get_session.return_value = mock_session
+
+    p = ReviewCleaningPipeline(
+        minio_client=mock_minio,
+        db_connector=mock_db,
+        synonyms_path=str(tmp_path / "synonyms.json"),
+        profanity_path=str(tmp_path / "profanity.json"),
+    )
+    result = p.run(target_date=date(2026, 3, 4))
+
+    assert result['processed'] == 1
+    assert result['skipped'] == 1
+
+    # DB 세션이 커밋됐다는 것은 r1만 처리됐다는 것
+    mock_session.commit.assert_called_once()
