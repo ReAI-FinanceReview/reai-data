@@ -192,3 +192,124 @@ def test_cleaner_profanity_dict_format(tmp_synonyms, tmp_profanity_dict):
     result = cleaner.clean('욕설A 이 앱은 별로')
     assert '[SLANG]' in result
     assert '욕설A' not in result
+
+
+# ========================================
+# Bronze 로더 / Silver 라이터 / Pipeline
+# ========================================
+
+import pyarrow as pa
+from datetime import date
+from unittest.mock import MagicMock
+from src.processing.cleanse import (
+    load_bronze_parquet,
+    write_silver_parquet,
+    ReviewCleaningPipeline,
+)
+
+
+def _make_bronze_minio(table: pa.Table):
+    mock = MagicMock()
+    mock.list_objects.return_value = [
+        'bronze/app_reviews/year=2026/month=03/data.parquet'
+    ]
+    mock.get_parquet.return_value = table
+    return mock
+
+
+# --- load_bronze_parquet ---
+
+def test_load_bronze_returns_rows():
+    sample = pa.table({
+        'review_id': ['r1', 'r2'],
+        'app_id': ['app1', 'app1'],
+        'platform_review_id': ['p1', 'p2'],
+        'review_text': ['좋아요', '별로'],
+    })
+    mock_minio = _make_bronze_minio(sample)
+    rows = load_bronze_parquet(mock_minio, target_date=date(2026, 3, 4))
+    assert len(rows) == 2
+    assert rows[0]['review_id'] == 'r1'
+
+
+def test_load_bronze_calls_correct_prefix():
+    mock_minio = MagicMock()
+    mock_minio.list_objects.return_value = []
+    load_bronze_parquet(mock_minio, target_date=date(2026, 3, 4))
+    prefix = mock_minio.list_objects.call_args[0][0]
+    assert 'year=2026' in prefix
+    assert 'month=03' in prefix
+
+
+# --- write_silver_parquet ---
+
+def test_write_silver_correct_key():
+    mock_minio = MagicMock()
+    records = [{'review_id': 'r1', 'platform_review_id': 'p1', 'refined_text': 'clean'}]
+    write_silver_parquet(mock_minio, 'app_001', date(2026, 3, 4), records)
+    key = mock_minio.put_parquet.call_args[0][0]
+    assert key == 'silver/reviews/app_id=app_001/dt=2026-03-04/refined.parquet'
+
+
+def test_write_silver_table_columns():
+    mock_minio = MagicMock()
+    records = [{'review_id': 'r1', 'platform_review_id': 'p1', 'refined_text': 'clean'}]
+    write_silver_parquet(mock_minio, 'app_001', date(2026, 3, 4), records)
+    table = mock_minio.put_parquet.call_args[0][1]
+    assert 'review_id' in table.column_names
+    assert 'platform_review_id' in table.column_names
+    assert 'refined_text' in table.column_names
+
+
+# --- ReviewCleaningPipeline ---
+
+@pytest.fixture
+def pipeline(tmp_path):
+    synonyms = {"게좌이체": "계좌이체"}
+    profanity = ["욕설1"]
+    (tmp_path / "synonyms.json").write_text(json.dumps(synonyms, ensure_ascii=False))
+    (tmp_path / "profanity.json").write_text(json.dumps(profanity, ensure_ascii=False))
+
+    bronze = pa.table({
+        'review_id': ['r1', 'r2'],
+        'app_id': ['app_001', 'app_001'],
+        'platform_review_id': ['p1', 'p2'],
+        'review_text': ['게좌이체 안 돼요 😊ㅋㅋㅋ', '욕설1 진짜 별로'],
+    })
+    mock_minio = _make_bronze_minio(bronze)
+    mock_db = MagicMock()
+    mock_db.get_session.return_value = MagicMock()
+
+    return ReviewCleaningPipeline(
+        minio_client=mock_minio,
+        db_connector=mock_db,
+        synonyms_path=str(tmp_path / "synonyms.json"),
+        profanity_path=str(tmp_path / "profanity.json"),
+    ), mock_minio
+
+
+def test_pipeline_writes_silver(pipeline):
+    p, mock_minio = pipeline
+    p.run(target_date=date(2026, 3, 4))
+    mock_minio.put_parquet.assert_called_once()
+    key = mock_minio.put_parquet.call_args[0][0]
+    assert 'app_id=app_001' in key
+    assert 'dt=2026-03-04' in key
+
+
+def test_pipeline_applies_cleansing(pipeline):
+    p, mock_minio = pipeline
+    p.run(target_date=date(2026, 3, 4))
+    table = mock_minio.put_parquet.call_args[0][1]
+    texts = table.column('refined_text').to_pylist()
+    assert any('계좌이체' in t for t in texts)
+    assert not any('😊' in t for t in texts)
+    assert any('[SLANG]' in t for t in texts)
+
+
+def test_pipeline_returns_stats(pipeline):
+    p, _ = pipeline
+    result = p.run(target_date=date(2026, 3, 4))
+    assert result['processed'] == 2
+    assert result['skipped'] == 0
+    assert 'elapsed_sec' in result
