@@ -143,6 +143,7 @@ def load_bronze_parquet(
         f"bronze/app_reviews/"
         f"year={target_date.year}/"
         f"month={target_date.month:02d}/"
+        f"day={target_date.day:02d}/"
     )
     keys = minio.list_objects(prefix)
     rows: List[Dict[str, Any]] = []
