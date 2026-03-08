@@ -265,7 +265,8 @@ class ReviewCleaningPipeline:
             session.commit()
             logger.info(f"  Updated {len(review_ids)} records to CLEANED")
         except Exception as e:
-            logger.error(f"  DB status update failed: {e}")
             session.rollback()
+            logger.error(f"  DB status update failed: {e}")
+            raise
         finally:
             session.close()
