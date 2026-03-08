@@ -216,7 +216,7 @@ class ReviewCleaningPipeline:
         processed = 0
         skipped = 0
         groups: Dict[str, List[Dict]] = defaultdict(list)
-        processed_review_ids: List[str] = []
+        review_ids_by_app: Dict[str, List[str]] = defaultdict(list)
 
         for row in bronze_rows:
             text = row.get('review_text') or ''
@@ -224,19 +224,19 @@ class ReviewCleaningPipeline:
                 skipped += 1
                 continue
             cleaned = self.cleaner.clean(text)
-            groups[row['app_id']].append({
+            app_id = row['app_id']
+            groups[app_id].append({
                 'review_id': row['review_id'],
                 'platform_review_id': row['platform_review_id'],
                 'refined_text': cleaned,
             })
-            processed_review_ids.append(row['review_id'])
+            review_ids_by_app[app_id].append(row['review_id'])
             processed += 1
 
         for app_id, records in groups.items():
             write_silver_parquet(self.minio, app_id, target_date, records)
             logger.info(f"  Wrote {len(records)} rows → Silver (app_id={app_id})")
-
-        self._update_db_status(processed_review_ids)
+            self._update_db_status(review_ids_by_app[app_id])
 
         elapsed = round(time.time() - start, 2)
         logger.info(
