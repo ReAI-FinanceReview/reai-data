@@ -41,10 +41,15 @@ class MinIOClient:
         )
 
     def list_objects(self, prefix: str) -> List[str]:
-        """주어진 prefix의 모든 객체 키를 반환한다."""
-        response = self._client.list_objects_v2(Bucket=self.bucket, Prefix=prefix)
-        contents = response.get('Contents', [])
-        keys = [obj['Key'] for obj in contents]
+        """주어진 prefix의 모든 객체 키를 반환한다 (1000개 초과 페이지네이션 지원)."""
+        keys: List[str] = []
+        kwargs = {'Bucket': self.bucket, 'Prefix': prefix}
+        while True:
+            response = self._client.list_objects_v2(**kwargs)
+            keys.extend(obj['Key'] for obj in response.get('Contents', []))
+            if not response.get('IsTruncated'):
+                break
+            kwargs['ContinuationToken'] = response['NextContinuationToken']
         logger.info(f"Listed {len(keys)} objects under '{prefix}'")
         return keys
 

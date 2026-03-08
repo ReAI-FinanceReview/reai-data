@@ -14,7 +14,7 @@ def mock_s3():
         yield mock_client
 
 
-def make_client(mock_s3=None):
+def make_client():
     return MinIOClient(
         endpoint='http://localhost:9000',
         access_key='test',
@@ -28,19 +28,39 @@ def test_list_objects_returns_keys(mock_s3):
         'Contents': [
             {'Key': 'bronze/year=2026/month=03/data1.parquet'},
             {'Key': 'bronze/year=2026/month=03/data2.parquet'},
-        ]
+        ],
+        'IsTruncated': False,
     }
-    client = make_client(mock_s3)
+    client = make_client()
     keys = client.list_objects('bronze/year=2026/month=03/')
     assert len(keys) == 2
     assert all('bronze' in k for k in keys)
 
 
 def test_list_objects_empty(mock_s3):
-    mock_s3.list_objects_v2.return_value = {}
-    client = make_client(mock_s3)
+    mock_s3.list_objects_v2.return_value = {'IsTruncated': False}
+    client = make_client()
     keys = client.list_objects('bronze/year=2099/')
     assert keys == []
+
+
+def test_list_objects_pagination(mock_s3):
+    """list_objects follows ContinuationToken across multiple pages."""
+    mock_s3.list_objects_v2.side_effect = [
+        {
+            'Contents': [{'Key': 'bronze/page1.parquet'}],
+            'IsTruncated': True,
+            'NextContinuationToken': 'token123',
+        },
+        {
+            'Contents': [{'Key': 'bronze/page2.parquet'}],
+            'IsTruncated': False,
+        },
+    ]
+    client = make_client()
+    keys = client.list_objects('bronze/')
+    assert keys == ['bronze/page1.parquet', 'bronze/page2.parquet']
+    assert mock_s3.list_objects_v2.call_count == 2
 
 
 def test_get_parquet_returns_table(mock_s3):
@@ -50,7 +70,7 @@ def test_get_parquet_returns_table(mock_s3):
     buf.seek(0)
     mock_s3.get_object.return_value = {'Body': buf}
 
-    client = make_client(mock_s3)
+    client = make_client()
     table = client.get_parquet('bronze/data.parquet')
 
     assert isinstance(table, pa.Table)
@@ -60,7 +80,7 @@ def test_get_parquet_returns_table(mock_s3):
 
 def test_put_parquet_uploads(mock_s3):
     sample = pa.table({'review_id': ['r1'], 'refined_text': ['clean']})
-    client = make_client(mock_s3)
+    client = make_client()
     client.put_parquet('silver/reviews/app_id=app1/dt=2026-03-04/refined.parquet', sample)
 
     mock_s3.put_object.assert_called_once()
