@@ -23,9 +23,7 @@
 -- EXTENSIONS
 -- ========================================
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "vector";
-CREATE EXTENSION IF NOT EXISTS "ltree";
 
 -- ========================================
 -- ENUM TYPES
@@ -159,7 +157,7 @@ COMMENT ON COLUMN review_master_index.is_reply IS '개발자 답글 여부 (T / 
 
 CREATE TABLE ingestion_batch
 (
-  batch_id        UUID                        NOT NULL DEFAULT uuid_generate_v4(),
+  batch_id        UUID                        NOT NULL DEFAULT gen_random_uuid(),
   source_type     platform_type               NOT NULL,
   platform_app_id TEXT                        NOT NULL,
   app_name        TEXT,
@@ -359,12 +357,12 @@ COMMENT ON COLUMN reviews_assigned.created_at IS '생성일';
 COMMENT ON COLUMN reviews_assigned.updated_at IS '수정일';
 
 -- ----------------------------------------
--- Organizations (Hierarchy - ltree)
+-- Organizations (Hierarchy - TEXT)
 -- ----------------------------------------
 
 CREATE TABLE organizations
 (
-  org_id              ltree       NOT NULL,
+  org_id              TEXT        NOT NULL,
   org_name            VARCHAR,
   role_responsibility TEXT,
   keywords            TEXT[],
@@ -374,7 +372,7 @@ CREATE TABLE organizations
   PRIMARY KEY (org_id)
 );
 
-COMMENT ON TABLE organizations IS '금융사 조직도 (ltree 계층 구조)';
+COMMENT ON TABLE organizations IS '금융사 조직도 (TEXT 계층 구조)';
 COMMENT ON COLUMN organizations.org_id IS '조직 계층 ID (1, 1.1, 1.1.1)';
 COMMENT ON COLUMN organizations.org_name IS '조직명 (디지털채널본부, 모바일뱅킹부)';
 COMMENT ON COLUMN organizations.role_responsibility IS '역할 및 책임 설명';
@@ -752,10 +750,9 @@ COMMENT ON INDEX idx_srv_daily_review_list_date IS 'Optimizes date-based partiti
 COMMENT ON INDEX idx_srv_daily_review_list_is_action_required IS 'Partial index for action-required reviews (filtered queries)';
 
 -- ----------------------------------------
--- ltree Indexes (Organizations Hierarchy)
+-- TEXT Indexes (Organizations Hierarchy)
 -- ----------------------------------------
 
-CREATE INDEX idx_organizations_org_id_gist ON organizations USING GIST(org_id);
 CREATE INDEX idx_organizations_org_id_btree ON organizations USING BTREE(org_id);
 
 -- ----------------------------------------
@@ -817,7 +814,7 @@ CREATE INDEX idx_review_embeddings_vector ON review_embeddings
 --    - Ingestion DLQ: 1 (ingestion_batch - NEW in v4)
 --
 -- ✅ Total ENUMs: 6 (added ingestion_batch_status_type)
--- ✅ Extensions: uuid-ossp, vector (pgvector), ltree
+-- ✅ Extensions: vector (pgvector)
 --
 -- Key Changes vs v3:
 -- - ingestion_batch: Batch-level DLQ for Parquet → DB load failures
