@@ -127,8 +127,7 @@ class ParquetWriter:
         # Generate filename with timestamp (including microseconds for uniqueness)
         now = datetime.now(timezone.utc)
         timestamp = now.strftime('%Y%m%d_%H%M%S_%f')
-        microseconds = f"{now.microsecond:06d}"
-        filename = f"data_{timestamp}_{microseconds}.parquet"
+        filename = f"data_{timestamp}.parquet"
         file_path = output_path / filename
 
         # Write to Parquet
