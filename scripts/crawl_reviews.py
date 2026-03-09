@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run crawl step only."""
 import sys
+import os
+from dotenv import load_dotenv
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
