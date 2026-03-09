@@ -74,8 +74,8 @@ from flashtext import KeywordProcessor
 class ReviewCleaner:
     """텍스트 정제 파이프라인 클래스.
 
-    정제 순서: NFKC → 이모지 제거 → 반복문자 축약 → 특수문자 제거
-               → 오타 교정 → PII 마스킹 → 비속어 마스킹
+    정제 순서: NFKC → 이모지 제거 → 반복문자 축약 → PII 마스킹
+            특수문자 제거 → 오타 교정 → 비속어 마스킹
     """
 
     def __init__(self, synonyms_path: str, profanity_path: str):
@@ -266,7 +266,7 @@ class ReviewCleaningPipeline:
             logger.info(f"  Updated {len(review_ids)} records to CLEANED")
         except Exception as e:
             session.rollback()
-            logger.error(f"  DB status update failed: {e}")
+            logger.exception("DB status update failed")
             raise
         finally:
             session.close()
