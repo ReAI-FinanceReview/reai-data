@@ -3,6 +3,7 @@
 """
 import os
 import yaml
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine.base import Engine
@@ -18,7 +19,7 @@ def _env_db_url() -> str:
       2) DB_HOST/DB_PORT/DB_USER/DB_PASSWORD(or DB_PASS)/DB_NAME, DB_TYPE (기본 postgresql)
     """
     load_dotenv()  # .env 파일에서 환경변수 로드
-    
+
     # 1) 전체 URI 우선
     db_url = os.getenv("DATABASE_URL")
     if db_url:
