@@ -190,7 +190,7 @@ def tmp_profanity_dict(tmp_path):
 def test_cleaner_profanity_dict_format(tmp_synonyms, tmp_profanity_dict):
     cleaner = ReviewCleaner(synonyms_path=tmp_synonyms, profanity_path=tmp_profanity_dict)
     result = cleaner.clean('욕설A 이 앱은 별로')
-    assert '[SLANG]' in result
+    assert '[MASK]' in result
     assert '욕설A' not in result
 
 
