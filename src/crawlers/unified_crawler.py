@@ -2,31 +2,24 @@
 통합 크롤러 클래스
 """
 from datetime import datetime
-from typing import List, Dict, Any
 
-from .base_crawler import BaseCrawler
+from ..utils.logger import get_logger
 from .appstore_crawler import AppStoreCrawler
 from .playstore_crawler import PlayStoreCrawler
 
 
-class UnifiedCrawler(BaseCrawler):
-    """App Store와 Play Store를 통합으로 크롤링하는 클래스"""
+class UnifiedCrawler:
+    """App Store와 Play Store를 순차적으로 실행하는 오케스트레이터.
+
+    크롤러가 아니므로 BaseCrawler를 상속하지 않습니다.
+    Parquet 포맷 일관성은 각 플랫폼 크롤러가 BaseCrawler를 통해 보장합니다.
+    """
 
     def __init__(self, config_path: str = None):
-        super().__init__(config_path)
-
-        # 개별 크롤러 인스턴스 생성
+        self.logger = get_logger(__name__)
         self.appstore_crawler = AppStoreCrawler(config_path)
         self.playstore_crawler = PlayStoreCrawler(config_path)
-
         self.logger.info("통합 크롤러 초기화 완료")
-
-    def crawl_reviews(self, app_id: str) -> List[Dict[str, Any]]:
-        """
-        리뷰 크롤링 (통합 크롤러에서는 사용하지 않음)
-        UnifiedCrawler는 개별 크롤러들을 오케스트레이션만 함
-        """
-        raise NotImplementedError("UnifiedCrawler는 crawl_reviews를 직접 호출하지 않습니다. run()을 사용하세요.")
 
     def run(self) -> None:
         """통합 크롤러 실행"""
