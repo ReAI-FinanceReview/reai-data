@@ -95,10 +95,14 @@ class ReviewCleaner:
         processor = KeywordProcessor()
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        # list 또는 dict 형식 모두 지원
-        words = data.keys() if isinstance(data, dict) else data
-        for word in words:
-            processor.add_keyword(word, '[SLANG]')
+        # dict 형식: {"비속어": "[CATEGORY]", ...} — 카테고리 값을 그대로 사용
+        # list 형식: ["비속어", ...] — 하위 호환으로 [SLANG] 사용
+        if isinstance(data, dict):
+            for word, category in data.items():
+                processor.add_keyword(word, category)
+        else:
+            for word in data:
+                processor.add_keyword(word, '[SLANG]')
         return processor
 
     def clean(self, text: str) -> str:

@@ -4,9 +4,9 @@
   "settings": {
     "width": 3000,
     "height": 3000,
-    "scrollTop": -566,
+    "scrollTop": -70.2156,
     "scrollLeft": 0,
-    "zoomLevel": 1,
+    "zoomLevel": 0.91,
     "show": 511,
     "database": 16,
     "databaseName": "FinancialReviewAnalysis",
@@ -626,15 +626,15 @@
           "QEL-R3KS45oByefkZLL1E"
         ],
         "ui": {
-          "x": 657.5687,
-          "y": 374.2267,
+          "x": 697.5687,
+          "y": 363.2267,
           "zIndex": 1161,
           "widthName": 71,
           "widthComment": 102,
           "color": "#E91E63"
         },
         "meta": {
-          "updateAt": 1770196192930,
+          "updateAt": 1772676884357,
           "createAt": 1770184016413
         }
       },
@@ -1138,7 +1138,7 @@
         "tableId": "t_reviews_preprocessed",
         "name": "review_id",
         "comment": "Global ID",
-        "dataType": "UUID v7",
+        "dataType": "UUID",
         "default": "",
         "options": 8,
         "ui": {
@@ -1149,7 +1149,7 @@
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1770171587382,
+          "updateAt": 1773052028557,
           "createAt": 1755931738877
         }
       },
@@ -2558,7 +2558,7 @@
         "tableId": "t_app_reviews",
         "name": "review_id",
         "comment": "Global ID",
-        "dataType": "UUID v7",
+        "dataType": "UUID",
         "default": "",
         "options": 8,
         "ui": {
@@ -2569,7 +2569,7 @@
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1770171585987,
+          "updateAt": 1773052024803,
           "createAt": 1758625391593
         }
       },
@@ -2938,7 +2938,7 @@
         "tableId": "bm5meyQEBUppktp8WBt3V",
         "name": "review_id",
         "comment": "Global ID",
-        "dataType": "UUID v7",
+        "dataType": "UUID",
         "default": "",
         "options": 10,
         "ui": {
@@ -2949,7 +2949,7 @@
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1770117658566,
+          "updateAt": 1773052036670,
           "createAt": 1770109042641
         }
       },
@@ -3138,7 +3138,7 @@
         "tableId": "bKL8fyFK1BnncE25sAnMB",
         "name": "review_id",
         "comment": "",
-        "dataType": "UUID v7",
+        "dataType": "UUID",
         "default": "",
         "options": 8,
         "ui": {
@@ -3149,7 +3149,7 @@
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1770117059269,
+          "updateAt": 1773052036670,
           "createAt": 1770117059269
         }
       },
@@ -3298,7 +3298,7 @@
         "tableId": "t_review_embeddings",
         "name": "review_id",
         "comment": "Global ID",
-        "dataType": "UUID v7",
+        "dataType": "UUID",
         "default": "",
         "options": 10,
         "ui": {
@@ -3309,7 +3309,7 @@
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1770120450789,
+          "updateAt": 1773052036670,
           "createAt": 1770117745937
         }
       },
@@ -3338,7 +3338,7 @@
         "tableId": "t_reviews_assigned",
         "name": "review_id",
         "comment": "Global ID",
-        "dataType": "UUID v7",
+        "dataType": "UUID",
         "default": "",
         "options": 8,
         "ui": {
@@ -3349,7 +3349,7 @@
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1770117939692,
+          "updateAt": 1773052036670,
           "createAt": 1770117939692
         }
       },
@@ -3358,7 +3358,7 @@
         "tableId": "aeEf9pCA4q9wo6pDgR-X_",
         "name": "review_id",
         "comment": "Global ID",
-        "dataType": "UUID v7",
+        "dataType": "UUID",
         "default": "",
         "options": 10,
         "ui": {
@@ -3369,7 +3369,7 @@
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1770120005943,
+          "updateAt": 1773052036670,
           "createAt": 1770119696228
         }
       },
@@ -4418,7 +4418,7 @@
         "tableId": "RneK-8nYt8s_iJIjlOaAl",
         "name": "review_id",
         "comment": "",
-        "dataType": "UUID v7",
+        "dataType": "UUID",
         "default": "",
         "options": 0,
         "ui": {
@@ -4429,7 +4429,7 @@
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1771212377890,
+          "updateAt": 1773052043591,
           "createAt": 1770507651470
         }
       },
@@ -5073,8 +5073,8 @@
           "columnIds": [
             "hNmrlrWlARkUDE_1umwwK"
           ],
-          "x": 1145.5687,
-          "y": 426.2267,
+          "x": 1185.5687,
+          "y": 415.2267,
           "direction": 2
         },
         "end": {

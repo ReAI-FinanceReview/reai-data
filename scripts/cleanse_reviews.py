@@ -27,8 +27,8 @@ from src.processing.cleanse import ReviewCleaningPipeline
 logger = get_logger(__name__)
 
 _CONFIG_DIR = _PROJECT_ROOT / 'config' / 'dictionaries'
-SYNONYMS_PATH = str(_CONFIG_DIR / 'domain_synonyms.json')
-PROFANITY_PATH = str(_CONFIG_DIR / 'profanity_map.json')
+SYNONYMS_PATH = str(_CONFIG_DIR / 'synonyms.json')
+PROFANITY_PATH = str(_CONFIG_DIR / 'profanity.json')
 
 
 def main():
