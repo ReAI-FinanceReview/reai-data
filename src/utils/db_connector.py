@@ -17,6 +17,8 @@ def _env_db_url() -> str:
       1) DATABASE_URL (표준 URI)
       2) DB_HOST/DB_PORT/DB_USER/DB_PASSWORD(or DB_PASS)/DB_NAME, DB_TYPE (기본 postgresql)
     """
+    load_dotenv()  # .env 파일에서 환경변수 로드
+    
     # 1) 전체 URI 우선
     db_url = os.getenv("DATABASE_URL")
     if db_url:
