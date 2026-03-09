@@ -137,7 +137,7 @@ def load_bronze_parquet(
 ) -> List[Dict[str, Any]]:
     """지정 날짜의 Bronze Parquet을 모두 읽어 dict 리스트로 반환한다.
 
-    Bronze 경로: bronze/app_reviews/year={YYYY}/month={MM}/
+    Bronze 경로: bronze/app_reviews/year={YYYY}/month={MM}/day={DD}/
     """
     prefix = (
         f"bronze/app_reviews/"

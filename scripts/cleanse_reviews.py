@@ -45,12 +45,15 @@ def main():
         synonyms_path=SYNONYMS_PATH,
         profanity_path=PROFANITY_PATH,
     )
-    result = pipeline.run(target_date=target_date)
-    logger.info(
-        f"Pipeline complete: processed={result['processed']}, "
-        f"skipped={result['skipped']}, elapsed={result['elapsed_sec']}s"
-    )
-    sys.exit(0)
+    try:
+        result = pipeline.run(target_date=target_date)
+        logger.info(
+            f"Pipeline complete: processed={result['processed']}, "
+            f"skipped={result['skipped']}, elapsed={result['elapsed_sec']}s"
+        )
+    except Exception:
+        logger.exception("Cleanse pipeline failed")
+        sys.exit(1)
 
 
 if __name__ == '__main__':

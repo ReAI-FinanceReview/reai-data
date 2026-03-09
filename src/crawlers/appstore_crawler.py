@@ -51,7 +51,7 @@ class AppStoreCrawler(BaseCrawler):
 
             self.parquet_writer = ParquetWriter(
                 base_path=str(bronze_path),
-                partition_by='year_month'
+                partition_by='year_month_day'
             )
             self.logger.info(f"Parquet writer initialized: {bronze_path}")
         else:
