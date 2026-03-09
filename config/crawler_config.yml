@@ -30,12 +30,3 @@ app_ids:
   appstore: "config/app_ids/appstore_app_ids.txt"
   playstore: "config/app_ids/playstore_app_ids.txt"
   excluded: "config/app_ids/excluded_apps.txt"
-
-# 데이터베이스 설정
-database:
-  type: "<DB_TYPE>"
-  username: "<DB_USER>"
-  password: "<DB_PASSWORD>"
-  host: "<DB_HOST>"
-  port: "<DB_PORT>"
-  dbname: "<DB_NAME>"
