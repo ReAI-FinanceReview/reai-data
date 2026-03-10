@@ -41,6 +41,10 @@ class BaseCrawler(ABC):
         self.max_retries = self.config.get('global', {}).get('max_retries', 3)
         self.timeout = self.config.get('global', {}).get('timeout', 30)
 
+        # Parquet 쓰기 활성화 여부 (하위 클래스에서 override 가능)
+        import os
+        self.enable_parquet = os.getenv('ENABLE_PARQUET_WRITE', 'true').lower() == 'true'
+
         # MinIO 클라이언트: 첫 사용 시 초기화 (lazy)
         self._minio = None
     
@@ -250,6 +254,9 @@ class BaseCrawler(ABC):
         Returns:
             List[AppReviewSchema]: 새 리뷰 레코드 목록. 중복이면 빈 리스트.
         """
+        if not self.enable_parquet:
+            return []
+
         session = self.db_connector.get_session()
         try:
             platform_type = self._get_platform_type()
@@ -368,6 +375,14 @@ class BaseCrawler(ABC):
             return batch.batch_id, len(all_records), s3_key
         except Exception:
             session.rollback()
+            # Best-effort cleanup: remove orphaned Parquet file from MinIO
+            try:
+                self._minio.delete_object(s3_key)
+                self.logger.warning(f"Rolled back orphaned MinIO file: {s3_key}")
+            except Exception as cleanup_err:
+                self.logger.error(
+                    f"Failed to clean up orphaned MinIO file {s3_key}: {cleanup_err}"
+                )
             raise
         finally:
             session.close()

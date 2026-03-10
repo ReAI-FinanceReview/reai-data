@@ -6,7 +6,6 @@ Load 단계(BatchLoader)에서 Parquet → ReviewMasterIndex 적재
 
 import requests
 import json
-import os
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional
 from uuid import UUID
@@ -40,7 +39,6 @@ class AppStoreCrawler(BaseCrawler):
         # 데이터베이스 커넥터 초기화
         self.db_connector = DatabaseConnector(config_path or 'config/crawler_config.yml')
 
-        self.enable_parquet = os.getenv('ENABLE_PARQUET_WRITE', 'true').lower() == 'true'
 
     def crawl_reviews(self, app_id: str) -> List[Dict[str, Any]]:
         """리뷰 크롤링 (추상 메서드 구현)"""

@@ -4,7 +4,6 @@ Crawl 단계: API → Parquet 쓰기 + ingestion_batch PENDING 등록
 Load 단계(BatchLoader)에서 Parquet → ReviewMasterIndex 적재
 """
 
-import os
 from google_play_scraper import reviews, Sort, app as gp_app
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional
@@ -39,7 +38,6 @@ class PlayStoreCrawler(BaseCrawler):
         # 데이터베이스 커넥터 초기화
         self.db_connector = DatabaseConnector(config_path or 'config/crawler_config.yml')
 
-        self.enable_parquet = os.getenv('ENABLE_PARQUET_WRITE', 'true').lower() == 'true'
 
     def crawl_reviews(self, app_id: str) -> List[Dict[str, Any]]:
         """리뷰 크롤링 (추상 메서드 구현)"""
