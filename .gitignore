@@ -220,6 +220,10 @@ $RECYCLE.BIN/
 *.sql
 !schema_v3.sql
 !schema_v4.sql
+!organizations_data.sql
+!app_service_data.sql
+!apps_data.sql
+!app_metadata_data.sql
 
 # Logs and data
 logs/
