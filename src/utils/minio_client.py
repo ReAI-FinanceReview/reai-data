@@ -66,6 +66,11 @@ class MinIOClient:
         logger.info(f"Read {table.num_rows} rows from '{key}'")
         return table
 
+    def delete_object(self, key: str) -> None:
+        """S3에서 객체를 삭제한다."""
+        self._client.delete_object(Bucket=self.bucket, Key=key)
+        logger.info(f"Deleted object '{key}'")
+
     def put_parquet(self, key: str, table: pa.Table) -> None:
         """PyArrow Table을 Snappy 압축 Parquet으로 S3에 업로드한다 (overwrite)."""
         buf = io.BytesIO()
