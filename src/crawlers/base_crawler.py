@@ -35,11 +35,14 @@ class BaseCrawler(ABC):
 
         self.file_manager = FileManager(base_path=output_base, enabled=output_enabled)
         self.data_processor = DataProcessor()
-        
+
         # 공통 설정
         self.delay = self.config.get('global', {}).get('delay_between_requests', 2)
         self.max_retries = self.config.get('global', {}).get('max_retries', 3)
         self.timeout = self.config.get('global', {}).get('timeout', 30)
+
+        # MinIO 클라이언트: 첫 사용 시 초기화 (lazy)
+        self._minio = None
     
     def _load_config(self, config_path: str = None) -> Dict[str, Any]:
         """설정 파일 로드"""
@@ -236,7 +239,7 @@ class BaseCrawler(ABC):
         reviews_data: List[Dict[str, Any]],
         build_parquet_records_func: Callable
     ) -> List:
-        """앱 하나의 리뷰를 dedup 처리 후 Parquet 레코드 목록으로 반환. I/O 없음.
+        """앱 하나의 리뷰를 dedup 처리 후 Parquet 레코드 목록으로 반환. Parquet/MinIO I/O 없음 (DB 읽기/쓰기만 수행).
 
         Args:
             app_id: Platform-specific app ID
@@ -312,13 +315,14 @@ class BaseCrawler(ABC):
             self.logger.warning("Parquet write disabled (ENABLE_PARQUET_WRITE=false) — skipping batch")
             return None, 0, None
 
+        # 파티션 경로와 파일명에 동일한 타임스탬프 사용 (자정 경계 불일치 방지)
+        now = datetime.now(timezone.utc)
         if partition_date is None:
-            partition_date = datetime.now(timezone.utc)
+            partition_date = now
 
         year = partition_date.year
         month = f"{partition_date.month:02d}"
         day = f"{partition_date.day:02d}"
-        now = datetime.now(timezone.utc)
         timestamp = now.strftime('%Y%m%d_%H%M%S')
         microseconds = f"{now.microsecond:06d}"
         platform_name = platform_type.value.lower()
@@ -331,8 +335,9 @@ class BaseCrawler(ABC):
         table = pa.Table.from_pylist(data_dicts)
 
         try:
-            minio = MinIOClient()
-            minio.put_parquet(s3_key, table)
+            if self._minio is None:
+                self._minio = MinIOClient()
+            self._minio.put_parquet(s3_key, table)
             self.logger.info(f"MinIO upload OK: {len(all_records)} reviews → {s3_key}")
         except Exception as e:
             self.logger.error(f"MinIO upload FAILED: {e}")
