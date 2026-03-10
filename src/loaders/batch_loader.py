@@ -23,7 +23,7 @@ class BatchLoader:
     def __init__(self, config_path: str = None):
         self.db_connector = DatabaseConnector(config_path or 'config/crawler_config.yml')
         self.logger = get_logger('batch_loader')
-        self.minio = MinIOClient()
+        self._minio = None  # lazy initialization to avoid eager env var requirement
 
     def load_pending_batches(self, limit: int = 100) -> int:
         """PENDING/FAILED 상태 배치를 순차 적재.
@@ -81,7 +81,9 @@ class BatchLoader:
         )
 
         # 1. MinIO에서 Parquet 읽기
-        table = self.minio.get_parquet(batch.storage_path)
+        if self._minio is None:
+            self._minio = MinIOClient()
+        table = self._minio.get_parquet(batch.storage_path)
         data_dicts = table.to_pylist()
         records = [AppReviewSchema(**d) for d in data_dicts]
         if not records:
