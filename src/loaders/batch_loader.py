@@ -5,18 +5,14 @@ Parquet 파일을 읽고 ReviewMasterIndex에 적재합니다.
 """
 
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Set
 from uuid import UUID
 
-from uuid6 import uuid7
-
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
-from src.utils.parquet_writer import read_parquet_to_schemas
+from src.utils.minio_client import MinIOClient
 from src.models.ingestion_batch import IngestionBatch
 from src.models.review_master_index import ReviewMasterIndex
-from src.models.apps import App
 from src.models.enums import IngestionBatchStatusType, PlatformType, ProcessingStatusType
 from src.schemas.parquet.app_review import AppReviewSchema
 
@@ -27,6 +23,7 @@ class BatchLoader:
     def __init__(self, config_path: str = None):
         self.db_connector = DatabaseConnector(config_path or 'config/crawler_config.yml')
         self.logger = get_logger('batch_loader')
+        self.minio = MinIOClient()
 
     def load_pending_batches(self, limit: int = 100) -> int:
         """PENDING/FAILED 상태 배치를 순차 적재.
@@ -83,13 +80,10 @@ class BatchLoader:
             f"(retry={batch.retry_count})"
         )
 
-        # 1. Parquet 파일 존재 확인
-        parquet_path = Path(batch.storage_path)
-        if not parquet_path.exists():
-            raise FileNotFoundError(f"Parquet file not found: {parquet_path}")
-
-        # 2. Parquet 읽기
-        records = read_parquet_to_schemas(parquet_path, AppReviewSchema)
+        # 1. MinIO에서 Parquet 읽기
+        table = self.minio.get_parquet(batch.storage_path)
+        data_dicts = table.to_pylist()
+        records = [AppReviewSchema(**d) for d in data_dicts]
         if not records:
             self.logger.warning(f"Batch {batch.batch_id}: empty Parquet file")
             batch.status = IngestionBatchStatusType.LOADED
@@ -98,12 +92,13 @@ class BatchLoader:
             session.commit()
             return 0
 
-        # 3. App 레코드 확인/생성
+        # 2. 중복 제거: 배치 내 모든 app_id별로 기존 platform_review_id 수집
         platform_type = PlatformType(batch.source_type.value)
-        app = self._get_or_create_app(session, batch.platform_app_id, batch.app_name, platform_type)
+        app_uuids_in_batch = {UUID(r.app_id) for r in records}
+        existing_ids: Set[str] = set()
+        for app_uuid in app_uuids_in_batch:
+            existing_ids.update(self._get_existing_platform_ids(session, app_uuid, platform_type))
 
-        # 4. 중복 제거
-        existing_ids = self._get_existing_platform_ids(session, app.app_id, platform_type)
         new_records = [r for r in records if r.platform_review_id not in existing_ids]
 
         if not new_records:
@@ -114,13 +109,13 @@ class BatchLoader:
             session.commit()
             return 0
 
-        # 5. ReviewMasterIndex 레코드 생성
+        # 3. ReviewMasterIndex 레코드 생성 (app_id는 레코드에서 직접 사용)
         now = datetime.now(timezone.utc)
         master_index_records = []
         for record in new_records:
             master_index = ReviewMasterIndex(
                 review_id=UUID(record.review_id),
-                app_id=app.app_id,
+                app_id=UUID(record.app_id),
                 platform_review_id=record.platform_review_id,
                 platform_type=platform_type,
                 review_created_at=record.reviewed_at,
@@ -135,7 +130,7 @@ class BatchLoader:
             )
             master_index_records.append(master_index)
 
-        # 6. DB 적재 + 배치 상태 업데이트
+        # 4. DB 적재 + 배치 상태 업데이트
         session.add_all(master_index_records)
         batch.status = IngestionBatchStatusType.LOADED
         batch.loaded_at = now
@@ -166,26 +161,6 @@ class BatchLoader:
         except Exception as e:
             session.rollback()
             self.logger.error(f"Failed to update batch status: {e}")
-
-    def _get_or_create_app(self, session, platform_app_id: str, app_name: str, platform_type: PlatformType):
-        """App 레코드 확인 또는 생성."""
-        app = session.query(App).filter_by(
-            platform_app_id=platform_app_id,
-            platform_type=platform_type
-        ).first()
-
-        if not app:
-            app = App(
-                app_id=uuid7(),
-                platform_app_id=platform_app_id,
-                name=app_name or f'app_{platform_app_id}',
-                platform_type=platform_type
-            )
-            session.add(app)
-            session.flush()
-            self.logger.info(f"Created new app: {app.name} ({platform_app_id})")
-
-        return app
 
     def _get_existing_platform_ids(self, session, app_uuid: UUID, platform_type: PlatformType) -> Set[str]:
         """중복 방지용 기존 platform_review_id 조회."""
