@@ -96,7 +96,16 @@ class BatchLoader:
 
         # 2. 중복 제거: 배치 내 모든 app_id별로 기존 platform_review_id 수집
         platform_type = PlatformType(batch.source_type.value)
-        app_uuids_in_batch = {UUID(r.app_id) for r in records}
+        valid_records = []
+        app_uuids_in_batch: set = set()
+        for r in records:
+            try:
+                app_uuids_in_batch.add(UUID(r.app_id))
+                valid_records.append(r)
+            except ValueError:
+                self.logger.warning(f"Skipping record with invalid app_id UUID: {r.app_id}")
+        records = valid_records
+
         existing_ids: Set[str] = set()
         for app_uuid in app_uuids_in_batch:
             existing_ids.update(self._get_existing_platform_ids(session, app_uuid, platform_type))
