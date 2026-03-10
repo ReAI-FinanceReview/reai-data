@@ -227,7 +227,10 @@ class AppStoreCrawler(BaseCrawler):
         if all_records:
             try:
                 _, count, s3_key = self.save_daily_batch(all_records, self._get_platform_type())
-                self.logger.info(f"MinIO 업로드 완료: {count}개 리뷰 → {s3_key}")
+                if s3_key:
+                    self.logger.info(f"MinIO 업로드 완료: {count}개 리뷰 → {s3_key}")
+                else:
+                    self.logger.info("Parquet 쓰기 비활성화 (ENABLE_PARQUET_WRITE=false) — 업로드 건너뜀")
             except ParquetWriteError as e:
                 self.logger.error(f"MinIO 업로드 실패: {e}")
                 raise
