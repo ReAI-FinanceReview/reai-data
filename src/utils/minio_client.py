@@ -28,7 +28,12 @@ class MinIOClient:
         secret_key: str = None,
         bucket: str = None,
     ):
-        self.endpoint = endpoint or os.environ['MINIO_ENDPOINT']
+        raw_endpoint = endpoint or os.environ['MINIO_ENDPOINT']
+        if not raw_endpoint.startswith(('http://', 'https://')):
+            use_ssl = os.environ.get('MINIO_USE_SSL', 'false').lower() == 'true'
+            scheme = 'https' if use_ssl else 'http'
+            raw_endpoint = f'{scheme}://{raw_endpoint}'
+        self.endpoint = raw_endpoint
         self.access_key = access_key or os.environ['MINIO_ACCESS_KEY']
         self.secret_key = secret_key or os.environ['MINIO_SECRET_KEY']
         self.bucket = bucket or os.environ['MINIO_BUCKET']
@@ -60,6 +65,11 @@ class MinIOClient:
         table = pq.read_table(buf)
         logger.info(f"Read {table.num_rows} rows from '{key}'")
         return table
+
+    def delete_object(self, key: str) -> None:
+        """S3에서 객체를 삭제한다."""
+        self._client.delete_object(Bucket=self.bucket, Key=key)
+        logger.info(f"Deleted object '{key}'")
 
     def put_parquet(self, key: str, table: pa.Table) -> None:
         """PyArrow Table을 Snappy 압축 Parquet으로 S3에 업로드한다 (overwrite)."""

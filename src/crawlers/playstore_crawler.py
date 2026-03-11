@@ -4,7 +4,6 @@ Crawl 단계: API → Parquet 쓰기 + ingestion_batch PENDING 등록
 Load 단계(BatchLoader)에서 Parquet → ReviewMasterIndex 적재
 """
 
-import os
 from google_play_scraper import reviews, Sort, app as gp_app
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional
@@ -13,8 +12,6 @@ from uuid import UUID
 from .base_crawler import BaseCrawler
 from .exceptions import ParquetWriteError
 from src.utils.db_connector import DatabaseConnector
-from src.utils.parquet_writer import ParquetWriter
-from src.utils.path_resolver import get_medallion_paths
 from src.models.base import Base
 from src.models.enums import PlatformType
 from src.schemas.parquet.app_review import AppReviewSchema
@@ -41,21 +38,6 @@ class PlayStoreCrawler(BaseCrawler):
         # 데이터베이스 커넥터 초기화
         self.db_connector = DatabaseConnector(config_path or 'config/crawler_config.yml')
 
-        # Parquet Writer 초기화
-        self.enable_parquet = os.getenv('ENABLE_PARQUET_WRITE', 'true').lower() == 'true'
-
-        if self.enable_parquet:
-            paths = get_medallion_paths(create_if_missing=True)
-            bronze_path = paths['bronze_dir'] / 'app_reviews'
-
-            self.parquet_writer = ParquetWriter(
-                base_path=str(bronze_path),
-                partition_by='year_month_day'
-            )
-            self.logger.info(f"Parquet writer initialized: {bronze_path}")
-        else:
-            self.logger.warning("Parquet write disabled (ENABLE_PARQUET_WRITE=false)")
-            self.parquet_writer = None
 
     def crawl_reviews(self, app_id: str) -> List[Dict[str, Any]]:
         """리뷰 크롤링 (추상 메서드 구현)"""
@@ -161,8 +143,8 @@ class PlayStoreCrawler(BaseCrawler):
         return parquet_records
 
     def run(self) -> None:
-        """크롤러 실행 (Batch DLQ Architecture)"""
-        self.logger.info("Play Store 크롤러 실행 시작 (Batch DLQ mode)")
+        """크롤러 실행: 모든 앱 순회 후 하루치 단일 파일을 MinIO에 업로드"""
+        self.logger.info("Play Store 크롤러 실행 시작")
 
         self.db_connector.create_tables(Base)
 
@@ -172,8 +154,8 @@ class PlayStoreCrawler(BaseCrawler):
 
         self.logger.info(f"총 {len(app_ids)}개 앱의 리뷰를 크롤링합니다.")
 
+        all_records = []
         successful_apps = 0
-        total_records = 0
 
         for i, app_id in enumerate(app_ids, 1):
             self.logger.info(f"[{i}/{len(app_ids)}] 앱 ID: {app_id} 크롤링 시작...")
@@ -188,20 +170,16 @@ class PlayStoreCrawler(BaseCrawler):
                     self.logger.warning(f"앱 ID {app_id}: 수집된 리뷰 없음")
                     continue
 
-                _, count, _ = self.save_crawl_batch(
+                records = self.collect_app_records(
                     app_id, app_name, reviews_data, self._build_parquet_records
                 )
 
-                if count > 0:
-                    self.logger.info(f"앱 ID {app_id}: {count}개 배치 등록 완료")
-                    total_records += count
+                if records:
+                    self.logger.info(f"앱 ID {app_id}: {len(records)}개 신규 리뷰 수집")
+                    all_records.extend(records)
                     successful_apps += 1
                 else:
                     self.logger.info(f"앱 ID {app_id}: 새로운 리뷰 없음")
-
-            except ParquetWriteError as e:
-                self.logger.error(f"앱 ID {app_id} Parquet 쓰기 실패: {e}")
-                continue
 
             except Exception as e:
                 self.logger.error(f"앱 ID {app_id} 크롤링 실패: {e}")
@@ -210,6 +188,17 @@ class PlayStoreCrawler(BaseCrawler):
             if i < len(app_ids):
                 self.wait_between_requests()
 
-        self.logger.info(f"크롤링 완료 - 성공: {successful_apps}/{len(app_ids)}개 앱")
-        self.logger.info(f"총 {total_records}개 리뷰 배치 등록 완료")
-        self.logger.info(f"Parquet: {self.parquet_writer.base_path if self.parquet_writer else 'Disabled'}")
+        self.logger.info(f"크롤링 완료 - 성공: {successful_apps}/{len(app_ids)}개 앱, 총 {len(all_records)}개 리뷰")
+
+        if all_records:
+            try:
+                _, count, s3_key = self.save_daily_batch(all_records, self._get_platform_type())
+                if s3_key:
+                    self.logger.info(f"MinIO 업로드 완료: {count}개 리뷰 → {s3_key}")
+                else:
+                    self.logger.info("Parquet 쓰기 비활성화 (ENABLE_PARQUET_WRITE=false) — 업로드 건너뜀")
+            except ParquetWriteError as e:
+                self.logger.error(f"MinIO 업로드 실패: {e}")
+                raise
+        else:
+            self.logger.info("업로드할 신규 리뷰 없음")
