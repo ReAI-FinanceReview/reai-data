@@ -1,18 +1,7 @@
 """
-임베딩 벡터 생성 파이프라인 (Deprecated)
-
-.. deprecated::
-    이 모듈은 구버전 스키마(app_review_id FK)를 참조합니다.
-    Gold Layer에서는 src.gold.embedding_generator.GoldEmbeddingGenerator를 사용하세요.
+임베딩 벡터 생성 파이프라인
+전처리된 텍스트를 벡터로 변환하여 review_embeddings에 저장
 """
-import warnings
-warnings.warn(
-    "src.processing.embedding is deprecated. "
-    "Use src.gold.embedding_generator.GoldEmbeddingGenerator instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-from datetime import datetime
 from typing import Optional, List
 import os
 import time
@@ -36,10 +25,8 @@ except ImportError:
 
 from src.utils.logger import get_logger
 from src.utils.db_connector import DatabaseConnector
-from src.models.base import Base
 from src.models.review_preprocessed import ReviewPreprocessed
 from src.models.review_embedding import ReviewEmbedding
-from src.models.llm_analysis_log import LLMAnalysisLog
 
 
 class EmbeddingGenerator:
@@ -148,29 +135,19 @@ class EmbeddingGenerator:
             return None
 
         try:
-            text = preprocessed.refined_text
-            start_time = datetime.now()
-
-            # 임베딩 생성
-            vector = self.generate_embedding(text)
+            vector = self.generate_embedding(preprocessed.refined_text)
             if not vector:
                 return None
 
-            end_time = datetime.now()
-            latency_ms = int((end_time - start_time).total_seconds() * 1000)
-
-            # ReviewEmbedding 객체 생성 (matching DBinit.sql schema)
-            embedding_record = ReviewEmbedding(
-                app_review_id=preprocessed.app_review_id,  # FK to app_reviews.id
+            return ReviewEmbedding(
+                review_id=preprocessed.review_id,
                 source_content_type=source_content_type,
                 model_name=self.model_name,
-                vector=vector  # pgvector type
+                vector=vector,
             )
 
-            return embedding_record
-
         except Exception as e:
-            self.logger.error(f"리뷰 {preprocessed.id} 임베딩 생성 중 오류: {e}")
+            self.logger.error(f"리뷰 {preprocessed.review_id} 임베딩 생성 중 오류: {e}")
             return None
 
 
@@ -190,19 +167,16 @@ class EmbeddingGenerator:
         session = self.db_connector.get_session()
 
         try:
-            # 테이블 생성
-            self.db_connector.create_tables(Base)
-
             # 임베딩 생성할 전처리된 리뷰 조회
             query = session.query(ReviewPreprocessed)
 
             # 이미 임베딩 생성된 리뷰 제외
             try:
-                processed_review_ids = session.query(ReviewEmbedding.app_review_id).distinct().all()
+                processed_review_ids = session.query(ReviewEmbedding.review_id).distinct().all()
                 processed_ids = {row[0] for row in processed_review_ids}
 
                 if processed_ids:
-                    query = query.filter(~ReviewPreprocessed.app_review_id.in_(processed_ids))
+                    query = query.filter(~ReviewPreprocessed.review_id.in_(processed_ids))
                     self.logger.info(f"이미 임베딩 생성된 리뷰 {len(processed_ids)}개 제외")
             except Exception as e:
                 self.logger.warning(f"임베딩 조회 실패: {e}")
