@@ -49,7 +49,10 @@ def run_preprocess(batch_size: int = 100, limit: Optional[int] = None, config_pa
 
 
 def run_extract_features(batch_size: int = 100, limit: Optional[int] = None, config_path: Optional[str] = None) -> RunResult:
-    """Run feature extraction step."""
+    """Run feature extraction step (Gold Layer).
+
+    TODO(#38): Replace with GoldABSAAnalyzer once issue #38 is complete.
+    """
     from src.processing.feature_extraction import FeatureExtractor
     return _handle_step("features", lambda: FeatureExtractor(config_path).process_batch(batch_size=batch_size, limit=limit))
 
@@ -57,11 +60,11 @@ def run_extract_features(batch_size: int = 100, limit: Optional[int] = None, con
 def run_generate_embeddings(
     batch_size: int = 100, limit: Optional[int] = None, model_name: str = "text-embedding-3-small", config_path: Optional[str] = None
 ) -> RunResult:
-    """Run embedding generation step."""
-    from src.processing.embedding import EmbeddingGenerator
+    """Run embedding generation step (Gold Layer)."""
+    from src.gold.embedding_generator import GoldEmbeddingGenerator
     return _handle_step(
         "embed",
-        lambda: EmbeddingGenerator(model_name=model_name, config_path=config_path).process_batch(batch_size=batch_size, limit=limit),
+        lambda: GoldEmbeddingGenerator(model_name=model_name, config_path=config_path).process_batch(batch_size=batch_size, limit=limit),
     )
 
 
