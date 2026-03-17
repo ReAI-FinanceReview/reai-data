@@ -63,11 +63,11 @@ def run_action_analysis(batch_size: int = 100, limit: Optional[int] = None, conf
 def run_generate_embeddings(
     batch_size: int = 100, limit: Optional[int] = None, model_name: str = "text-embedding-3-small", config_path: Optional[str] = None
 ) -> RunResult:
-    """Run embedding generation step."""
-    from src.processing.embedding import EmbeddingGenerator
+    """Run embedding generation step (Gold Layer)."""
+    from src.gold.embedding_generator import GoldEmbeddingGenerator
     return _handle_step(
         "embed",
-        lambda: EmbeddingGenerator(model_name=model_name, config_path=config_path).process_batch(batch_size=batch_size, limit=limit),
+        lambda: GoldEmbeddingGenerator(model_name=model_name, config_path=config_path).process_batch(batch_size=batch_size, limit=limit),
     )
 
 
