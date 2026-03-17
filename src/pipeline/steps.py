@@ -49,9 +49,9 @@ def run_preprocess(batch_size: int = 100, limit: Optional[int] = None, config_pa
 
 
 def run_extract_features(batch_size: int = 100, limit: Optional[int] = None, config_path: Optional[str] = None) -> RunResult:
-    """Run feature extraction step."""
-    from src.processing.feature_extraction import FeatureExtractor
-    return _handle_step("features", lambda: FeatureExtractor(config_path).process_batch(batch_size=batch_size, limit=limit))
+    """Run ABSA feature extraction step (Gold Layer)."""
+    from src.gold.absa_analyzer import GoldABSAAnalyzer
+    return _handle_step("features", lambda: GoldABSAAnalyzer(config_path).process_batch(batch_size=batch_size, limit=limit))
 
 
 def run_generate_embeddings(
