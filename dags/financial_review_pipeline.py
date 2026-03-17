@@ -8,8 +8,9 @@ Financial Review ETL Pipeline DAG
 Steps:
   1. Crawl reviews → app_reviews
   2. Preprocess → reviews_preprocessed
-  3. Extract features → reviews_features (병렬 처리 가능)
-  4. Generate embeddings → review_embeddings (병렬 처리 가능)
+  3. Extract features → review_aspects (Gold ABSA)
+  4. Generate embeddings → review_embeddings (Gold)
+  5. Gold orchestration → review_embeddings + review_aspects + review_action_analysis
 """
 import os
 from datetime import datetime, timedelta
@@ -81,9 +82,35 @@ with TaskGroup('step3_4_parallel_processing', dag=dag) as parallel_processing:
     )
 
 
+# Step 5: Gold Layer 분석 (embedding → ABSA → action)
+gold_analyze = BashOperator(
+    task_id='step5_gold_analyze',
+    bash_command=(
+        f'cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_PATH} -c '
+        '"from src.pipeline.steps import run_gold; '
+        'r = run_gold(batch_size=100); '
+        'print(r.as_dict())"'
+    ),
+    dag=dag,
+    execution_timeout=timedelta(hours=3),
+)
+
+# Step 6: Gold Layer 집계 (fact tables + serving mart)
+gold_aggregate = BashOperator(
+    task_id='step6_gold_aggregate',
+    bash_command=(
+        f'cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_PATH} -c '
+        '"from src.pipeline.steps import run_aggregate; '
+        'r = run_aggregate(); '
+        'print(r.as_dict())"'
+    ),
+    dag=dag,
+    execution_timeout=timedelta(hours=1),
+)
+
 # 의존성 설정
-# Step 1 → Step 2 → [Step 3 & Step 4 병렬]
-crawl_reviews >> preprocess_reviews >> parallel_processing
+# Step 1 → Step 2 → [Step 3 & Step 4 병렬] → Step 5 → Step 6
+crawl_reviews >> preprocess_reviews >> parallel_processing >> gold_analyze >> gold_aggregate
 
 
 # ============================================================================
