@@ -1,7 +1,17 @@
 """
-임베딩 벡터 생성 파이프라인
-전처리된 텍스트를 벡터로 변환하여 Silver Layer에 저장
+임베딩 벡터 생성 파이프라인 (Deprecated)
+
+.. deprecated::
+    이 모듈은 구버전 스키마(app_review_id FK)를 참조합니다.
+    Gold Layer에서는 src.gold.embedding_generator.GoldEmbeddingGenerator를 사용하세요.
 """
+import warnings
+warnings.warn(
+    "src.processing.embedding is deprecated. "
+    "Use src.gold.embedding_generator.GoldEmbeddingGenerator instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 from datetime import datetime
 from typing import Optional, List
 import os
