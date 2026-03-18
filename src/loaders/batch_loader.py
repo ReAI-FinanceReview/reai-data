@@ -183,7 +183,8 @@ class BatchLoader:
         """app_metadata에서 현재 유효한 service_id 조회."""
         row = (
             session.query(AppMetadata.service_id)
-            .filter_by(app_id=app_id, is_active=True)
+            .filter(AppMetadata.app_id == app_id, AppMetadata.is_active == True)
+            .order_by(AppMetadata.valid_from.desc())
             .first()
         )
         if row is None:

@@ -327,9 +327,21 @@ def test_service_id_none_when_no_app_metadata(test_db_session):
     import pyarrow as pa
 
     now = datetime.now(timezone.utc)
+    app_id = uuid7()
+
+    # App row만 생성 (AppMetadata 없음) — FK 제약 충족하면서 no-metadata 경로 테스트
+    app = App(
+        app_id=app_id,
+        platform_app_id='no_meta_app',
+        platform_type=PlatformType.APPSTORE,
+        name='No Meta App',
+    )
+    test_db_session.add(app)
+    test_db_session.commit()
+
     review_schema = AppReviewSchema(
         review_id=str(uuid7()),
-        app_id=str(uuid7()),  # 매칭되는 app_metadata 없음
+        app_id=str(app_id),  # App은 있지만 AppMetadata 없음
         platform_type='APPSTORE',
         platform_review_id='no_meta_review_001',
         reviewer_name='User1',
@@ -367,6 +379,7 @@ def test_service_id_none_when_no_app_metadata(test_db_session):
     ).first()
     assert review is not None
     assert review.service_id is None, "service_id should be None when app_metadata is missing"
+    loader.logger.warning.assert_called_once()
 
 
 if __name__ == '__main__':
