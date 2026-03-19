@@ -27,12 +27,12 @@ from src.models.review_aspects import ReviewAspect
 # Helpers
 # ─────────────────────────────────────────────
 
-def _make_analyzer() -> GoldABSAAnalyzer:
-    """Create GoldABSAAnalyzer with mocked DB and no Okt."""
+def _make_analyzer(okt_mock=None) -> GoldABSAAnalyzer:
+    """Create GoldABSAAnalyzer with mocked DB and optional Okt mock."""
     analyzer = GoldABSAAnalyzer.__new__(GoldABSAAnalyzer)
     analyzer.logger = MagicMock()
     analyzer.db_connector = MagicMock()
-    analyzer._okt = None  # force dict-match fallback
+    analyzer._okt = okt_mock  # None forces dict-match fallback
     return analyzer
 
 
@@ -165,6 +165,25 @@ class TestKeywordExtraction:
     def test_no_matching_keywords(self):
         assert self.analyzer._extract_keywords("안녕하세요 반갑습니다") == []
 
+    def test_okt_branch_success(self):
+        """KoNLPy nouns returns known list → 2-char+ nouns used."""
+        okt_mock = MagicMock()
+        okt_mock.nouns.return_value = ["편리", "앱", "속도"]
+        analyzer = _make_analyzer(okt_mock=okt_mock)
+        keywords = analyzer._extract_keywords("편리한 앱 속도")
+        assert "편리" in keywords
+        assert "속도" in keywords
+        assert "앱" not in keywords  # single char, filtered out
+
+    def test_okt_branch_exception_falls_back_to_dict(self):
+        """KoNLPy raises exception → fallback to dict-match."""
+        okt_mock = MagicMock()
+        okt_mock.nouns.side_effect = RuntimeError("okt error")
+        analyzer = _make_analyzer(okt_mock=okt_mock)
+        keywords = analyzer._extract_keywords("편리 빠르 앱")
+        assert "편리" in keywords
+        assert "빠르" in keywords
+
 
 # ─────────────────────────────────────────────
 # D. Negation & adverb detection
@@ -258,13 +277,12 @@ class TestProcess:
 
     def test_skip_if_no_preprocessed_record(self):
         session = _make_session(already_analyzed=False)
-        rmi_mock = MagicMock()
-        # First get(ReviewPreprocessed) → None, second get(ReviewMasterIndex) → rmi_mock
-        session.get.side_effect = [None, rmi_mock]
+        session.get.return_value = None
         result = self.analyzer.process(session, self.review_id)
         assert result is True
         session.add_all.assert_not_called()
-        assert rmi_mock.processing_status == ProcessingStatusType.ANALYZED
+        # No RMI status update when preprocessed record is absent (not a terminal state)
+        assert session.get.call_count == 1
 
     def test_skip_if_empty_refined_text(self):
         session = _make_session(already_analyzed=False)

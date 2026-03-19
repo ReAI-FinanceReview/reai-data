@@ -132,7 +132,10 @@ class GoldABSAAnalyzer:
                 return True
 
             preprocessed = session.get(ReviewPreprocessed, review_id)
-            if preprocessed is None or not preprocessed.refined_text:
+            if preprocessed is None:
+                self.logger.warning(f"[{review_id}] No preprocessed record — skip")
+                return True
+            if not preprocessed.refined_text:
                 self.logger.warning(f"[{review_id}] No refined_text — skip")
                 rmi = session.get(ReviewMasterIndex, review_id)
                 if rmi is not None:
@@ -235,10 +238,30 @@ class GoldABSAAnalyzer:
             except Exception as e:
                 self.logger.warning(f"Okt.nouns failed: {e} — fallback to dict match")
 
-        # Fallback: 감성 사전 + 카테고리 키워드 사전 직접 매칭
-        found = [w for w in _SENTIMENT_DICT if w in text]
-        found += [w for w in _KEYWORD_TO_CATEGORY if w in text and w not in found]
-        return found[:20]
+        # Fallback: longest-first non-overlapping span matching
+        # (prevents short stems like "안정" from matching inside "불안정한")
+        candidates = sorted(
+            set(_SENTIMENT_DICT) | set(_KEYWORD_TO_CATEGORY),
+            key=len,
+            reverse=True,
+        )
+        found: List[str] = []
+        matched_spans: List[Tuple[int, int]] = []
+        for kw in candidates:
+            start = 0
+            while True:
+                idx = text.find(kw, start)
+                if idx == -1:
+                    break
+                end = idx + len(kw)
+                if not any(s < end and idx < e for s, e in matched_spans):
+                    found.append(kw)
+                    matched_spans.append((idx, end))
+                    break
+                start = idx + 1
+            if len(found) >= 20:
+                break
+        return found
 
     def _has_negation(self, text: str) -> bool:
         """텍스트에 부정어 포함 여부."""
@@ -376,7 +399,7 @@ _ANCHOR_VECTORS: Dict[CategoryType, List[float]] = {
 
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a)) or 1.0
     norm_b = math.sqrt(sum(x * x for x in b)) or 1.0
     return dot / (norm_a * norm_b)
