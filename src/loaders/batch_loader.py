@@ -5,12 +5,13 @@ Parquet 파일을 읽고 ReviewMasterIndex에 적재합니다.
 """
 
 from datetime import datetime, timezone
-from typing import Set
+from typing import Dict, Optional, Set
 from uuid import UUID
 
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
 from src.utils.minio_client import MinIOClient
+from src.models.app_metadata import AppMetadata
 from src.models.ingestion_batch import IngestionBatch
 from src.models.review_master_index import ReviewMasterIndex
 from src.models.enums import IngestionBatchStatusType, PlatformType, ProcessingStatusType
@@ -122,11 +123,16 @@ class BatchLoader:
 
         # 3. ReviewMasterIndex 레코드 생성 (app_id는 레코드에서 직접 사용)
         now = datetime.now(timezone.utc)
+        service_id_cache: Dict[UUID, Optional[UUID]] = {}
         master_index_records = []
         for record in new_records:
+            app_uuid = UUID(record.app_id)
+            if app_uuid not in service_id_cache:
+                service_id_cache[app_uuid] = self._get_service_id(session, app_uuid)
             master_index = ReviewMasterIndex(
                 review_id=UUID(record.review_id),
-                app_id=UUID(record.app_id),
+                app_id=app_uuid,
+                service_id=service_id_cache[app_uuid],
                 platform_review_id=record.platform_review_id,
                 platform_type=platform_type,
                 review_created_at=record.reviewed_at,
@@ -172,6 +178,18 @@ class BatchLoader:
         except Exception as e:
             session.rollback()
             self.logger.error(f"Failed to update batch status: {e}")
+
+    def _get_service_id(self, session, app_id: UUID) -> Optional[UUID]:
+        """app_metadata에서 현재 유효한 service_id 조회."""
+        row = (
+            session.query(AppMetadata.service_id)
+            .filter(AppMetadata.app_id == app_id, AppMetadata.is_active == True)
+            .order_by(AppMetadata.valid_from.desc())
+            .first()
+        )
+        if row is None:
+            self.logger.warning(f"No active app_metadata found for app_id={app_id}")
+        return row.service_id if row else None
 
     def _get_existing_platform_ids(self, session, app_uuid: UUID, platform_type: PlatformType) -> Set[str]:
         """중복 방지용 기존 platform_review_id 조회."""

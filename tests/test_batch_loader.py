@@ -17,6 +17,8 @@ from unittest.mock import patch, MagicMock
 from uuid6 import uuid7
 
 from src.loaders.batch_loader import BatchLoader
+from src.models.app_metadata import AppMetadata
+from src.models.app_service import AppService
 from src.models.apps import App
 from src.models.review_master_index import ReviewMasterIndex
 from src.models.ingestion_batch import IngestionBatch
@@ -254,6 +256,130 @@ def test_review_id_is_uuid_v7(test_db_session, db_with_pending_batches, temp_bro
         uuid_str = str(review.review_id)
         version = int(uuid_str[14], 16)
         assert version == 7, f"review_id should be UUID v7, got version {version}"
+
+
+# ========================================
+# C. SERVICE ID POPULATION (Issue #35)
+# ========================================
+
+@pytest.mark.requires_db
+def test_service_id_populated_from_app_metadata(test_db_session):
+    """Test that service_id is populated in ReviewMasterIndex when app_metadata exists."""
+    import pyarrow as pa
+    from datetime import date
+
+    now = datetime.now(timezone.utc)
+    app_id = uuid7()
+    service_id = uuid7()
+
+    # Create required FK records: AppService → App → AppMetadata
+    service = AppService(service_id=service_id, service_name='Test Service')
+    app = App(app_id=app_id, platform_app_id='test_app_001', platform_type=PlatformType.APPSTORE, name='Test App')
+    metadata = AppMetadata(app_id=app_id, service_id=service_id, is_active=True, valid_from=date.today())
+    test_db_session.add_all([service, app, metadata])
+    test_db_session.commit()
+
+    review_schema = AppReviewSchema(
+        review_id=str(uuid7()),
+        app_id=str(app_id),
+        platform_type='APPSTORE',
+        platform_review_id='svc_review_001',
+        reviewer_name='User1',
+        review_text='Test review',
+        rating=4,
+        reviewed_at=datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc),
+        is_reply=False,
+        reply_comment=None,
+    )
+    batch = IngestionBatch(
+        batch_id=uuid7(),
+        source_type=PlatformType.APPSTORE,
+        platform_app_id='test_app_001',
+        app_name='Test App',
+        storage_path='s3://bucket/test/file.parquet',
+        file_format='parquet',
+        record_count=1,
+        status=IngestionBatchStatusType.PENDING,
+        retry_count=0,
+        max_retries=3,
+        created_at=now,
+        updated_at=now,
+    )
+    test_db_session.add(batch)
+    test_db_session.commit()
+
+    loader = _make_loader(test_db_session)
+    loader._minio = MagicMock()
+    loader._minio.get_parquet.return_value = pa.Table.from_pylist([review_schema.model_dump()])
+
+    loader.load_pending_batches(limit=100)
+
+    review = test_db_session.query(ReviewMasterIndex).filter_by(
+        platform_review_id='svc_review_001'
+    ).first()
+    assert review is not None
+    assert review.service_id == service_id, "service_id should be populated from app_metadata"
+
+
+@pytest.mark.requires_db
+def test_service_id_none_when_no_app_metadata(test_db_session):
+    """Test that service_id is None when no active app_metadata record exists."""
+    import pyarrow as pa
+
+    now = datetime.now(timezone.utc)
+    app_id = uuid7()
+
+    # App row만 생성 (AppMetadata 없음) — FK 제약 충족하면서 no-metadata 경로 테스트
+    app = App(
+        app_id=app_id,
+        platform_app_id='no_meta_app',
+        platform_type=PlatformType.APPSTORE,
+        name='No Meta App',
+    )
+    test_db_session.add(app)
+    test_db_session.commit()
+
+    review_schema = AppReviewSchema(
+        review_id=str(uuid7()),
+        app_id=str(app_id),  # App은 있지만 AppMetadata 없음
+        platform_type='APPSTORE',
+        platform_review_id='no_meta_review_001',
+        reviewer_name='User1',
+        review_text='Test review',
+        rating=3,
+        reviewed_at=datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc),
+        is_reply=False,
+        reply_comment=None,
+    )
+    batch = IngestionBatch(
+        batch_id=uuid7(),
+        source_type=PlatformType.APPSTORE,
+        platform_app_id='unknown_app',
+        app_name='Unknown App',
+        storage_path='s3://bucket/test/no_meta.parquet',
+        file_format='parquet',
+        record_count=1,
+        status=IngestionBatchStatusType.PENDING,
+        retry_count=0,
+        max_retries=3,
+        created_at=now,
+        updated_at=now,
+    )
+    test_db_session.add(batch)
+    test_db_session.commit()
+
+    loader = _make_loader(test_db_session)
+    loader._minio = MagicMock()
+    loader._minio.get_parquet.return_value = pa.Table.from_pylist([review_schema.model_dump()])
+
+    loader.load_pending_batches(limit=100)
+
+    review = test_db_session.query(ReviewMasterIndex).filter_by(
+        platform_review_id='no_meta_review_001'
+    ).first()
+    assert review is not None
+    assert review.service_id is None, "service_id should be None when app_metadata is missing"
+    loader.logger.warning.assert_called_once()
 
 
 if __name__ == '__main__':
