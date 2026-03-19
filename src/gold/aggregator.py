@@ -87,20 +87,29 @@ class GoldAggregator:
         sql = text("""
             INSERT INTO fact_service_review_daily
                 (date, service_id, platform_type,
-                 total_review_cnt, action_required_cnt, attention_required_cnt, avg_rating)
+                 total_review_cnt, action_required_cnt, attention_required_cnt,
+                 avg_rating, pos_count, neg_count, action_ratio)
             SELECT
-                DATE_TRUNC('day', rmi.review_created_at)::date   AS date,
+                DATE_TRUNC('day', rmi.review_created_at)::date AS date,
                 rmi.service_id,
                 rmi.platform_type,
-                COUNT(*)                                          AS total_review_cnt,
-                SUM(CASE WHEN raa.is_action_required THEN 1 ELSE 0 END)
-                                                                  AS action_required_cnt,
-                SUM(CASE WHEN raa.is_attention_required THEN 1 ELSE 0 END)
-                                                                  AS attention_required_cnt,
-                AVG(ar.rating)                                    AS avg_rating
+                COUNT(*)                                        AS total_review_cnt,
+                SUM(CASE WHEN raa.is_action_required    THEN 1 ELSE 0 END) AS action_required_cnt,
+                SUM(CASE WHEN raa.is_attention_required THEN 1 ELSE 0 END) AS attention_required_cnt,
+                AVG(ar.rating)                                  AS avg_rating,
+                COUNT(DISTINCT CASE WHEN avg_sent.avg_score >= 0.5 THEN rmi.review_id END) AS pos_count,
+                COUNT(DISTINCT CASE WHEN avg_sent.avg_score <  0.5 THEN rmi.review_id END) AS neg_count,
+                ROUND(
+                    SUM(CASE WHEN raa.is_action_required THEN 1 ELSE 0 END)::FLOAT
+                    / NULLIF(COUNT(*), 0), 4
+                ) AS action_ratio
             FROM review_master_index rmi
             JOIN review_action_analysis raa USING (review_id)
             JOIN app_reviews ar ON ar.platform_review_id = rmi.platform_review_id
+            LEFT JOIN (
+                SELECT review_id, AVG(sentiment_score) AS avg_score
+                FROM review_aspects GROUP BY review_id
+            ) avg_sent ON avg_sent.review_id = rmi.review_id
             WHERE rmi.processing_status = 'ANALYZED'
               AND DATE_TRUNC('day', rmi.review_created_at)::date = :target_date
               AND rmi.service_id IS NOT NULL
@@ -110,7 +119,10 @@ class GoldAggregator:
                 total_review_cnt       = EXCLUDED.total_review_cnt,
                 action_required_cnt    = EXCLUDED.action_required_cnt,
                 attention_required_cnt = EXCLUDED.attention_required_cnt,
-                avg_rating             = EXCLUDED.avg_rating
+                avg_rating             = EXCLUDED.avg_rating,
+                pos_count              = EXCLUDED.pos_count,
+                neg_count              = EXCLUDED.neg_count,
+                action_ratio           = EXCLUDED.action_ratio
         """)
         session.execute(sql, {"target_date": target_date})
         self.logger.debug(f"fact_service_review_daily UPSERT 완료: {target_date}")
@@ -171,66 +183,46 @@ class GoldAggregator:
         """srv_daily_review_list UPSERT (비정규화 와이드 테이블)."""
         sql = text("""
             INSERT INTO srv_daily_review_list (
-                review_id, date,
-                service_id, app_id, platform_type,
-                platform_review_id, rating, refined_text,
-                review_summary, is_action_required, is_attention_required,
-                action_confidence_score,
-                keywords, avg_sentiment_score, aspect_cnt,
-                assigned_dept
+                review_id, date, service_id, refined_text, review_summary,
+                rating, reviewed_at, sentiment_score, is_action_required,
+                is_attention_required, assigned_dept, keyword, confidence
             )
             SELECT
                 rmi.review_id,
                 DATE_TRUNC('day', rmi.review_created_at)::date AS date,
                 rmi.service_id,
-                rmi.app_id,
-                rmi.platform_type,
-                rmi.platform_review_id,
-                ar.rating,
                 rp.refined_text,
                 raa.review_summary,
+                ar.rating,
+                rmi.review_created_at                          AS reviewed_at,
+                (SELECT AVG(sentiment_score) FROM review_aspects
+                 WHERE review_id = rmi.review_id)              AS sentiment_score,
                 raa.is_action_required,
                 raa.is_attention_required,
-                raa.action_confidence_score,
-                -- 키워드 배열 집계
-                ARRAY(
-                    SELECT DISTINCT keyword
-                    FROM review_aspects asp
-                    WHERE asp.review_id = rmi.review_id
-                      AND asp.keyword IS NOT NULL
-                )                                              AS keywords,
-                (
-                    SELECT AVG(asp.sentiment_score)
-                    FROM review_aspects asp
-                    WHERE asp.review_id = rmi.review_id
-                )                                              AS avg_sentiment_score,
-                (
-                    SELECT COUNT(*)
-                    FROM review_aspects asp
-                    WHERE asp.review_id = rmi.review_id
-                )                                             AS aspect_cnt,
-                rvs.assigned_dept
+                rvs.assigned_dept,
+                ARRAY(SELECT DISTINCT keyword FROM review_aspects
+                      WHERE review_id = rmi.review_id
+                        AND keyword IS NOT NULL)               AS keyword,
+                rvs.confidence
             FROM review_master_index rmi
             JOIN review_action_analysis raa USING (review_id)
             JOIN app_reviews ar ON ar.platform_review_id = rmi.platform_review_id
             LEFT JOIN reviews_preprocessed rp USING (review_id)
             LEFT JOIN (
-                SELECT DISTINCT ON (review_id) review_id, assigned_dept
-                FROM reviews_assigned
-                ORDER BY review_id, created_at DESC
+                SELECT DISTINCT ON (review_id) review_id, assigned_dept, confidence
+                FROM reviews_assigned ORDER BY review_id, created_at DESC
             ) rvs USING (review_id)
             WHERE rmi.processing_status = 'ANALYZED'
               AND DATE_TRUNC('day', rmi.review_created_at)::date = :target_date
-            ON CONFLICT (review_id)
+            ON CONFLICT (review_id, date)
             DO UPDATE SET
-                review_summary          = EXCLUDED.review_summary,
-                is_action_required      = EXCLUDED.is_action_required,
-                is_attention_required   = EXCLUDED.is_attention_required,
-                action_confidence_score = EXCLUDED.action_confidence_score,
-                keywords                = EXCLUDED.keywords,
-                avg_sentiment_score     = EXCLUDED.avg_sentiment_score,
-                aspect_cnt              = EXCLUDED.aspect_cnt,
-                assigned_dept           = EXCLUDED.assigned_dept
+                review_summary        = EXCLUDED.review_summary,
+                sentiment_score       = EXCLUDED.sentiment_score,
+                is_action_required    = EXCLUDED.is_action_required,
+                is_attention_required = EXCLUDED.is_attention_required,
+                assigned_dept         = EXCLUDED.assigned_dept,
+                keyword               = EXCLUDED.keyword,
+                confidence            = EXCLUDED.confidence
         """)
         session.execute(sql, {"target_date": target_date})
         self.logger.debug(f"srv_daily_review_list UPSERT 완료: {target_date}")

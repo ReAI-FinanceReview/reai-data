@@ -3,7 +3,7 @@
 서비스 × 플랫폼 × 날짜 기준으로 리뷰 건수, 조치 필요 건수, 평균 평점을 집계합니다.
 """
 
-from sqlalchemy import Column, Date, Integer, Float, UniqueConstraint, Enum as SQLEnum
+from sqlalchemy import Column, Date, Integer, Float, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 
 from .base import Base
@@ -16,19 +16,17 @@ class FactServiceReviewDaily(Base):
     집계 단위: (date, service_id, platform_type)
     """
     __tablename__ = 'fact_service_review_daily'
-    __table_args__ = (
-        UniqueConstraint('date', 'service_id', 'platform_type', name='uq_fact_srv_review_daily'),
-    )
 
-    id = Column(Integer, primary_key=True, autoincrement=True, comment='PK')
-    date = Column(Date, nullable=False, comment='집계 날짜 (리뷰 작성일 기준)')
+    date = Column(Date, primary_key=True, nullable=False, comment='집계 날짜 (리뷰 작성일 기준)')
     service_id = Column(
         UUID(as_uuid=True),
+        primary_key=True,
         nullable=False,
         comment='서비스 ID (FK to app_service, denormalized)',
     )
     platform_type = Column(
         SQLEnum(PlatformType, name='platform_type', create_type=False),
+        primary_key=True,
         nullable=False,
         comment='플랫폼 타입',
     )
@@ -36,6 +34,9 @@ class FactServiceReviewDaily(Base):
     action_required_cnt = Column(Integer, default=0, comment='조치 필요 리뷰 수')
     attention_required_cnt = Column(Integer, default=0, comment='관심 필요 리뷰 수')
     avg_rating = Column(Float, comment='평균 평점')
+    pos_count = Column(Integer, default=0, comment='긍정 리뷰 수')
+    neg_count = Column(Integer, default=0, comment='부정 리뷰 수')
+    action_ratio = Column(Float, comment='조치 필요 비율 (action_required_cnt / total_review_cnt)')
 
     def __repr__(self):
         return (

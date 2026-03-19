@@ -5,7 +5,7 @@
 레이더 차트 시각화에 사용됩니다.
 """
 
-from sqlalchemy import Column, Date, Integer, Float, UniqueConstraint, Enum as SQLEnum
+from sqlalchemy import Column, Date, Integer, Float, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 
 from .base import Base
@@ -18,22 +18,17 @@ class FactCategoryRadarScores(Base):
     집계 단위: (date, service_id, category_type)
     """
     __tablename__ = 'fact_category_radar_scores'
-    __table_args__ = (
-        UniqueConstraint(
-            'date', 'service_id', 'category_type',
-            name='uq_fact_category_radar',
-        ),
-    )
 
-    id = Column(Integer, primary_key=True, autoincrement=True, comment='PK')
-    date = Column(Date, nullable=False, comment='집계 날짜')
+    date = Column(Date, primary_key=True, nullable=False, comment='집계 날짜')
     service_id = Column(
         UUID(as_uuid=True),
+        primary_key=True,
         nullable=False,
         comment='서비스 ID (denormalized)',
     )
     category_type = Column(
         SQLEnum(CategoryType, name='category_type', create_type=False),
+        primary_key=True,
         nullable=False,
         comment='5대 카테고리 (오방성)',
     )
