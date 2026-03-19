@@ -51,3 +51,12 @@ class IngestionBatchStatusType(enum.Enum):
     FAILED = "FAILED"
     RETRYING = "RETRYING"
     DEAD_LETTER = "DEAD_LETTER"
+
+
+class CategoryType(enum.Enum):
+    """5-dimensional review analysis category (오방성)."""
+    USABILITY = "USABILITY"
+    STABILITY = "STABILITY"
+    DESIGN = "DESIGN"
+    CUSTOMER_SUPPORT = "CUSTOMER_SUPPORT"
+    SPEED = "SPEED"

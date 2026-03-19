@@ -15,6 +15,7 @@ from .enums import (
     AnalysisStatusType,
     SentimentType,
     IngestionBatchStatusType,
+    CategoryType,
 )
 
 # App-related models
@@ -41,6 +42,12 @@ from .llm_analysis_log import LLMAnalysisLog
 # Gold Layer
 from .review_assigned import ReviewAssigned
 
+# Gold Fact Tables & Serving Mart
+from .fact_service_review_daily import FactServiceReviewDaily
+from .fact_service_aspect_daily import FactServiceAspectDaily
+from .fact_category_radar_scores import FactCategoryRadarScores
+from .srv_daily_review_list import SrvDailyReviewList
+
 # Reference Data
 from .dictionary import Synonym, Profanity, FinancialTerm
 from .organizations import Organization
@@ -54,6 +61,7 @@ __all__ = [
     'AnalysisStatusType',
     'SentimentType',
     'IngestionBatchStatusType',
+    'CategoryType',
     # App
     'AppService',
     'App',
@@ -72,6 +80,11 @@ __all__ = [
     'LLMAnalysisLog',
     # Gold
     'ReviewAssigned',
+    # Gold Fact Tables & Serving Mart
+    'FactServiceReviewDaily',
+    'FactServiceAspectDaily',
+    'FactCategoryRadarScores',
+    'SrvDailyReviewList',
     # Reference
     'Synonym',
     'Profanity',
