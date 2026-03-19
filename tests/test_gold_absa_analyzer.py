@@ -19,7 +19,7 @@ from src.gold.absa_analyzer import (
     _SENTIMENT_DICT,
     _CATEGORY_KEYWORDS,
 )
-from src.models.enums import CategoryType
+from src.models.enums import CategoryType, ProcessingStatusType
 from src.models.review_aspects import ReviewAspect
 
 
@@ -258,19 +258,25 @@ class TestProcess:
 
     def test_skip_if_no_preprocessed_record(self):
         session = _make_session(already_analyzed=False)
-        session.get.return_value = None
+        rmi_mock = MagicMock()
+        # First get(ReviewPreprocessed) → None, second get(ReviewMasterIndex) → rmi_mock
+        session.get.side_effect = [None, rmi_mock]
         result = self.analyzer.process(session, self.review_id)
         assert result is True
         session.add_all.assert_not_called()
+        assert rmi_mock.processing_status == ProcessingStatusType.ANALYZED
 
     def test_skip_if_empty_refined_text(self):
         session = _make_session(already_analyzed=False)
         preprocessed = MagicMock()
         preprocessed.refined_text = ""
-        session.get.return_value = preprocessed
+        rmi_mock = MagicMock()
+        # First get(ReviewPreprocessed) → preprocessed, second get(ReviewMasterIndex) → rmi_mock
+        session.get.side_effect = [preprocessed, rmi_mock]
         result = self.analyzer.process(session, self.review_id)
         assert result is True
         session.add_all.assert_not_called()
+        assert rmi_mock.processing_status == ProcessingStatusType.ANALYZED
 
     def test_skip_if_no_keywords_found(self):
         session = _make_session(already_analyzed=False)
@@ -287,7 +293,9 @@ class TestProcess:
         session = _make_session(already_analyzed=False)
         preprocessed = MagicMock()
         preprocessed.refined_text = "편리하고 빠른 앱입니다"
-        session.get.return_value = preprocessed
+        rmi_mock = MagicMock()
+        # First get(ReviewPreprocessed) → preprocessed, second get(ReviewMasterIndex) → rmi_mock
+        session.get.side_effect = [preprocessed, rmi_mock]
         result = self.analyzer.process(session, self.review_id)
         assert result is True
         session.add_all.assert_called_once()
@@ -297,6 +305,7 @@ class TestProcess:
             assert isinstance(a, ReviewAspect)
             assert a.review_id == self.review_id
             assert 0.0 <= a.sentiment_score <= 1.0
+        assert rmi_mock.processing_status == ProcessingStatusType.ANALYZED
 
     def test_analyze_exception_returns_false_and_rollbacks(self):
         session = _make_session(already_analyzed=False)

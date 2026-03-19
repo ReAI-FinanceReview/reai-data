@@ -36,6 +36,7 @@ except ImportError:
 
 from src.models.enums import CategoryType, ProcessingStatusType
 from src.models.review_aspects import ReviewAspect
+from src.models.review_master_index import ReviewMasterIndex
 from src.models.review_preprocessed import ReviewPreprocessed
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
@@ -73,7 +74,7 @@ _NEGATION_WORDS = {"안", "못", "없", "아니", "않"}
 # ----------------------------------------------------------------
 _CATEGORY_KEYWORDS: Dict[CategoryType, List[str]] = {
     CategoryType.USABILITY: [
-        "사용", "편리", "편의", "인터페이스", "UI", "UX", "화면", "메뉴",
+        "사용", "편리", "편의", "인터페이스", "UI", "UX", "메뉴",
         "기능", "조작", "접근", "쉽", "어렵", "복잡", "간편",
     ],
     CategoryType.STABILITY: [
@@ -81,7 +82,7 @@ _CATEGORY_KEYWORDS: Dict[CategoryType, List[str]] = {
         "안정", "불안정", "다운", "멈춤", "튕김",
     ],
     CategoryType.DESIGN: [
-        "디자인", "UI", "화면", "레이아웃", "색상", "폰트", "글자",
+        "디자인", "화면", "레이아웃", "색상", "폰트", "글자",
         "깔끔", "예쁘", "구성", "아이콘",
     ],
     CategoryType.CUSTOMER_SUPPORT: [
@@ -126,18 +127,25 @@ class GoldABSAAnalyzer:
             True: 성공(신규 적재 또는 이미 존재)
             False: 실패
         """
-        if self._is_already_analyzed(session, review_id):
-            return True
-
-        preprocessed = session.get(ReviewPreprocessed, review_id)
-        if preprocessed is None or not preprocessed.refined_text:
-            self.logger.warning(f"[{review_id}] No refined_text — skip")
-            return True
-
         try:
-            with session.begin_nested():  # savepoint — 실패해도 이 리뷰분만 롤백
+            if self._is_already_analyzed(session, review_id):
+                return True
+
+            preprocessed = session.get(ReviewPreprocessed, review_id)
+            if preprocessed is None or not preprocessed.refined_text:
+                self.logger.warning(f"[{review_id}] No refined_text — skip")
+                rmi = session.get(ReviewMasterIndex, review_id)
+                if rmi is not None:
+                    rmi.processing_status = ProcessingStatusType.ANALYZED
+                return True
+
+            with session.begin_nested():
                 aspects = self._analyze(session, review_id, preprocessed.refined_text)
                 session.add_all(aspects)
+                rmi = session.get(ReviewMasterIndex, review_id)
+                if rmi is not None:
+                    rmi.processing_status = ProcessingStatusType.ANALYZED
+
             return True
         except Exception:
             self.logger.exception(f"[{review_id}] ABSA analysis failed")
@@ -306,7 +314,6 @@ class GoldABSAAnalyzer:
     ) -> List[UUID]:
         """ABSA 미처리 review_id 조회 (CLEANED 상태 기준)."""
         from sqlalchemy import not_, exists
-        from src.models.review_master_index import ReviewMasterIndex
 
         query = (
             session.query(ReviewPreprocessed.review_id)
