@@ -12,7 +12,7 @@ Coverage:
 
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 from uuid6 import uuid7
 
@@ -259,7 +259,7 @@ def test_process_batch_skips_already_embedded(test_db_session):
     count = gen.process_batch()
 
     gen._generate_embedding.assert_not_called()
-    assert count == 1  # skip은 성공으로 카운트
+    assert count == 0  # _fetch_pending_review_ids가 NOT EXISTS로 이미 임베딩된 리뷰를 제외하므로
 
 
 if __name__ == "__main__":
