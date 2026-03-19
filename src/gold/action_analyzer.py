@@ -35,14 +35,6 @@ from typing import List, Optional
 from uuid import UUID
 
 try:
-    from snorkel.labeling import labeling_function, LabelingFunction
-    from snorkel.labeling.model import MajorityLabelVoter
-    import numpy as np
-    SNORKEL_AVAILABLE = True
-except ImportError:
-    SNORKEL_AVAILABLE = False
-
-try:
     from openai import OpenAI
     from openai import APIError, RateLimitError
     OPENAI_AVAILABLE = True
@@ -122,13 +114,14 @@ def _apply_lfs(text: str, rating: int) -> tuple[int, float, str]:
 
     fired = [name for name, v in votes.items() if v != ABSTAIN]
     positive = sum(1 for v in votes.values() if v == ACTION_REQUIRED)
-    total_voted = len(fired)
+    total_lfs = len(votes)
 
-    if total_voted == 0:
+    if not fired:
         return ACTION_NOT_REQUIRED, 0.5, ""
 
-    confidence = positive / total_voted
-    label = ACTION_REQUIRED if confidence >= 0.5 else ACTION_NOT_REQUIRED
+    # confidence = 전체 LF 수 대비 발화(ACTION_REQUIRED) 비율
+    confidence = positive / total_lfs
+    label = ACTION_REQUIRED if fired else ACTION_NOT_REQUIRED
     trigger_reason = ", ".join(fired) if fired else ""
 
     return label, confidence, trigger_reason
@@ -173,6 +166,7 @@ class GoldActionAnalyzer:
             record = self._build_record(session, review_id)
         except Exception as exc:
             self.logger.error(f"[{review_id}] ActionAnalyzer 실패: {exc}")
+            session.rollback()
             return False
 
         if record is None:
@@ -251,12 +245,8 @@ class GoldActionAnalyzer:
             return None
 
         text = preprocessed.refined_text
-        avg_sentiment = (
-            sum(a.sentiment_score for a in aspects if a.sentiment_score is not None)
-            / len(aspects)
-            if aspects
-            else 0.5
-        )
+        valid_scores = [a.sentiment_score for a in aspects if a.sentiment_score is not None]
+        avg_sentiment = sum(valid_scores) / len(valid_scores) if valid_scores else 0.5
 
         # 3. is_attention_required (별점-감성 불일치)
         is_attention = self._calc_attention(rating, avg_sentiment)
@@ -323,6 +313,11 @@ class GoldActionAnalyzer:
                     max_tokens=100,
                     temperature=0.3,
                 )
+                if not resp.choices:
+                    log.status = AnalysisStatusType.FAILED
+                    log.error_message = "empty choices in API response"
+                    log.processed_at = datetime.now(timezone.utc)
+                    break
                 summary = resp.choices[0].message.content.strip()
                 log.status = AnalysisStatusType.SUCCESS
                 log.result_payload = {"summary": summary}
@@ -346,6 +341,7 @@ class GoldActionAnalyzer:
         if summary is None:
             log.status = AnalysisStatusType.FAILED
             log.error_message = "max retries exceeded"
+            log.processed_at = datetime.now(timezone.utc)
 
         return summary
 
@@ -364,7 +360,11 @@ class GoldActionAnalyzer:
         return row is not None
 
     def _fetch_pending_ids(self, session, limit: Optional[int]) -> List[UUID]:
-        """review_action_analysis에 없는 CLEANED/ANALYZED review_id 조회."""
+        """review_action_analysis에 없는 ANALYZED review_id 조회.
+
+        ABSA(features 스텝) 완료 후 ANALYZED 상태로 전환된 건만 대상으로 처리하여
+        ABSA 미완료 상태에서 action 분석이 조기 실행되는 것을 방지.
+        """
         from sqlalchemy import not_, exists
 
         subq = exists().where(
@@ -372,11 +372,7 @@ class GoldActionAnalyzer:
         )
         q = (
             session.query(ReviewMasterIndex.review_id)
-            .filter(
-                ReviewMasterIndex.processing_status.in_(
-                    [ProcessingStatusType.CLEANED, ProcessingStatusType.ANALYZED]
-                )
-            )
+            .filter(ReviewMasterIndex.processing_status == ProcessingStatusType.ANALYZED)
             .filter(not_(subq))
         )
         if limit:
