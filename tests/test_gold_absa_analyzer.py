@@ -336,6 +336,22 @@ class TestProcess:
         session.begin_nested.assert_called_once()  # savepoint 사용 확인
         session.rollback.assert_not_called()        # 세션 전체 롤백 없음
 
+    def test_integrity_error_treated_as_already_processed(self):
+        """IntegrityError on insert → duplicate detected, return True (savepoint auto-rolled back)."""
+        from sqlalchemy.exc import IntegrityError
+        session = _make_session(already_analyzed=False)
+        preprocessed = MagicMock()
+        preprocessed.refined_text = "편리한 앱입니다"
+        session.get.return_value = preprocessed
+        # begin_nested context manager raises IntegrityError on __exit__
+        cm = MagicMock()
+        cm.__enter__.return_value = None
+        cm.__exit__.side_effect = IntegrityError("UNIQUE constraint failed", None, None)
+        session.begin_nested.return_value = cm
+        result = self.analyzer.process(session, self.review_id)
+        assert result is True
+        session.rollback.assert_not_called()  # 세션 전체 롤백 없음
+
 
 # ─────────────────────────────────────────────
 # G. process_batch() - 혼합 성공/실패

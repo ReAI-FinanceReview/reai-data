@@ -34,6 +34,8 @@ except ImportError:
     KONLPY_AVAILABLE = False
     Okt = None  # type: ignore
 
+from sqlalchemy.exc import IntegrityError
+
 from src.models.enums import CategoryType, ProcessingStatusType
 from src.models.review_aspects import ReviewAspect
 from src.models.review_master_index import ReviewMasterIndex
@@ -142,12 +144,18 @@ class GoldABSAAnalyzer:
                     rmi.processing_status = ProcessingStatusType.ANALYZED
                 return True
 
-            with session.begin_nested():
-                aspects = self._analyze(session, review_id, preprocessed.refined_text)
-                session.add_all(aspects)
-                rmi = session.get(ReviewMasterIndex, review_id)
-                if rmi is not None:
-                    rmi.processing_status = ProcessingStatusType.ANALYZED
+            try:
+                with session.begin_nested():
+                    aspects = self._analyze(session, review_id, preprocessed.refined_text)
+                    session.add_all(aspects)
+                    rmi = session.get(ReviewMasterIndex, review_id)
+                    if rmi is not None:
+                        rmi.processing_status = ProcessingStatusType.ANALYZED
+            except IntegrityError:
+                # 다른 워커가 먼저 삽입 완료 — savepoint는 이미 자동 롤백됨
+                # (review_aspects에 unique constraint 추가 시 활성화)
+                self.logger.info(f"[{review_id}] Duplicate insert detected — already processed")
+                return True
 
             return True
         except Exception:
