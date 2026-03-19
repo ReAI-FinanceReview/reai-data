@@ -75,7 +75,10 @@ ACTION_REQUIRED = 1
 
 def _lf_bug_keyword(text: str) -> int:
     """버그/오류 키워드가 포함된 리뷰 → 조치 필요."""
-    _BUG_KEYWORDS = {"버그", "팅김", "오류", "에러", "강제종료", "먹통", "충돌", "다운"}
+    _BUG_KEYWORDS = {
+        "버그", "팅김", "오류", "에러", "강제종료", "강제 종료",
+        "먹통", "충돌", "다운됨", "다운돼", "다운되었",
+    }
     if any(kw in text for kw in _BUG_KEYWORDS):
         return ACTION_REQUIRED
     return ABSTAIN
@@ -163,16 +166,15 @@ class GoldActionAnalyzer:
             return True
 
         try:
-            record = self._build_record(session, review_id)
+            with session.begin_nested():
+                record = self._build_record(session, review_id)
+                if record is None:
+                    return True  # 데이터 부족 → skip
+                session.merge(record)
         except Exception as exc:
             self.logger.error(f"[{review_id}] ActionAnalyzer 실패: {exc}")
-            session.rollback()
             return False
 
-        if record is None:
-            return True  # 데이터 부족 → skip
-
-        session.merge(record)
         return True
 
     def process_batch(
@@ -340,7 +342,8 @@ class GoldActionAnalyzer:
 
         if summary is None:
             log.status = AnalysisStatusType.FAILED
-            log.error_message = "max retries exceeded"
+            if not log.error_message:
+                log.error_message = "max retries exceeded"
             log.processed_at = datetime.now(timezone.utc)
 
         return summary
@@ -375,7 +378,7 @@ class GoldActionAnalyzer:
             .filter(ReviewMasterIndex.processing_status == ProcessingStatusType.ANALYZED)
             .filter(not_(subq))
         )
-        if limit:
+        if limit is not None:
             q = q.limit(limit)
         return [row.review_id for row in q.all()]
 

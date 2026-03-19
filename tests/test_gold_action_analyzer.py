@@ -245,3 +245,37 @@ class TestProcess:
         session.get.side_effect = RuntimeError("DB 오류")
         result = self.analyzer.process(session, self.review_id)
         assert result is False
+
+    def test_process_batch_partial_failure_preserves_session(self):
+        """성공/실패 혼합 배치에서 세션이 오염되지 않는지 검증.
+
+        process()는 내부 savepoint로 예외를 처리하고 False를 반환하므로
+        process_batch()가 session.rollback()을 호출해선 안 됨.
+        """
+        review_id_ok = uuid7()
+        review_id_fail = uuid7()
+
+        analyzer = _make_analyzer()
+
+        # process()가 savepoint 내에서 예외를 잡아 False 반환 (세션 전체 롤백 없음)
+        def _process_side_effect(session, review_id):
+            if review_id == review_id_ok:
+                return True
+            return False  # 내부 예외를 잡아 False 반환
+
+        analyzer.process = _process_side_effect
+
+        session = MagicMock()
+        analyzer.db_connector.get_session.return_value = session
+
+        with patch.object(
+            analyzer.__class__,
+            "_fetch_pending_ids",
+            return_value=[review_id_ok, review_id_fail],
+        ):
+            processed = analyzer.process_batch(batch_size=10)
+
+        # 성공 1건만 카운트
+        assert processed == 1
+        # 세션 전체 rollback이 호출되지 않아야 함
+        session.rollback.assert_not_called()
