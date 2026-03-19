@@ -196,6 +196,10 @@ class TestNegationAdverb:
         """극도로(1.4) > 매우(1.3) → 1.4 wins"""
         assert self.analyzer._get_adv_weight("극도로 매우 불편") == pytest.approx(1.4)
 
+    def test_no_false_positive_negation_in_안정(self):
+        """'안정적' 텍스트에서 '안'을 부정어로 오탐하지 않아야 함."""
+        assert self.analyzer._has_negation("앱이 안정적이고 빠릅니다") is False
+
 
 # ─────────────────────────────────────────────
 # E. Category mapping
@@ -293,3 +297,13 @@ class TestProcess:
             assert isinstance(a, ReviewAspect)
             assert a.review_id == self.review_id
             assert 0.0 <= a.sentiment_score <= 1.0
+
+    def test_analyze_exception_returns_false_and_rollbacks(self):
+        session = _make_session(already_analyzed=False)
+        preprocessed = MagicMock()
+        preprocessed.refined_text = "편리한 앱입니다"
+        session.get.return_value = preprocessed
+        with patch.object(self.analyzer, "_analyze", side_effect=RuntimeError("DB error")):
+            result = self.analyzer.process(session, self.review_id)
+        assert result is False
+        session.rollback.assert_called_once()

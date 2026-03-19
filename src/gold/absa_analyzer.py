@@ -108,9 +108,9 @@ class GoldABSAAnalyzer:
     Orchestrator 단일 건 처리와 standalone 배치 처리 모두 지원.
     """
 
-    def __init__(self, config_path: str = "config/crawler_config.yml"):
+    def __init__(self, config_path: Optional[str] = None):
         self.logger = get_logger(__name__)
-        self.db_connector = DatabaseConnector(config_path)
+        self.db_connector = DatabaseConnector(config_path or "config/crawler_config.yml")
         self._okt = self._init_okt()
 
     # ------------------------------------------------------------------
@@ -134,9 +134,14 @@ class GoldABSAAnalyzer:
             self.logger.warning(f"[{review_id}] No refined_text — skip")
             return True
 
-        aspects = self._analyze(session, review_id, preprocessed.refined_text)
-        session.add_all(aspects)
-        return True
+        try:
+            aspects = self._analyze(session, review_id, preprocessed.refined_text)
+            session.add_all(aspects)
+            return True
+        except Exception:
+            self.logger.exception(f"[{review_id}] ABSA analysis failed")
+            session.rollback()
+            return False
 
     def process_batch(self, batch_size: int = 100, limit: Optional[int] = None) -> int:
         """CLEANED 상태이면서 review_aspects 미생성 리뷰를 배치 처리.
@@ -230,7 +235,7 @@ class GoldABSAAnalyzer:
     def _has_negation(self, text: str) -> bool:
         """텍스트에 부정어 포함 여부."""
         tokens = text.split()
-        return any(neg in token for token in tokens for neg in _NEGATION_WORDS)
+        return any(token in _NEGATION_WORDS for token in tokens)
 
     def _get_adv_weight(self, text: str) -> float:
         """텍스트에서 가장 강한 부사 가중치 반환. 없으면 1.0."""
@@ -318,7 +323,7 @@ class GoldABSAAnalyzer:
                 )
             )
         )
-        if limit:
+        if limit is not None:
             query = query.limit(limit)
         return [row.review_id for row in query.all()]
 
