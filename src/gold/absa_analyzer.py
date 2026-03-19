@@ -135,12 +135,12 @@ class GoldABSAAnalyzer:
             return True
 
         try:
-            aspects = self._analyze(session, review_id, preprocessed.refined_text)
-            session.add_all(aspects)
+            with session.begin_nested():  # savepoint — 실패해도 이 리뷰분만 롤백
+                aspects = self._analyze(session, review_id, preprocessed.refined_text)
+                session.add_all(aspects)
             return True
         except Exception:
             self.logger.exception(f"[{review_id}] ABSA analysis failed")
-            session.rollback()
             return False
 
     def process_batch(self, batch_size: int = 100, limit: Optional[int] = None) -> int:

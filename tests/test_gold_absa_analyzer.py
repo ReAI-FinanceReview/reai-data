@@ -306,4 +306,33 @@ class TestProcess:
         with patch.object(self.analyzer, "_analyze", side_effect=RuntimeError("DB error")):
             result = self.analyzer.process(session, self.review_id)
         assert result is False
-        session.rollback.assert_called_once()
+        session.begin_nested.assert_called_once()  # savepoint 사용 확인
+        session.rollback.assert_not_called()        # 세션 전체 롤백 없음
+
+
+# ─────────────────────────────────────────────
+# G. process_batch() - 혼합 성공/실패
+# ─────────────────────────────────────────────
+
+class TestProcessBatch:
+    def setup_method(self):
+        self.analyzer = _make_analyzer()
+
+    def test_partial_failure_does_not_rollback_successful_reviews(self):
+        session = MagicMock()
+        self.analyzer.db_connector.get_session.return_value = session
+
+        session.query.return_value.filter.return_value.first.return_value = None
+        preprocessed = MagicMock()
+        preprocessed.refined_text = "편리한 앱"
+        session.get.return_value = preprocessed
+
+        ids = [uuid7(), uuid7()]
+        with patch.object(self.analyzer, "_fetch_pending_review_ids", return_value=ids), \
+             patch.object(self.analyzer, "_analyze",
+                          side_effect=[[MagicMock(spec=ReviewAspect)], RuntimeError("fail")]):
+            count = self.analyzer.process_batch(batch_size=10)
+
+        assert count == 1
+        session.rollback.assert_not_called()  # 세션 전체 롤백 없어야 함
+        session.commit.assert_called_once()   # 성공분은 커밋됨
