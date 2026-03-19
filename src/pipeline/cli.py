@@ -12,7 +12,7 @@ except ImportError:
     DOTENV_AVAILABLE = False
 
 from src.pipeline.steps import run_steps
-from src.pipeline.steps import run_crawl, run_extract_features, run_generate_embeddings, run_preprocess  # noqa: F401
+from src.pipeline.steps import run_crawl, run_extract_features, run_generate_embeddings, run_preprocess, run_action_analysis  # noqa: F401
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,8 +35,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run pipeline steps sequentially.")
     parser.add_argument(
         "--steps",
-        default="crawl,preprocess,features,embed",
-        help="Comma-separated steps to run (options: crawl, preprocess, features, embed)",
+        default="crawl,preprocess,features,action,embed",
+        help="Comma-separated steps to run (options: crawl, preprocess, features, action, embed)",
     )
     parser.add_argument("--batch-size", type=int, default=100, help="Batch size for processing steps.")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for records processed.")
