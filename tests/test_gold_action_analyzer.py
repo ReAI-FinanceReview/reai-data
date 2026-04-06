@@ -86,29 +86,30 @@ class TestApplyLfs:
         assert reason == ""
 
     def test_single_bug_keyword_fires(self):
-        # 1 LF fired out of 3 total → confidence = 1/3
+        # 1 LF fired out of 1 voted → confidence = 1/1 = 1.0
         label, conf, reason = _apply_lfs("버그가 있어요", rating=3)
         assert label == ACTION_REQUIRED
-        assert conf == pytest.approx(1 / 3)
+        assert conf == pytest.approx(1.0)
         assert "LF_bug_keyword" in reason
 
     def test_low_rating_fires(self):
         label, conf, reason = _apply_lfs("잘 쓰고 있어요", rating=1)
         assert label == ACTION_REQUIRED
+        assert conf == pytest.approx(1.0)
         assert "LF_low_rating" in reason
 
     def test_majority_wins(self):
-        # bug + request + low_rating → 3/3 = 1.0
+        # bug + request + low_rating → 3/3 voted = 1.0
         label, conf, reason = _apply_lfs("버그 고쳐줘", rating=2)
         assert label == ACTION_REQUIRED
         assert conf == pytest.approx(1.0)
 
     def test_single_lf_fires(self):
         # only request keyword fires; bug/low_rating abstain
-        # confidence = 1 fired / 3 total LFs ≈ 0.333
+        # confidence = 1 positive / 1 voted = 1.0
         label, conf, reason = _apply_lfs("개선해주세요", rating=4)
         assert label == ACTION_REQUIRED
-        assert conf == pytest.approx(1 / 3)
+        assert conf == pytest.approx(1.0)
         assert "LF_request_keyword" in reason
 
 

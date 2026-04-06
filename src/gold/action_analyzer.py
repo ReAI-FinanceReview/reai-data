@@ -117,15 +117,15 @@ def _apply_lfs(text: str, rating: int) -> tuple[int, float, str]:
 
     fired = [name for name, v in votes.items() if v != ABSTAIN]
     positive = sum(1 for v in votes.values() if v == ACTION_REQUIRED)
-    total_lfs = len(votes)
+    total_voted = len(fired)
 
     if not fired:
         return ACTION_NOT_REQUIRED, 0.5, ""
 
-    # confidence = 전체 LF 수 대비 발화(ACTION_REQUIRED) 비율
-    confidence = positive / total_lfs
-    label = ACTION_REQUIRED if fired else ACTION_NOT_REQUIRED
-    trigger_reason = ", ".join(fired) if fired else ""
+    # confidence = 발화 LF 중 ACTION_REQUIRED 비율 (MajorityLabelVoter)
+    confidence = positive / total_voted
+    label = ACTION_REQUIRED if confidence >= 0.5 else ACTION_NOT_REQUIRED
+    trigger_reason = ", ".join(fired)
 
     return label, confidence, trigger_reason
 
@@ -291,8 +291,8 @@ class GoldActionAnalyzer:
             return None
 
         prompt = (
-            "다음 금융 앱 리뷰를 한국어 1문장으로 핵심만 요약하세요. "
-            "마침표로 끝내세요.\n\n"
+            "다음 금융 앱 리뷰를 한국어 1문장으로 요약하세요. "
+            "리뷰에 있는 단어와 문구만 사용하여 작성하고, 마침표로 끝내세요.\n\n"
             f"리뷰: {text[:500]}"
         )
 
@@ -392,7 +392,7 @@ class GoldActionAnalyzer:
             return None
         base_url = os.getenv("OPENAI_BASE_URL")
         try:
-            return OpenAI(api_key=api_key, base_url=base_url)
+            return OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
         except Exception as exc:
             self.logger.error(f"OpenAI 클라이언트 초기화 실패: {exc}")
             return None
