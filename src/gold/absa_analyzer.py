@@ -34,8 +34,11 @@ except ImportError:
     KONLPY_AVAILABLE = False
     Okt = None  # type: ignore
 
+from sqlalchemy.exc import IntegrityError
+
 from src.models.enums import CategoryType, ProcessingStatusType
 from src.models.review_aspects import ReviewAspect
+from src.models.review_master_index import ReviewMasterIndex
 from src.models.review_preprocessed import ReviewPreprocessed
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
@@ -73,7 +76,7 @@ _NEGATION_WORDS = {"안", "못", "없", "아니", "않"}
 # ----------------------------------------------------------------
 _CATEGORY_KEYWORDS: Dict[CategoryType, List[str]] = {
     CategoryType.USABILITY: [
-        "사용", "편리", "편의", "인터페이스", "UI", "UX", "화면", "메뉴",
+        "사용", "편리", "편의", "인터페이스", "UI", "UX", "메뉴",
         "기능", "조작", "접근", "쉽", "어렵", "복잡", "간편",
     ],
     CategoryType.STABILITY: [
@@ -81,7 +84,7 @@ _CATEGORY_KEYWORDS: Dict[CategoryType, List[str]] = {
         "안정", "불안정", "다운", "멈춤", "튕김",
     ],
     CategoryType.DESIGN: [
-        "디자인", "UI", "화면", "레이아웃", "색상", "폰트", "글자",
+        "디자인", "화면", "레이아웃", "색상", "폰트", "글자",
         "깔끔", "예쁘", "구성", "아이콘",
     ],
     CategoryType.CUSTOMER_SUPPORT: [
@@ -108,9 +111,9 @@ class GoldABSAAnalyzer:
     Orchestrator 단일 건 처리와 standalone 배치 처리 모두 지원.
     """
 
-    def __init__(self, config_path: str = "config/crawler_config.yml"):
+    def __init__(self, config_path: Optional[str] = None):
         self.logger = get_logger(__name__)
-        self.db_connector = DatabaseConnector(config_path)
+        self.db_connector = DatabaseConnector(config_path or "config/crawler_config.yml")
         self._okt = self._init_okt()
 
     # ------------------------------------------------------------------
@@ -126,17 +129,38 @@ class GoldABSAAnalyzer:
             True: 성공(신규 적재 또는 이미 존재)
             False: 실패
         """
-        if self._is_already_analyzed(session, review_id):
-            return True
+        try:
+            if self._is_already_analyzed(session, review_id):
+                return True
 
-        preprocessed = session.get(ReviewPreprocessed, review_id)
-        if preprocessed is None or not preprocessed.refined_text:
-            self.logger.warning(f"[{review_id}] No refined_text — skip")
-            return True
+            preprocessed = session.get(ReviewPreprocessed, review_id)
+            if preprocessed is None:
+                self.logger.warning(f"[{review_id}] No preprocessed record — skip")
+                return True
+            if not preprocessed.refined_text:
+                self.logger.warning(f"[{review_id}] No refined_text — skip")
+                rmi = session.get(ReviewMasterIndex, review_id)
+                if rmi is not None:
+                    rmi.processing_status = ProcessingStatusType.ANALYZED
+                return True
 
-        aspects = self._analyze(session, review_id, preprocessed.refined_text)
-        session.add_all(aspects)
-        return True
+            try:
+                with session.begin_nested():
+                    aspects = self._analyze(session, review_id, preprocessed.refined_text)
+                    session.add_all(aspects)
+                    rmi = session.get(ReviewMasterIndex, review_id)
+                    if rmi is not None:
+                        rmi.processing_status = ProcessingStatusType.ANALYZED
+            except IntegrityError:
+                # 다른 워커가 먼저 삽입 완료 — savepoint는 이미 자동 롤백됨
+                # (review_aspects에 unique constraint 추가 시 활성화)
+                self.logger.info(f"[{review_id}] Duplicate insert detected — already processed")
+                return True
+
+            return True
+        except Exception:
+            self.logger.exception(f"[{review_id}] ABSA analysis failed")
+            return False
 
     def process_batch(self, batch_size: int = 100, limit: Optional[int] = None) -> int:
         """CLEANED 상태이면서 review_aspects 미생성 리뷰를 배치 처리.
@@ -216,21 +240,44 @@ class GoldABSAAnalyzer:
         if self._okt:
             try:
                 nouns = self._okt.nouns(text)
-                # 2글자 이상 + 감성/카테고리 사전에 있는 단어 우선
-                filtered = [n for n in nouns if len(n) >= 2]
-                return list(dict.fromkeys(filtered))[:20]  # 중복 제거, 최대 20개
+                # 감성/카테고리 사전에 있는 단어 우선, 나머지 2글자 이상 명사 보완
+                in_dict = [n for n in nouns if n in _SENTIMENT_DICT or n in _KEYWORD_TO_CATEGORY]
+                in_dict_set = set(in_dict)
+                others = [n for n in nouns if len(n) >= 2 and n not in in_dict_set]
+                filtered = list(dict.fromkeys(in_dict + others))
+                return filtered[:20]  # 최대 20개
             except Exception as e:
                 self.logger.warning(f"Okt.nouns failed: {e} — fallback to dict match")
 
-        # Fallback: 감성 사전 + 카테고리 키워드 사전 직접 매칭
-        found = [w for w in _SENTIMENT_DICT if w in text]
-        found += [w for w in _KEYWORD_TO_CATEGORY if w in text and w not in found]
-        return found[:20]
+        # Fallback: longest-first non-overlapping span matching
+        # (prevents short stems like "안정" from matching inside "불안정한")
+        candidates = sorted(
+            set(_SENTIMENT_DICT) | set(_KEYWORD_TO_CATEGORY),
+            key=len,
+            reverse=True,
+        )
+        found: List[str] = []
+        matched_spans: List[Tuple[int, int]] = []
+        for kw in candidates:
+            start = 0
+            while True:
+                idx = text.find(kw, start)
+                if idx == -1:
+                    break
+                end = idx + len(kw)
+                if not any(s < end and idx < e for s, e in matched_spans):
+                    found.append(kw)
+                    matched_spans.append((idx, end))
+                    break
+                start = idx + 1
+            if len(found) >= 20:
+                break
+        return found
 
     def _has_negation(self, text: str) -> bool:
         """텍스트에 부정어 포함 여부."""
         tokens = text.split()
-        return any(neg in token for token in tokens for neg in _NEGATION_WORDS)
+        return any(token in _NEGATION_WORDS for token in tokens)
 
     def _get_adv_weight(self, text: str) -> float:
         """텍스트에서 가장 강한 부사 가중치 반환. 없으면 1.0."""
@@ -301,7 +348,6 @@ class GoldABSAAnalyzer:
     ) -> List[UUID]:
         """ABSA 미처리 review_id 조회 (CLEANED 상태 기준)."""
         from sqlalchemy import not_, exists
-        from src.models.review_master_index import ReviewMasterIndex
 
         query = (
             session.query(ReviewPreprocessed.review_id)
@@ -318,7 +364,7 @@ class GoldABSAAnalyzer:
                 )
             )
         )
-        if limit:
+        if limit is not None:
             query = query.limit(limit)
         return [row.review_id for row in query.all()]
 
@@ -364,7 +410,7 @@ _ANCHOR_VECTORS: Dict[CategoryType, List[float]] = {
 
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a)) or 1.0
     norm_b = math.sqrt(sum(x * x for x in b)) or 1.0
     return dot / (norm_a * norm_b)

@@ -27,11 +27,9 @@ except ImportError:
 
 try:
     from dotenv import load_dotenv
-    _env_path = Path(__file__).resolve().parents[2] / ".env"
-    if _env_path.exists():
-        load_dotenv(_env_path)
+    _DOTENV_AVAILABLE = True
 except ImportError:
-    pass
+    _DOTENV_AVAILABLE = False
 
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
@@ -58,6 +56,11 @@ class GoldEmbeddingGenerator:
         model_name: str = "text-embedding-3-small",
         config_path: str = "config/crawler_config.yml",
     ):
+        if _DIMENSION_MAP.get(model_name, 1536) != 1536:
+            raise ValueError(
+                f"model '{model_name}' produces {_DIMENSION_MAP[model_name]}-dim vectors; "
+                "review_embeddings only supports 1536. Use text-embedding-3-small."
+            )
         self.model_name = model_name
         self.logger = get_logger(__name__)
         self.db_connector = DatabaseConnector(config_path)
@@ -100,7 +103,7 @@ class GoldEmbeddingGenerator:
         """CLEANED 상태이면서 임베딩이 없는 리뷰를 배치 처리.
 
         Returns:
-            성공적으로 적재된 레코드 수
+            process() 호출 성공 건수 (신규 적재 + skip 포함, 실패 제외)
         """
         session = self.db_connector.get_session()
         try:
@@ -125,7 +128,7 @@ class GoldEmbeddingGenerator:
                     f"Progress: {min(i + batch_size, len(review_ids))}/{len(review_ids)}"
                 )
 
-            self.logger.info(f"Embedding generation complete: {success_count}/{len(review_ids)} succeeded")
+            self.logger.info(f"Embedding generation complete: {success_count}/{len(review_ids)} processed (new inserts + skips)")
             return success_count
 
         except Exception:
@@ -143,6 +146,11 @@ class GoldEmbeddingGenerator:
         if not OPENAI_AVAILABLE:
             self.logger.error("openai package not installed")
             return None
+
+        if _DOTENV_AVAILABLE:
+            env_path = Path(__file__).resolve().parents[2] / ".env"
+            if env_path.exists():
+                load_dotenv(env_path)
 
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:

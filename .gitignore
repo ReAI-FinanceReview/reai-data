@@ -231,3 +231,6 @@ data/
 
 # Git worktrees
 .worktrees/
+
+# Visual Studio Code
+.vscode/

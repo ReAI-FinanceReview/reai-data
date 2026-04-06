@@ -19,7 +19,7 @@ from src.gold.absa_analyzer import (
     _SENTIMENT_DICT,
     _CATEGORY_KEYWORDS,
 )
-from src.models.enums import CategoryType
+from src.models.enums import CategoryType, ProcessingStatusType
 from src.models.review_aspects import ReviewAspect
 
 
@@ -27,12 +27,12 @@ from src.models.review_aspects import ReviewAspect
 # Helpers
 # ─────────────────────────────────────────────
 
-def _make_analyzer() -> GoldABSAAnalyzer:
-    """Create GoldABSAAnalyzer with mocked DB and no Okt."""
+def _make_analyzer(okt_mock=None) -> GoldABSAAnalyzer:
+    """Create GoldABSAAnalyzer with mocked DB and optional Okt mock."""
     analyzer = GoldABSAAnalyzer.__new__(GoldABSAAnalyzer)
     analyzer.logger = MagicMock()
     analyzer.db_connector = MagicMock()
-    analyzer._okt = None  # force dict-match fallback
+    analyzer._okt = okt_mock  # None forces dict-match fallback
     return analyzer
 
 
@@ -165,6 +165,25 @@ class TestKeywordExtraction:
     def test_no_matching_keywords(self):
         assert self.analyzer._extract_keywords("안녕하세요 반갑습니다") == []
 
+    def test_okt_branch_success(self):
+        """KoNLPy nouns returns known list → 2-char+ nouns used."""
+        okt_mock = MagicMock()
+        okt_mock.nouns.return_value = ["편리", "앱", "속도"]
+        analyzer = _make_analyzer(okt_mock=okt_mock)
+        keywords = analyzer._extract_keywords("편리한 앱 속도")
+        assert "편리" in keywords
+        assert "속도" in keywords
+        assert "앱" not in keywords  # single char, filtered out
+
+    def test_okt_branch_exception_falls_back_to_dict(self):
+        """KoNLPy raises exception → fallback to dict-match."""
+        okt_mock = MagicMock()
+        okt_mock.nouns.side_effect = RuntimeError("okt error")
+        analyzer = _make_analyzer(okt_mock=okt_mock)
+        keywords = analyzer._extract_keywords("편리 빠르 앱")
+        assert "편리" in keywords
+        assert "빠르" in keywords
+
 
 # ─────────────────────────────────────────────
 # D. Negation & adverb detection
@@ -195,6 +214,10 @@ class TestNegationAdverb:
     def test_adv_weight_largest_deviation_wins(self):
         """극도로(1.4) > 매우(1.3) → 1.4 wins"""
         assert self.analyzer._get_adv_weight("극도로 매우 불편") == pytest.approx(1.4)
+
+    def test_no_false_positive_negation_in_안정(self):
+        """'안정적' 텍스트에서 '안'을 부정어로 오탐하지 않아야 함."""
+        assert self.analyzer._has_negation("앱이 안정적이고 빠릅니다") is False
 
 
 # ─────────────────────────────────────────────
@@ -258,15 +281,20 @@ class TestProcess:
         result = self.analyzer.process(session, self.review_id)
         assert result is True
         session.add_all.assert_not_called()
+        # No RMI status update when preprocessed record is absent (not a terminal state)
+        assert session.get.call_count == 1
 
     def test_skip_if_empty_refined_text(self):
         session = _make_session(already_analyzed=False)
         preprocessed = MagicMock()
         preprocessed.refined_text = ""
-        session.get.return_value = preprocessed
+        rmi_mock = MagicMock()
+        # First get(ReviewPreprocessed) → preprocessed, second get(ReviewMasterIndex) → rmi_mock
+        session.get.side_effect = [preprocessed, rmi_mock]
         result = self.analyzer.process(session, self.review_id)
         assert result is True
         session.add_all.assert_not_called()
+        assert rmi_mock.processing_status == ProcessingStatusType.ANALYZED
 
     def test_skip_if_no_keywords_found(self):
         session = _make_session(already_analyzed=False)
@@ -283,7 +311,9 @@ class TestProcess:
         session = _make_session(already_analyzed=False)
         preprocessed = MagicMock()
         preprocessed.refined_text = "편리하고 빠른 앱입니다"
-        session.get.return_value = preprocessed
+        rmi_mock = MagicMock()
+        # First get(ReviewPreprocessed) → preprocessed, second get(ReviewMasterIndex) → rmi_mock
+        session.get.side_effect = [preprocessed, rmi_mock]
         result = self.analyzer.process(session, self.review_id)
         assert result is True
         session.add_all.assert_called_once()
@@ -293,3 +323,59 @@ class TestProcess:
             assert isinstance(a, ReviewAspect)
             assert a.review_id == self.review_id
             assert 0.0 <= a.sentiment_score <= 1.0
+        assert rmi_mock.processing_status == ProcessingStatusType.ANALYZED
+
+    def test_analyze_exception_returns_false_and_rollbacks(self):
+        session = _make_session(already_analyzed=False)
+        preprocessed = MagicMock()
+        preprocessed.refined_text = "편리한 앱입니다"
+        session.get.return_value = preprocessed
+        with patch.object(self.analyzer, "_analyze", side_effect=RuntimeError("DB error")):
+            result = self.analyzer.process(session, self.review_id)
+        assert result is False
+        session.begin_nested.assert_called_once()  # savepoint 사용 확인
+        session.rollback.assert_not_called()        # 세션 전체 롤백 없음
+
+    def test_integrity_error_treated_as_already_processed(self):
+        """IntegrityError on insert → duplicate detected, return True (savepoint auto-rolled back)."""
+        from sqlalchemy.exc import IntegrityError
+        session = _make_session(already_analyzed=False)
+        preprocessed = MagicMock()
+        preprocessed.refined_text = "편리한 앱입니다"
+        session.get.return_value = preprocessed
+        # begin_nested context manager raises IntegrityError on __exit__
+        cm = MagicMock()
+        cm.__enter__.return_value = None
+        cm.__exit__.side_effect = IntegrityError("UNIQUE constraint failed", None, None)
+        session.begin_nested.return_value = cm
+        result = self.analyzer.process(session, self.review_id)
+        assert result is True
+        session.rollback.assert_not_called()  # 세션 전체 롤백 없음
+
+
+# ─────────────────────────────────────────────
+# G. process_batch() - 혼합 성공/실패
+# ─────────────────────────────────────────────
+
+class TestProcessBatch:
+    def setup_method(self):
+        self.analyzer = _make_analyzer()
+
+    def test_partial_failure_does_not_rollback_successful_reviews(self):
+        session = MagicMock()
+        self.analyzer.db_connector.get_session.return_value = session
+
+        session.query.return_value.filter.return_value.first.return_value = None
+        preprocessed = MagicMock()
+        preprocessed.refined_text = "편리한 앱"
+        session.get.return_value = preprocessed
+
+        ids = [uuid7(), uuid7()]
+        with patch.object(self.analyzer, "_fetch_pending_review_ids", return_value=ids), \
+             patch.object(self.analyzer, "_analyze",
+                          side_effect=[[MagicMock(spec=ReviewAspect)], RuntimeError("fail")]):
+            count = self.analyzer.process_batch(batch_size=10)
+
+        assert count == 1
+        session.rollback.assert_not_called()  # 세션 전체 롤백 없어야 함
+        session.commit.assert_called_once()   # 성공분은 커밋됨

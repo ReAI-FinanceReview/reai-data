@@ -86,6 +86,7 @@ class TestApplyLfs:
         assert reason == ""
 
     def test_single_bug_keyword_fires(self):
+        # 1 LF fired out of 1 voted → confidence = 1/1 = 1.0
         label, conf, reason = _apply_lfs("버그가 있어요", rating=3)
         assert label == ACTION_REQUIRED
         assert conf == pytest.approx(1.0)
@@ -94,19 +95,22 @@ class TestApplyLfs:
     def test_low_rating_fires(self):
         label, conf, reason = _apply_lfs("잘 쓰고 있어요", rating=1)
         assert label == ACTION_REQUIRED
+        assert conf == pytest.approx(1.0)
         assert "LF_low_rating" in reason
 
     def test_majority_wins(self):
-        # bug + request + low_rating → 3/3 = 1.0
+        # bug + request + low_rating → 3/3 voted = 1.0
         label, conf, reason = _apply_lfs("버그 고쳐줘", rating=2)
         assert label == ACTION_REQUIRED
         assert conf == pytest.approx(1.0)
 
-    def test_minority_loses(self):
-        # only request fires (1/1), but rating=4 → LF_low_rating abstain
-        # bug keyword not present → 1 fired, confidence 1.0
+    def test_single_lf_fires(self):
+        # only request keyword fires; bug/low_rating abstain
+        # confidence = 1 positive / 1 voted = 1.0
         label, conf, reason = _apply_lfs("개선해주세요", rating=4)
-        assert label == ACTION_REQUIRED  # 1 LF fired, 1/1 = 1.0
+        assert label == ACTION_REQUIRED
+        assert conf == pytest.approx(1.0)
+        assert "LF_request_keyword" in reason
 
 
 # ─────────────────────────────────────────────
@@ -242,3 +246,37 @@ class TestProcess:
         session.get.side_effect = RuntimeError("DB 오류")
         result = self.analyzer.process(session, self.review_id)
         assert result is False
+
+    def test_process_batch_partial_failure_preserves_session(self):
+        """성공/실패 혼합 배치에서 세션이 오염되지 않는지 검증.
+
+        process()는 내부 savepoint로 예외를 처리하고 False를 반환하므로
+        process_batch()가 session.rollback()을 호출해선 안 됨.
+        """
+        review_id_ok = uuid7()
+        review_id_fail = uuid7()
+
+        analyzer = _make_analyzer()
+
+        # process()가 savepoint 내에서 예외를 잡아 False 반환 (세션 전체 롤백 없음)
+        def _process_side_effect(session, review_id):
+            if review_id == review_id_ok:
+                return True
+            return False  # 내부 예외를 잡아 False 반환
+
+        analyzer.process = _process_side_effect
+
+        session = MagicMock()
+        analyzer.db_connector.get_session.return_value = session
+
+        with patch.object(
+            analyzer.__class__,
+            "_fetch_pending_ids",
+            return_value=[review_id_ok, review_id_fail],
+        ):
+            processed = analyzer.process_batch(batch_size=10)
+
+        # 성공 1건만 카운트
+        assert processed == 1
+        # 세션 전체 rollback이 호출되지 않아야 함
+        session.rollback.assert_not_called()

@@ -35,14 +35,6 @@ from typing import List, Optional
 from uuid import UUID
 
 try:
-    from snorkel.labeling import labeling_function, LabelingFunction
-    from snorkel.labeling.model import MajorityLabelVoter
-    import numpy as np
-    SNORKEL_AVAILABLE = True
-except ImportError:
-    SNORKEL_AVAILABLE = False
-
-try:
     from openai import OpenAI
     from openai import APIError, RateLimitError
     OPENAI_AVAILABLE = True
@@ -83,7 +75,10 @@ ACTION_REQUIRED = 1
 
 def _lf_bug_keyword(text: str) -> int:
     """버그/오류 키워드가 포함된 리뷰 → 조치 필요."""
-    _BUG_KEYWORDS = {"버그", "팅김", "오류", "에러", "강제종료", "먹통", "충돌", "다운"}
+    _BUG_KEYWORDS = {
+        "버그", "팅김", "오류", "에러", "강제종료", "강제 종료",
+        "먹통", "충돌", "다운됨", "다운돼", "다운되었",
+    }
     if any(kw in text for kw in _BUG_KEYWORDS):
         return ACTION_REQUIRED
     return ABSTAIN
@@ -124,12 +119,13 @@ def _apply_lfs(text: str, rating: int) -> tuple[int, float, str]:
     positive = sum(1 for v in votes.values() if v == ACTION_REQUIRED)
     total_voted = len(fired)
 
-    if total_voted == 0:
+    if not fired:
         return ACTION_NOT_REQUIRED, 0.5, ""
 
+    # confidence = 발화 LF 중 ACTION_REQUIRED 비율 (MajorityLabelVoter)
     confidence = positive / total_voted
     label = ACTION_REQUIRED if confidence >= 0.5 else ACTION_NOT_REQUIRED
-    trigger_reason = ", ".join(fired) if fired else ""
+    trigger_reason = ", ".join(fired)
 
     return label, confidence, trigger_reason
 
@@ -170,15 +166,15 @@ class GoldActionAnalyzer:
             return True
 
         try:
-            record = self._build_record(session, review_id)
+            with session.begin_nested():
+                record = self._build_record(session, review_id)
+                if record is None:
+                    return True  # 데이터 부족 → skip
+                session.merge(record)
         except Exception as exc:
             self.logger.error(f"[{review_id}] ActionAnalyzer 실패: {exc}")
             return False
 
-        if record is None:
-            return True  # 데이터 부족 → skip
-
-        session.merge(record)
         return True
 
     def process_batch(
@@ -251,12 +247,8 @@ class GoldActionAnalyzer:
             return None
 
         text = preprocessed.refined_text
-        avg_sentiment = (
-            sum(a.sentiment_score for a in aspects if a.sentiment_score is not None)
-            / len(aspects)
-            if aspects
-            else 0.5
-        )
+        valid_scores = [a.sentiment_score for a in aspects if a.sentiment_score is not None]
+        avg_sentiment = sum(valid_scores) / len(valid_scores) if valid_scores else 0.5
 
         # 3. is_attention_required (별점-감성 불일치)
         is_attention = self._calc_attention(rating, avg_sentiment)
@@ -299,8 +291,8 @@ class GoldActionAnalyzer:
             return None
 
         prompt = (
-            "다음 금융 앱 리뷰를 한국어 1문장으로 핵심만 요약하세요. "
-            "마침표로 끝내세요.\n\n"
+            "다음 금융 앱 리뷰를 한국어 1문장으로 요약하세요. "
+            "리뷰에 있는 단어와 문구만 사용하여 작성하고, 마침표로 끝내세요.\n\n"
             f"리뷰: {text[:500]}"
         )
 
@@ -323,6 +315,11 @@ class GoldActionAnalyzer:
                     max_tokens=100,
                     temperature=0.3,
                 )
+                if not resp.choices:
+                    log.status = AnalysisStatusType.FAILED
+                    log.error_message = "empty choices in API response"
+                    log.processed_at = datetime.now(timezone.utc)
+                    break
                 summary = resp.choices[0].message.content.strip()
                 log.status = AnalysisStatusType.SUCCESS
                 log.result_payload = {"summary": summary}
@@ -345,7 +342,9 @@ class GoldActionAnalyzer:
 
         if summary is None:
             log.status = AnalysisStatusType.FAILED
-            log.error_message = "max retries exceeded"
+            if not log.error_message:
+                log.error_message = "max retries exceeded"
+            log.processed_at = datetime.now(timezone.utc)
 
         return summary
 
@@ -364,7 +363,11 @@ class GoldActionAnalyzer:
         return row is not None
 
     def _fetch_pending_ids(self, session, limit: Optional[int]) -> List[UUID]:
-        """review_action_analysis에 없는 CLEANED/ANALYZED review_id 조회."""
+        """review_action_analysis에 없는 ANALYZED review_id 조회.
+
+        ABSA(features 스텝) 완료 후 ANALYZED 상태로 전환된 건만 대상으로 처리하여
+        ABSA 미완료 상태에서 action 분석이 조기 실행되는 것을 방지.
+        """
         from sqlalchemy import not_, exists
 
         subq = exists().where(
@@ -372,14 +375,10 @@ class GoldActionAnalyzer:
         )
         q = (
             session.query(ReviewMasterIndex.review_id)
-            .filter(
-                ReviewMasterIndex.processing_status.in_(
-                    [ProcessingStatusType.CLEANED, ProcessingStatusType.ANALYZED]
-                )
-            )
+            .filter(ReviewMasterIndex.processing_status == ProcessingStatusType.ANALYZED)
             .filter(not_(subq))
         )
-        if limit:
+        if limit is not None:
             q = q.limit(limit)
         return [row.review_id for row in q.all()]
 
@@ -393,7 +392,7 @@ class GoldActionAnalyzer:
             return None
         base_url = os.getenv("OPENAI_BASE_URL")
         try:
-            return OpenAI(api_key=api_key, base_url=base_url)
+            return OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
         except Exception as exc:
             self.logger.error(f"OpenAI 클라이언트 초기화 실패: {exc}")
             return None
