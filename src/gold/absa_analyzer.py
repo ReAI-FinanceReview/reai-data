@@ -240,9 +240,12 @@ class GoldABSAAnalyzer:
         if self._okt:
             try:
                 nouns = self._okt.nouns(text)
-                # 2글자 이상 + 감성/카테고리 사전에 있는 단어 우선
-                filtered = [n for n in nouns if len(n) >= 2]
-                return list(dict.fromkeys(filtered))[:20]  # 중복 제거, 최대 20개
+                # 감성/카테고리 사전에 있는 단어 우선, 나머지 2글자 이상 명사 보완
+                in_dict = [n for n in nouns if n in _SENTIMENT_DICT or n in _KEYWORD_TO_CATEGORY]
+                in_dict_set = set(in_dict)
+                others = [n for n in nouns if len(n) >= 2 and n not in in_dict_set]
+                filtered = list(dict.fromkeys(in_dict + others))
+                return filtered[:20]  # 최대 20개
             except Exception as e:
                 self.logger.warning(f"Okt.nouns failed: {e} — fallback to dict match")
 

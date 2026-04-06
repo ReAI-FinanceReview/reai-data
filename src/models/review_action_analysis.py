@@ -44,6 +44,10 @@ class ReviewActionAnalysis(Base):
         Boolean,
         comment='검증 완료 여부'
     )
+    review_summary = Column(
+        Text,
+        comment='LLM이 생성한 1문장 리뷰 요약 (dashboard 표시용)'
+    )
     analyzed_at = Column(
         DateTime(timezone=True),
         comment='분석 시각'
