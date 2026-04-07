@@ -41,6 +41,13 @@ def remove_special_chars(text: str) -> str:
     return re.sub(r'[^\w\s!?.,\[\]]', '', text)
 
 
+def normalize_whitespace(text: str) -> str:
+    """연속 공백·탭·줄바꿈을 단일 공백으로 정규화한다."""
+    if not text:
+        return text
+    return re.sub(r'\s+', ' ', text)
+
+
 _ACCOUNT_PATTERN = re.compile(
     r'(?<!\d)\d{10,14}(?!\d)'
     r'|\b\d{3,6}-\d{2,6}-\d{3,6}\b'
@@ -116,6 +123,7 @@ class ReviewCleaner:
         text = remove_special_chars(text)
         text = self._synonym_processor.replace_keywords(text)
         text = self._profanity_processor.replace_keywords(text)
+        text = normalize_whitespace(text)
         return text.strip()
 
 

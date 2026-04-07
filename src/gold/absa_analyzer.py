@@ -24,7 +24,6 @@ Usage (via orchestrator):
 from __future__ import annotations
 
 import math
-import re
 from typing import Dict, List, Optional, Tuple
 from uuid import UUID
 
@@ -291,19 +290,21 @@ class GoldABSAAnalyzer:
     def _local_context(self, text: str, kw_start: int, kw_end: int) -> str:
         """키워드 위치 주변 ±_CONTEXT_WINDOW 토큰을 추출하여 반환.
 
-        re.finditer로 실제 문자 오프셋을 추적하므로 연속 공백·탭·줄바꿈에도 안전.
+        입력 text는 cleanse 파이프라인에서 공백이 정규화된 상태를 가정한다.
         """
-        token_spans = [(m.group(), m.start(), m.end()) for m in re.finditer(r"\S+", text)]
+        tokens = text.split()
+        pos = 0
         kw_token_idx = -1
-        for i, (_, t_start, t_end) in enumerate(token_spans):
-            if t_start <= kw_start < t_end:
+        for i, token in enumerate(tokens):
+            if pos <= kw_start < pos + len(token):
                 kw_token_idx = i
                 break
+            pos += len(token) + 1  # +1 for single space
         if kw_token_idx == -1:
             return text  # 위치 탐지 실패 시 전체 텍스트 fallback
         w_start = max(0, kw_token_idx - _CONTEXT_WINDOW)
-        w_end = min(len(token_spans), kw_token_idx + _CONTEXT_WINDOW + 1)
-        return " ".join(t for t, _, _ in token_spans[w_start:w_end])
+        w_end = min(len(tokens), kw_token_idx + _CONTEXT_WINDOW + 1)
+        return " ".join(tokens[w_start:w_end])
 
     def _has_negation(self, text: str) -> bool:
         """텍스트에 부정어 포함 여부."""
