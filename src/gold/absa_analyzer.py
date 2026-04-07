@@ -71,6 +71,9 @@ _ADV_WEIGHTS: Dict[str, float] = {
 # 부정어
 _NEGATION_WORDS = {"안", "못", "없", "아니", "않"}
 
+# 키워드별 컨텍스트 윈도우 크기 (±N 토큰)
+_CONTEXT_WINDOW: int = 3
+
 # ----------------------------------------------------------------
 # 카테고리 키워드 사전  {CategoryType: [키워드...]}
 # ----------------------------------------------------------------
@@ -209,15 +212,16 @@ class GoldABSAAnalyzer:
         self, session, review_id: UUID, text: str
     ) -> List[ReviewAspect]:
         """텍스트에서 aspect 목록을 추출하여 ReviewAspect 리스트 반환."""
-        keywords = self._extract_keywords(text)
-        if not keywords:
+        keywords_with_spans = self._extract_keywords_with_spans(text)
+        if not keywords_with_spans:
             return []
 
-        has_negation = self._has_negation(text)
-        adv_weight = self._get_adv_weight(text)
-
         aspects: List[ReviewAspect] = []
-        for keyword in keywords:
+        for keyword, kw_start, kw_end in keywords_with_spans:
+            context = self._local_context(text, kw_start, kw_end)
+            has_negation = self._has_negation(context)
+            adv_weight = self._get_adv_weight(context)
+
             s_base = _SENTIMENT_DICT.get(keyword, 0.5)
             s_final = s_base * adv_weight
             if has_negation:
@@ -237,6 +241,10 @@ class GoldABSAAnalyzer:
 
     def _extract_keywords(self, text: str) -> List[str]:
         """KoNLPy Okt로 명사 추출. unavailable 시 규칙 기반 fallback."""
+        return [kw for kw, _, _ in self._extract_keywords_with_spans(text)]
+
+    def _extract_keywords_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
+        """키워드와 문자 단위 span (start, end)을 함께 반환."""
         if self._okt:
             try:
                 nouns = self._okt.nouns(text)
@@ -244,8 +252,13 @@ class GoldABSAAnalyzer:
                 in_dict = [n for n in nouns if n in _SENTIMENT_DICT or n in _KEYWORD_TO_CATEGORY]
                 in_dict_set = set(in_dict)
                 others = [n for n in nouns if len(n) >= 2 and n not in in_dict_set]
-                filtered = list(dict.fromkeys(in_dict + others))
-                return filtered[:20]  # 최대 20개
+                filtered = list(dict.fromkeys(in_dict + others))[:20]
+                result: List[Tuple[str, int, int]] = []
+                for noun in filtered:
+                    idx = text.find(noun)
+                    if idx != -1:
+                        result.append((noun, idx, idx + len(noun)))
+                return result
             except Exception as e:
                 self.logger.warning(f"Okt.nouns failed: {e} — fallback to dict match")
 
@@ -256,7 +269,7 @@ class GoldABSAAnalyzer:
             key=len,
             reverse=True,
         )
-        found: List[str] = []
+        found: List[Tuple[str, int, int]] = []
         matched_spans: List[Tuple[int, int]] = []
         for kw in candidates:
             start = 0
@@ -266,13 +279,29 @@ class GoldABSAAnalyzer:
                     break
                 end = idx + len(kw)
                 if not any(s < end and idx < e for s, e in matched_spans):
-                    found.append(kw)
+                    found.append((kw, idx, end))
                     matched_spans.append((idx, end))
                     break
                 start = idx + 1
             if len(found) >= 20:
                 break
         return found
+
+    def _local_context(self, text: str, kw_start: int, kw_end: int) -> str:
+        """키워드 위치 주변 ±_CONTEXT_WINDOW 토큰을 추출하여 반환."""
+        tokens = text.split()
+        pos = 0
+        kw_token_idx = -1
+        for i, token in enumerate(tokens):
+            if pos <= kw_start < pos + len(token):
+                kw_token_idx = i
+                break
+            pos += len(token) + 1  # +1 for whitespace
+        if kw_token_idx == -1:
+            return text  # 위치 탐지 실패 시 전체 텍스트 fallback
+        w_start = max(0, kw_token_idx - _CONTEXT_WINDOW)
+        w_end = min(len(tokens), kw_token_idx + _CONTEXT_WINDOW + 1)
+        return " ".join(tokens[w_start:w_end])
 
     def _has_negation(self, text: str) -> bool:
         """텍스트에 부정어 포함 여부."""
