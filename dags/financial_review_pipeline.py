@@ -11,6 +11,7 @@ Steps:
   3. Extract features → review_aspects (Gold ABSA)
   4. Generate embeddings → review_embeddings (Gold)
   5. Gold orchestration → review_embeddings + review_aspects + review_action_analysis
+  6. Gold aggregation → fact_service_review_daily + fact_service_aspect_daily + fact_category_radar_scores + srv_daily_review_list
 """
 import os
 from datetime import datetime, timedelta
