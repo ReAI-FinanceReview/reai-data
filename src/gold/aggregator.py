@@ -92,7 +92,7 @@ class GoldAggregator:
             SELECT
                 DATE_TRUNC('day', rmi.review_created_at)::date AS date,
                 rmi.service_id,
-                rmi.platform_type,
+                ar.platform_type,
                 COUNT(*)                                        AS total_review_cnt,
                 SUM(CASE WHEN raa.is_action_required    THEN 1 ELSE 0 END) AS action_required_cnt,
                 SUM(CASE WHEN raa.is_attention_required THEN 1 ELSE 0 END) AS attention_required_cnt,
@@ -113,7 +113,7 @@ class GoldAggregator:
             WHERE rmi.processing_status = 'ANALYZED'
               AND DATE_TRUNC('day', rmi.review_created_at)::date = :target_date
               AND rmi.service_id IS NOT NULL
-              AND rmi.platform_type IS NOT NULL
+              AND ar.platform_type IS NOT NULL
             GROUP BY 1, 2, 3
             ON CONFLICT (date, service_id, platform_type)
             DO UPDATE SET
