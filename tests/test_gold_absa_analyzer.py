@@ -124,6 +124,32 @@ class TestSentimentCalculation:
         for a in aspects:
             assert 0.0 <= a.sentiment_score <= 1.0
 
+    def test_negation_applies_only_to_nearby_keyword(self):
+        """혼합 감성: '편리한 앱인데 그냥 쓰기 좋고 오류는 안 나요'
+        편리(token 0): window[0:4] = "편리한 앱인데 그냥 쓰기" → 부정어/부사 없음 → 0.85 유지
+        오류(token 5): window[2:9] = "그냥 쓰기 좋고 오류는 안 나요" → "안" 포함 → 반전 0.90
+        """
+        text = "편리한 앱인데 그냥 쓰기 좋고 오류는 안 나요"
+        aspects = self.analyzer._analyze(MagicMock(), uuid7(), text)
+        kw_aspects = {a.keyword: a for a in aspects}
+        assert "편리" in kw_aspects
+        assert "오류" in kw_aspects
+        assert kw_aspects["편리"].sentiment_score == pytest.approx(0.85, abs=1e-4)
+        assert kw_aspects["오류"].sentiment_score == pytest.approx(0.90, abs=1e-4)
+
+    def test_adverb_applies_only_to_nearby_keyword(self):
+        """혼합 강도: '매우 편리한 기능들 좋고 그런데 오류가 있어요'
+        편리(token 1): window[0:5] = "매우 편리한 기능들 좋고 그런데" → "매우"(1.3) → 1.0
+        오류(token 5): window[2:7] = "기능들 좋고 그런데 오류가 있어요" → "매우" 없음 → 0.10 유지
+        """
+        text = "매우 편리한 기능들 좋고 그런데 오류가 있어요"
+        aspects = self.analyzer._analyze(MagicMock(), uuid7(), text)
+        kw_aspects = {a.keyword: a for a in aspects}
+        assert "편리" in kw_aspects
+        assert "오류" in kw_aspects
+        assert kw_aspects["편리"].sentiment_score == pytest.approx(1.0, abs=1e-4)
+        assert kw_aspects["오류"].sentiment_score == pytest.approx(0.10, abs=1e-4)
+
 
 # ─────────────────────────────────────────────
 # C. Keyword extraction (dict-match fallback)

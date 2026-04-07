@@ -41,6 +41,13 @@ def remove_special_chars(text: str) -> str:
     return re.sub(r'[^\w\s!?.,\[\]]', '', text)
 
 
+def normalize_whitespace(text: str) -> str:
+    """연속 공백·탭·줄바꿈을 단일 공백으로 정규화한다."""
+    if not text:
+        return text
+    return re.sub(r'\s+', ' ', text)
+
+
 _ACCOUNT_PATTERN = re.compile(
     r'(?<!\d)\d{10,14}(?!\d)'
     r'|\b\d{3,6}-\d{2,6}-\d{3,6}\b'
@@ -64,7 +71,7 @@ def mask_pii(text: str) -> str:
 
 
 # =========================================================
-# ReviewCleaner: 7-step 정제 파이프라인 클래스
+# ReviewCleaner: 8-step 정제 파이프라인 클래스
 # =========================================================
 
 import json
@@ -75,7 +82,7 @@ class ReviewCleaner:
     """텍스트 정제 파이프라인 클래스.
 
     정제 순서: NFKC → 이모지 제거 → 반복문자 축약 → PII 마스킹
-            특수문자 제거 → 오타 교정 → 비속어 마스킹
+            특수문자 제거 → 오타 교정 → 비속어 마스킹 → 공백 정규화
     """
 
     def __init__(self, synonyms_path: str, profanity_path: str):
@@ -116,6 +123,7 @@ class ReviewCleaner:
         text = remove_special_chars(text)
         text = self._synonym_processor.replace_keywords(text)
         text = self._profanity_processor.replace_keywords(text)
+        text = normalize_whitespace(text)
         return text.strip()
 
 
