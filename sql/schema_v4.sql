@@ -474,7 +474,7 @@ COMMENT ON COLUMN review_llm_analysis_logs.updated_at IS 'DB 수정일';
 
 CREATE TABLE fact_service_review_daily
 (
-  date                   TIMESTAMPTZ NOT NULL,
+  date                   DATE        NOT NULL,
   service_id             UUID        NOT NULL,
   platform_type          platform_type,
   total_review_cnt       INT,
@@ -505,7 +505,7 @@ COMMENT ON COLUMN fact_service_review_daily.action_ratio IS '조치 필요 비�
 
 CREATE TABLE fact_service_aspect_daily
 (
-  date            TIMESTAMPTZ NOT NULL,
+  date            DATE        NOT NULL,
   service_id      UUID        NOT NULL,
   keyword             TEXT        NOT NULL,
   mention_cnt         INT,
@@ -526,7 +526,7 @@ COMMENT ON COLUMN fact_service_aspect_daily.avg_sentiment_score IS '키워드 �
 
 CREATE TABLE fact_category_radar_scores
 (
-  date                TIMESTAMPTZ   NOT NULL,
+  date                DATE          NOT NULL,
   service_id          UUID          NOT NULL,
   category_type       category_type NOT NULL,
   avg_sentiment_score FLOAT,
@@ -557,11 +557,11 @@ CREATE TABLE srv_daily_review_list
   rating                 INT,
   service_id             UUID,
   reviewed_at            TIMESTAMPTZ,
-  date                   TIMESTAMPTZ NOT NULL,
+  date                   DATE        NOT NULL,
   sentiment_score        FLOAT,
   is_action_required     BOOLEAN,
   is_attention_required  BOOLEAN,
-  assigned_dept          TEXT,
+  assigned_dept          TEXT[],
   keyword                TEXT[],
   confidence             FLOAT,
   PRIMARY KEY (review_id, date)
