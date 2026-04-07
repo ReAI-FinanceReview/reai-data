@@ -476,7 +476,7 @@ CREATE TABLE fact_service_review_daily
 (
   date                   DATE        NOT NULL,
   service_id             UUID        NOT NULL,
-  platform_type          platform_type,
+  platform_type          platform_type NOT NULL,
   total_review_cnt       INT,
   action_required_cnt    INT,
   attention_required_cnt INT,
