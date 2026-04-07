@@ -1,6 +1,7 @@
 import pytest
 from src.processing.cleanse import (
     normalize_unicode,
+    normalize_whitespace,
     remove_emojis,
     reduce_repeated_chars,
     remove_special_chars,
@@ -121,6 +122,27 @@ def test_mask_pii_preserves_name():
     result = mask_pii('홍길동씨가 계좌 1234567890으로 이체')
     assert '홍길동' in result
     assert '[ACC]' in result
+
+
+# ========================================
+# normalize_whitespace
+# ========================================
+
+def test_normalize_whitespace_multiple_spaces():
+    assert normalize_whitespace('편리  하고  좋아요') == '편리 하고 좋아요'
+
+def test_normalize_whitespace_tabs_and_newlines():
+    assert normalize_whitespace('편리\t빠르고\n좋아요') == '편리 빠르고 좋아요'
+
+def test_normalize_whitespace_mixed():
+    assert normalize_whitespace('좋은  \t앱\n\n입니다') == '좋은 앱 입니다'
+
+def test_normalize_whitespace_single_space_unchanged():
+    text = '편리하고 빠른 앱'
+    assert normalize_whitespace(text) == text
+
+def test_normalize_whitespace_empty():
+    assert normalize_whitespace('') == ''
 
 
 # ========================================
