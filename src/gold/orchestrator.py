@@ -121,7 +121,7 @@ class GoldOrchestrator:
                 & (ReviewMasterIndex.retry_count < _MAX_RETRY)
             )
         )
-        if limit:
+        if limit is not None:
             query = query.limit(limit)
         return [row.review_id for row in query.all()]
 
