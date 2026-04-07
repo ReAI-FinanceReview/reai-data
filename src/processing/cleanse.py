@@ -71,7 +71,7 @@ def mask_pii(text: str) -> str:
 
 
 # =========================================================
-# ReviewCleaner: 7-step 정제 파이프라인 클래스
+# ReviewCleaner: 8-step 정제 파이프라인 클래스
 # =========================================================
 
 import json
@@ -82,7 +82,7 @@ class ReviewCleaner:
     """텍스트 정제 파이프라인 클래스.
 
     정제 순서: NFKC → 이모지 제거 → 반복문자 축약 → PII 마스킹
-            특수문자 제거 → 오타 교정 → 비속어 마스킹
+            특수문자 제거 → 오타 교정 → 비속어 마스킹 → 공백 정규화
     """
 
     def __init__(self, synonyms_path: str, profanity_path: str):

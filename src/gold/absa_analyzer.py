@@ -218,7 +218,7 @@ class GoldABSAAnalyzer:
 
         aspects: List[ReviewAspect] = []
         for keyword, kw_start, kw_end in keywords_with_spans:
-            context = self._local_context(text, kw_start, kw_end)
+            context = self._local_context(text, kw_start)
             has_negation = self._has_negation(context)
             adv_weight = self._get_adv_weight(context)
 
@@ -287,10 +287,12 @@ class GoldABSAAnalyzer:
                 break
         return found
 
-    def _local_context(self, text: str, kw_start: int, kw_end: int) -> str:
+    def _local_context(self, text: str, kw_start: int) -> str:
         """키워드 위치 주변 ±_CONTEXT_WINDOW 토큰을 추출하여 반환.
 
         입력 text는 cleanse 파이프라인에서 공백이 정규화된 상태를 가정한다.
+        키워드가 텍스트에 여러 번 출현할 경우 첫 번째 위치 기준으로 윈도우를 구성한다.
+        (fallback 경로도 동일 동작 — 키워드당 하나의 span만 기록)
         """
         tokens = text.split()
         pos = 0
