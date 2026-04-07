@@ -88,9 +88,10 @@ gold_analyze = BashOperator(
     task_id='step5_gold_analyze',
     bash_command=(
         f'cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_PATH} -c '
-        '"from src.pipeline.steps import run_gold; '
-        'r = run_gold(batch_size=100); '
-        'print(r.as_dict())"'
+        '"from src.pipeline.steps import run_gold; import sys; '
+        "r = run_gold(batch_size=100); "
+        "print(r.as_dict()); "
+        "sys.exit(0 if r.status == 'success' else 1)\""
     ),
     dag=dag,
     execution_timeout=timedelta(hours=3),
@@ -101,9 +102,10 @@ gold_aggregate = BashOperator(
     task_id='step6_gold_aggregate',
     bash_command=(
         f'cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_PATH} -c '
-        '"from src.pipeline.steps import run_aggregate; '
-        'r = run_aggregate(); '
-        'print(r.as_dict())"'
+        '"from src.pipeline.steps import run_aggregate; import sys; '
+        "r = run_aggregate(target_date='{{ ds }}'); "
+        "print(r.as_dict()); "
+        "sys.exit(0 if r.status == 'success' else 1)\""
     ),
     dag=dag,
     execution_timeout=timedelta(hours=1),
