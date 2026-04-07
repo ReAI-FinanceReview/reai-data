@@ -170,7 +170,7 @@ class GoldAggregator:
             WHERE rmi.processing_status = 'ANALYZED'
               AND DATE_TRUNC('day', rmi.review_created_at)::date = :target_date
               AND rmi.service_id IS NOT NULL
-              AND ra.category IS NOT NULL
+              AND ra.category IN ('USABILITY', 'STABILITY', 'DESIGN', 'CUSTOMER_SUPPORT', 'SPEED')
             GROUP BY 1, 2, 3
             ON CONFLICT (date, service_id, category_type)
             DO UPDATE SET
