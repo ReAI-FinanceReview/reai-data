@@ -474,9 +474,9 @@ COMMENT ON COLUMN review_llm_analysis_logs.updated_at IS 'DB 수정일';
 
 CREATE TABLE fact_service_review_daily
 (
-  date                   TIMESTAMPTZ NOT NULL,
+  date                   DATE        NOT NULL,
   service_id             UUID        NOT NULL,
-  platform_type          platform_type,
+  platform_type          platform_type NOT NULL,
   total_review_cnt       INT,
   action_required_cnt    INT,
   attention_required_cnt INT,
@@ -484,7 +484,7 @@ CREATE TABLE fact_service_review_daily
   neg_count              INT,
   avg_rating             FLOAT,
   action_ratio           FLOAT,
-  PRIMARY KEY (date, service_id)
+  PRIMARY KEY (date, service_id, platform_type)
 );
 
 COMMENT ON TABLE fact_service_review_daily IS '대시보드 주요 통계 (Gold Layer - Daily Aggregation) - Macro-level service health metrics';
@@ -505,11 +505,11 @@ COMMENT ON COLUMN fact_service_review_daily.action_ratio IS '조치 필요 비�
 
 CREATE TABLE fact_service_aspect_daily
 (
-  date            TIMESTAMPTZ NOT NULL,
+  date            DATE        NOT NULL,
   service_id      UUID        NOT NULL,
-  keyword         TEXT        NOT NULL,
-  count           INT,
-  sentiment_score FLOAT,
+  keyword             TEXT        NOT NULL,
+  mention_cnt         INT,
+  avg_sentiment_score FLOAT,
   PRIMARY KEY (date, service_id, keyword)
 );
 
@@ -517,8 +517,8 @@ COMMENT ON TABLE fact_service_aspect_daily IS '키워드 클라우드 (Gold Laye
 COMMENT ON COLUMN fact_service_aspect_daily.date IS '집계 기준 날짜 (UTC)';
 COMMENT ON COLUMN fact_service_aspect_daily.service_id IS '논리적 서비스 ID (FK to app_service)';
 COMMENT ON COLUMN fact_service_aspect_daily.keyword IS '추출된 키워드';
-COMMENT ON COLUMN fact_service_aspect_daily.count IS '키워드 출현 빈도';
-COMMENT ON COLUMN fact_service_aspect_daily.sentiment_score IS '키워드 평균 감성 점수 (0.0 ~ 1.0)';
+COMMENT ON COLUMN fact_service_aspect_daily.mention_cnt IS '키워드 출현 빈도';
+COMMENT ON COLUMN fact_service_aspect_daily.avg_sentiment_score IS '키워드 평균 감성 점수 (0.0 ~ 1.0)';
 
 -- ----------------------------------------
 -- Fact Category Radar Scores (5D Radar Analysis)
@@ -526,18 +526,20 @@ COMMENT ON COLUMN fact_service_aspect_daily.sentiment_score IS '키워드 평균
 
 CREATE TABLE fact_category_radar_scores
 (
-  date        TIMESTAMPTZ   NOT NULL,
-  service_id  UUID          NOT NULL,
-  category_id category_type NOT NULL,
-  avg_score   FLOAT,
-  PRIMARY KEY (date, service_id, category_id)
+  date                DATE          NOT NULL,
+  service_id          UUID          NOT NULL,
+  category_type       category_type NOT NULL,
+  avg_sentiment_score FLOAT,
+  review_cnt          INT           DEFAULT 0,
+  PRIMARY KEY (date, service_id, category_type)
 );
 
 COMMENT ON TABLE fact_category_radar_scores IS '오방성 분석 (Gold Layer - 5D Radar Scores) - 5-dimensional radar chart for service quality analysis';
 COMMENT ON COLUMN fact_category_radar_scores.date IS '집계 기준 날짜 (UTC)';
 COMMENT ON COLUMN fact_category_radar_scores.service_id IS '논리적 서비스 ID (FK to app_service)';
-COMMENT ON COLUMN fact_category_radar_scores.category_id IS '평가 카테고리 (USABILITY / STABILITY / DESIGN / CUSTOMER_SUPPORT / SPEED)';
-COMMENT ON COLUMN fact_category_radar_scores.avg_score IS '카테고리 평균 점수 (0.0 ~ 5.0 or normalized 0.0 ~ 1.0)';
+COMMENT ON COLUMN fact_category_radar_scores.category_type IS '평가 카테고리 (USABILITY / STABILITY / DESIGN / CUSTOMER_SUPPORT / SPEED)';
+COMMENT ON COLUMN fact_category_radar_scores.avg_sentiment_score IS '카테고리 평균 감성 점수 (0.0 ~ 1.0)';
+COMMENT ON COLUMN fact_category_radar_scores.review_cnt IS '해당 카테고리 리뷰 수';
 
 -- ========================================
 -- DATA MART LAYER
@@ -555,12 +557,11 @@ CREATE TABLE srv_daily_review_list
   rating                 INT,
   service_id             UUID,
   reviewed_at            TIMESTAMPTZ,
-  date                   TIMESTAMPTZ NOT NULL,
+  date                   DATE        NOT NULL,
   sentiment_score        FLOAT,
   is_action_required     BOOLEAN,
   is_attention_required  BOOLEAN,
-  storage_path           TEXT,
-  assigned_dept          TEXT,
+  assigned_dept          TEXT[],
   keyword                TEXT[],
   confidence             FLOAT,
   PRIMARY KEY (review_id, date)
@@ -577,7 +578,6 @@ COMMENT ON COLUMN srv_daily_review_list.date IS '파티션 키 (for range partit
 COMMENT ON COLUMN srv_daily_review_list.sentiment_score IS '감성 점수 (from review_aspects)';
 COMMENT ON COLUMN srv_daily_review_list.is_action_required IS '조치 필요 여부 (from review_action_analysis)';
 COMMENT ON COLUMN srv_daily_review_list.is_attention_required IS '주의 필요 여부 (from review_action_analysis)';
-COMMENT ON COLUMN srv_daily_review_list.storage_path IS 'MinIO storage path for full review text (s3://bucket/path/file.parquet)';
 COMMENT ON COLUMN srv_daily_review_list.assigned_dept IS '배정 부서 (denormalized from reviews_assigned)';
 COMMENT ON COLUMN srv_daily_review_list.keyword IS '키워드 배열 (denormalized from review_aspects)';
 COMMENT ON COLUMN srv_daily_review_list.confidence IS '배정 확률 (from reviews_assigned)';

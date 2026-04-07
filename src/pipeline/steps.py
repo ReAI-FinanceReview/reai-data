@@ -71,6 +71,34 @@ def run_generate_embeddings(
     )
 
 
+def run_gold(batch_size: int = 100, limit: Optional[int] = None, config_path: Optional[str] = None) -> RunResult:
+    """Run Gold Layer orchestration step (embedding → ABSA → action analysis)."""
+    from src.gold.orchestrator import GoldOrchestrator
+
+    def _run():
+        result = GoldOrchestrator(config_path).run(batch_size=batch_size, limit=limit)
+        if result["total"] > 0 and result["analyzed"] == 0:
+            raise RuntimeError(f"Gold: 0/{result['total']} succeeded")
+
+    return _handle_step("gold", _run)
+
+
+def run_aggregate(target_date: Optional[str] = None, config_path: Optional[str] = None) -> RunResult:
+    """Run Gold Layer aggregation step (fact tables + serving mart)."""
+    from src.gold.aggregator import GoldAggregator
+    from datetime import date as _date
+
+    parsed_date = None
+    if target_date:
+        from datetime import datetime
+        parsed_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+
+    return _handle_step(
+        "aggregate",
+        lambda: GoldAggregator(config_path).run(target_date=parsed_date or _date.today()),
+    )
+
+
 def run_load(batch_size: int = 100, config_path: Optional[str] = None) -> RunResult:
     """Run Parquet batch → DB load step."""
     from src.loaders.batch_loader import BatchLoader
@@ -92,6 +120,8 @@ def run_steps(
         "features": lambda: run_extract_features(batch_size=batch_size, limit=limit, config_path=config_path),
         "action": lambda: run_action_analysis(batch_size=batch_size, limit=limit, config_path=config_path),
         "embed": lambda: run_generate_embeddings(batch_size=batch_size, limit=limit, model_name=model_name, config_path=config_path),
+        "gold": lambda: run_gold(batch_size=batch_size, limit=limit, config_path=config_path),
+        "aggregate": lambda: run_aggregate(config_path=config_path),
     }
 
     results: List[RunResult] = []
