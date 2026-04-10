@@ -177,6 +177,49 @@ class TestGenerateSummary:
         result = analyzer._generate_summary(session, uuid7(), "리뷰 텍스트")
         assert result is None
 
+    def test_llm_rate_limit_then_success(self):
+        """1차 RateLimitError, 2차 성공 → 요약 반환 및 2회 호출 검증."""
+        try:
+            from openai import RateLimitError as OAIRateLimitError
+        except ImportError:
+            pytest.skip("openai not installed")
+
+        mock_llm = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = "재시도 성공 요약입니다."
+        mock_llm.chat.completions.create.side_effect = [
+            OAIRateLimitError("rate limit", response=MagicMock(), body={}),
+            mock_resp,
+        ]
+
+        analyzer = _make_analyzer(llm_client=mock_llm)
+        session = MagicMock()
+        session.add = MagicMock()
+        session.flush = MagicMock()
+
+        with patch("src.gold.action_analyzer.time.sleep"):
+            result = analyzer._generate_summary(session, uuid7(), "리뷰 텍스트")
+
+        assert result == "재시도 성공 요약입니다."
+        assert mock_llm.chat.completions.create.call_count == 2
+
+    def test_llm_empty_choices_returns_none(self):
+        """API가 choices=[] 를 반환하면 None 반환하고 에러 로그 기록."""
+        mock_llm = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.choices = []
+        mock_llm.chat.completions.create.return_value = mock_resp
+
+        analyzer = _make_analyzer(llm_client=mock_llm)
+        session = MagicMock()
+        session.add = MagicMock()
+        session.flush = MagicMock()
+
+        result = analyzer._generate_summary(session, uuid7(), "리뷰 텍스트")
+
+        assert result is None
+        analyzer.logger.error.assert_called()
+
 
 # ─────────────────────────────────────────────
 # E. process() - single record
