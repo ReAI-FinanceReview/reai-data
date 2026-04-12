@@ -215,10 +215,11 @@ class TestGenerateSummary:
         session.add = MagicMock()
         session.flush = MagicMock()
 
-        result = analyzer._generate_summary(session, uuid7(), "리뷰 텍스트")
+        review_id = uuid7()
+        result = analyzer._generate_summary(session, review_id, "리뷰 텍스트")
 
         assert result is None
-        analyzer.logger.error.assert_called()
+        analyzer.logger.error.assert_any_call(f"[{review_id}] LLM 응답에 choices 없음")
 
 
 # ─────────────────────────────────────────────
