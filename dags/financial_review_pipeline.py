@@ -58,10 +58,10 @@ load_reviews = BashOperator(
 )
 
 # Step 3: Bronze → Silver 클렌징
-# ReviewMasterIndex(RAW Parquet) → reviews_preprocessed, ReviewMasterIndex(CLEANED)
+# Bronze Parquet → Silver(reviews_preprocessed), ReviewMasterIndex 상태 RAW → CLEANED
 cleanse_reviews = BashOperator(
     task_id="cleanse_reviews",
-    bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/cleanse_reviews.py {{{{ ds }}}}",
+    bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/cleanse_reviews.py --date {{{{ ds }}}}",
     dag=dag,
     execution_timeout=timedelta(hours=1),
 )
