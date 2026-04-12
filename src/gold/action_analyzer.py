@@ -69,27 +69,24 @@ ABSTAIN = -1
 ACTION_NOT_REQUIRED = 0
 ACTION_REQUIRED = 1
 
+_BUG_KEYWORDS = {
+    "버그", "팅김", "오류", "에러", "강제종료", "강제 종료",
+    "먹통", "충돌", "다운됨", "다운돼", "다운되었",
+}
+_REQUEST_KEYWORDS = {"해달라", "고쳐줘", "개선해", "부탁", "요청", "수정해", "바꿔줘", "추가해"}
+
 # ──────────────────────────────────────────────
 # Labeling Functions
 # ──────────────────────────────────────────────
 
 def _lf_bug_keyword(text: str) -> int:
     """버그/오류 키워드가 포함된 리뷰 → 조치 필요."""
-    _BUG_KEYWORDS = {
-        "버그", "팅김", "오류", "에러", "강제종료", "강제 종료",
-        "먹통", "충돌", "다운됨", "다운돼", "다운되었",
-    }
-    if any(kw in text for kw in _BUG_KEYWORDS):
-        return ACTION_REQUIRED
-    return ABSTAIN
+    return ACTION_REQUIRED if any(kw in text for kw in _BUG_KEYWORDS) else ABSTAIN
 
 
 def _lf_request_keyword(text: str) -> int:
     """개선/요청 키워드가 포함된 리뷰 → 조치 필요."""
-    _REQUEST_KEYWORDS = {"해달라", "고쳐줘", "개선해", "부탁", "요청", "수정해", "바꿔줘", "추가해"}
-    if any(kw in text for kw in _REQUEST_KEYWORDS):
-        return ACTION_REQUIRED
-    return ABSTAIN
+    return ACTION_REQUIRED if any(kw in text for kw in _REQUEST_KEYWORDS) else ABSTAIN
 
 
 def _lf_low_rating(rating: int) -> int:
@@ -316,6 +313,7 @@ class GoldActionAnalyzer:
                     temperature=0.3,
                 )
                 if not resp.choices:
+                    self.logger.error(f"[{review_id}] LLM 응답에 choices 없음")
                     log.status = AnalysisStatusType.FAILED
                     log.error_message = "empty choices in API response"
                     log.processed_at = datetime.now(timezone.utc)

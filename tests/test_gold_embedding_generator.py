@@ -262,5 +262,34 @@ def test_process_batch_skips_already_embedded(test_db_session):
     assert count == 0  # _fetch_pending_review_ids가 NOT EXISTS로 이미 임베딩된 리뷰를 제외하므로
 
 
+# ============================================================
+# D. _fetch_pending_review_ids() — limit=0 regression
+# ============================================================
+
+def test_fetch_pending_limit_zero_applies_limit():
+    """limit=0 은 falsy지만 .limit(0)이 실제로 적용돼야 한다 (버그 회귀 방지)."""
+    gen = _make_generator()
+    session = MagicMock()
+    # 체인: session.query().join().filter().filter()
+    base_query = session.query.return_value.join.return_value.filter.return_value.filter.return_value
+    base_query.limit.return_value.all.return_value = []
+
+    gen._fetch_pending_review_ids(session, limit=0)
+
+    base_query.limit.assert_called_once_with(0)
+
+
+def test_fetch_pending_limit_none_skips_limit():
+    """limit=None 이면 .limit()이 호출되지 않아야 한다."""
+    gen = _make_generator()
+    session = MagicMock()
+    base_query = session.query.return_value.join.return_value.filter.return_value.filter.return_value
+    base_query.all.return_value = []
+
+    gen._fetch_pending_review_ids(session, limit=None)
+
+    base_query.limit.assert_not_called()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
