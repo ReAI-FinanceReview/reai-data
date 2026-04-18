@@ -14,6 +14,13 @@ def mock_s3():
         yield mock_client
 
 
+@pytest.fixture
+def mock_s3_constructor():
+    with patch('boto3.client') as mock_boto3:
+        mock_boto3.return_value = MagicMock()
+        yield mock_boto3
+
+
 def make_client():
     return MinIOClient(
         endpoint='http://localhost:9000',
@@ -88,3 +95,30 @@ def test_put_parquet_uploads(mock_s3):
     assert kwargs['Key'] == 'silver/reviews/app_id=app1/dt=2026-03-04/refined.parquet'
     assert kwargs['Bucket'] == 'reai-data'
     assert 'Body' in kwargs
+
+
+def test_init_with_endpoint_passes_endpoint_url(mock_s3_constructor):
+    """endpoint 있을 때 endpoint_url이 boto3에 전달된다."""
+    MinIOClient(endpoint='http://localhost:9000', access_key='a', secret_key='b', bucket='test')
+    _, kwargs = mock_s3_constructor.call_args
+    assert kwargs.get('endpoint_url') == 'http://localhost:9000'
+
+
+def test_init_without_endpoint_omits_endpoint_url(mock_s3_constructor):
+    """endpoint 없을 때 endpoint_url이 boto3에 전달되지 않는다."""
+    MinIOClient(endpoint=None, access_key='a', secret_key='b', bucket='test')
+    _, kwargs = mock_s3_constructor.call_args
+    assert 'endpoint_url' not in kwargs
+
+
+def test_init_partial_credentials_raises(mock_s3_constructor):
+    """access_key만 있고 secret_key가 없으면 즉시 ValueError."""
+    with pytest.raises(ValueError, match="둘 다 설정하거나 둘 다 생략"):
+        MinIOClient(endpoint=None, access_key='a', secret_key=None, bucket='test')
+
+
+def test_init_no_credentials_allowed(mock_s3_constructor):
+    """둘 다 None이면 IAM 모드로 정상 초기화된다."""
+    client = MinIOClient(endpoint=None, access_key=None, secret_key=None, bucket='test')
+    assert client.access_key is None
+    assert client.secret_key is None

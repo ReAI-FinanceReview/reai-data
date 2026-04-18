@@ -28,21 +28,34 @@ class MinIOClient:
         secret_key: str = None,
         bucket: str = None,
     ):
-        raw_endpoint = endpoint or os.environ['MINIO_ENDPOINT']
-        if not raw_endpoint.startswith(('http://', 'https://')):
+        raw_endpoint = endpoint or os.environ.get('MINIO_ENDPOINT', '')
+        if raw_endpoint and not raw_endpoint.startswith(('http://', 'https://')):
             use_ssl = os.environ.get('MINIO_USE_SSL', 'false').lower() == 'true'
             scheme = 'https' if use_ssl else 'http'
             raw_endpoint = f'{scheme}://{raw_endpoint}'
-        self.endpoint = raw_endpoint
-        self.access_key = access_key or os.environ['MINIO_ACCESS_KEY']
-        self.secret_key = secret_key or os.environ['MINIO_SECRET_KEY']
+        self.endpoint = raw_endpoint or None
+        self.access_key = access_key or os.environ.get('MINIO_ACCESS_KEY')
+        self.secret_key = secret_key or os.environ.get('MINIO_SECRET_KEY')
         self.bucket = bucket or os.environ['MINIO_BUCKET']
 
-        self._client = boto3.client(
-            's3',
-            endpoint_url=self.endpoint,
+        if bool(self.access_key) != bool(self.secret_key):
+            raise ValueError(
+                "access_key와 secret_key는 둘 다 설정하거나 둘 다 생략해야 합니다 "
+                "(둘 다 생략 시 IAM/기본 인증 체계 사용)."
+            )
+
+        client_kwargs = dict(
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
+        )
+        if self.endpoint:
+            client_kwargs['endpoint_url'] = self.endpoint
+        self._client = boto3.client('s3', **client_kwargs)
+
+        logger.info(
+            f"Initialized MinIOClient: mode={'custom endpoint' if self.endpoint else 'native AWS S3'}, "
+            f"endpoint={self.endpoint}, bucket={self.bucket}, "
+            f"credentials={'set' if self.access_key else 'not set (using IAM/default chain)'}"
         )
 
     def list_objects(self, prefix: str) -> List[str]:
