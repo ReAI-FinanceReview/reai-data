@@ -40,6 +40,13 @@ def test_postgres_and_minio_ports_are_exposed_for_host_use():
     assert compose["services"]["minio"]["ports"] == ["9000:9000", "9001:9001"]
 
 
+def test_minio_images_use_existing_official_tags():
+    compose = load_compose()
+
+    assert compose["services"]["minio"]["image"] == "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+    assert compose["services"]["minio-init"]["image"] == "minio/mc:RELEASE.2025-08-13T08-35-41Z"
+
+
 def test_local_env_template_uses_localhost_endpoints():
     env = read_env_template(".env.local.example")
 
