@@ -39,8 +39,9 @@ class MinIOClient:
         self.bucket = bucket or os.environ['MINIO_BUCKET']
 
         if bool(self.access_key) != bool(self.secret_key):
-            logger.warning(
-                "access_key와 secret_key 중 하나만 설정됨 — boto3가 PartialCredentialsError로 실패할 수 있습니다."
+            raise ValueError(
+                "access_key와 secret_key는 둘 다 설정하거나 둘 다 생략해야 합니다 "
+                "(둘 다 생략 시 IAM/기본 인증 체계 사용)."
             )
 
         client_kwargs = dict(
