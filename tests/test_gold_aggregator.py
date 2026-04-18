@@ -21,10 +21,12 @@ def mock_session():
 
 @pytest.fixture
 def mock_autocommit_connection():
-    conn = MagicMock()
-    conn.__enter__.return_value = conn
-    conn.__exit__.return_value = None
-    return conn
+    manager = MagicMock()
+    connection = MagicMock()
+    manager.__enter__.return_value = connection
+    manager.__exit__.return_value = None
+    manager.connection = connection
+    return manager
 
 
 def _make_aggregator(mock_session, mock_autocommit_connection=None):
@@ -32,7 +34,8 @@ def _make_aggregator(mock_session, mock_autocommit_connection=None):
         MockDB.return_value.get_session.return_value = mock_session
         if mock_autocommit_connection is None:
             mock_autocommit_connection = MagicMock()
-            mock_autocommit_connection.__enter__.return_value = mock_autocommit_connection
+            mock_autocommit_connection.connection = MagicMock()
+            mock_autocommit_connection.__enter__.return_value = mock_autocommit_connection.connection
             mock_autocommit_connection.__exit__.return_value = None
         MockDB.return_value.get_autocommit_connection.return_value = mock_autocommit_connection
         from src.gold.aggregator import GoldAggregator
@@ -203,9 +206,11 @@ class TestEnsurePartition:
         agg._ensure_partition(date(2025, 1, 15))
 
         agg.db_connector.get_autocommit_connection.assert_called_once_with()
+        mock_autocommit_connection.__enter__.assert_called_once_with()
+        mock_autocommit_connection.__exit__.assert_called_once()
         mock_session.execute.assert_not_called()
-        mock_autocommit_connection.execute.assert_called_once()
-        ddl_text = str(mock_autocommit_connection.execute.call_args[0][0])
+        mock_autocommit_connection.connection.execute.assert_called_once()
+        ddl_text = str(mock_autocommit_connection.connection.execute.call_args[0][0])
         assert "srv_daily_review_list_2025_01_15" in ddl_text
         assert "PARTITION OF public.srv_daily_review_list" in ddl_text
 
@@ -217,11 +222,11 @@ class TestEnsurePartition:
 
         agg._ensure_partition(date(2025, 1, 15))
 
-        ddl_text = str(mock_autocommit_connection.execute.call_args[0][0])
+        ddl_text = str(mock_autocommit_connection.connection.execute.call_args[0][0])
         assert "2025-01-15" in ddl_text
         assert "2025-01-16" in ddl_text
         # 파라미터 dict 없이 단일 인자로 호출됨
-        assert len(mock_autocommit_connection.execute.call_args[0]) == 1
+        assert len(mock_autocommit_connection.connection.execute.call_args[0]) == 1
 
     def test_ensure_partition_month_boundary(
         self, mock_session, mock_autocommit_connection
@@ -230,7 +235,7 @@ class TestEnsurePartition:
 
         agg._ensure_partition(date(2025, 1, 31))
 
-        ddl_text = str(mock_autocommit_connection.execute.call_args[0][0])
+        ddl_text = str(mock_autocommit_connection.connection.execute.call_args[0][0])
         assert "2025-01-31" in ddl_text
         assert "2025-02-01" in ddl_text
 
@@ -241,7 +246,7 @@ class TestEnsurePartition:
 
         agg._ensure_partition(date(2025, 1, 15))
 
-        ddl_text = str(mock_autocommit_connection.execute.call_args[0][0])
+        ddl_text = str(mock_autocommit_connection.connection.execute.call_args[0][0])
         assert "public.srv_daily_review_list_2025_01_15" in ddl_text
 
 
@@ -270,7 +275,7 @@ class TestUpsertQueries:
     def test_srv_daily_review_list_executes_sql(self, mock_session, mock_autocommit_connection):
         agg = _make_aggregator(mock_session, mock_autocommit_connection)
         agg._upsert_srv_daily_review_list(mock_session, date(2025, 1, 15))
-        mock_autocommit_connection.execute.assert_called_once()
+        mock_autocommit_connection.connection.execute.assert_called_once()
         assert mock_session.execute.call_count == 1
 
 
