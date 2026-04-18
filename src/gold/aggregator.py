@@ -15,8 +15,8 @@ Usage:
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Optional
+from datetime import date, timedelta
+from typing import List, Optional
 
 from sqlalchemy import text
 
@@ -78,9 +78,74 @@ class GoldAggregator:
         finally:
             session.close()
 
+    def run_all(self) -> dict:
+        """ANALYZED 레코드의 모든 distinct 날짜를 집계 (드레인 모드).
+
+        gold_analyze가 날짜 무관하게 전체 드레인하기 때문에, 재시도로 이전 날짜
+        리뷰가 ANALYZED 되더라도 해당 날짜 집계가 누락되지 않도록 보장합니다.
+
+        Returns:
+            {"dates": list[str], "tables_updated": list[str]}
+        """
+        session = self.db_connector.get_session()
+        try:
+            dates = self._fetch_analyzed_dates(session)
+            if not dates:
+                self.logger.info("Gold Aggregator run_all: 집계 대상 날짜 없음")
+                return {"dates": [], "tables_updated": []}
+
+            self.logger.info(f"Gold Aggregator run_all: {len(dates)}개 날짜 집계 시작")
+            for d in dates:
+                self._upsert_fact_service_review_daily(session, d)
+                self._upsert_fact_service_aspect_daily(session, d)
+                self._upsert_fact_category_radar_scores(session, d)
+                self._upsert_srv_daily_review_list(session, d)
+
+            session.commit()
+            updated_dates = [str(d) for d in dates]
+            self.logger.info(f"Gold Aggregator run_all 완료: dates={updated_dates}")
+            return {
+                "dates": updated_dates,
+                "tables_updated": [
+                    "fact_service_review_daily",
+                    "fact_service_aspect_daily",
+                    "fact_category_radar_scores",
+                    "srv_daily_review_list",
+                ],
+            }
+        except Exception:
+            session.rollback()
+            self.logger.exception("Gold Aggregator run_all 실패")
+            raise
+        finally:
+            session.close()
+
     # ------------------------------------------------------------------
     # Per-table UPSERT helpers
     # ------------------------------------------------------------------
+
+    def _fetch_analyzed_dates(self, session) -> List[date]:
+        """ANALYZED 레코드가 존재하는 모든 distinct 날짜 조회."""
+        sql = text("""
+            SELECT DISTINCT DATE_TRUNC('day', review_created_at)::date AS d
+            FROM review_master_index
+            WHERE processing_status = 'ANALYZED'
+              AND review_created_at IS NOT NULL
+            ORDER BY d
+        """)
+        return [row.d for row in session.execute(sql)]
+
+    def _ensure_partition(self, session, target_date: date) -> None:
+        """srv_daily_review_list 파티션이 없으면 생성."""
+        partition_name = f"srv_daily_review_list_{target_date.strftime('%Y_%m_%d')}"
+        next_date = target_date + timedelta(days=1)
+        ddl = text(
+            f"CREATE TABLE IF NOT EXISTS {partition_name} "
+            f"PARTITION OF srv_daily_review_list "
+            f"FOR VALUES FROM (:start) TO (:end)"
+        )
+        session.execute(ddl, {"start": target_date, "end": next_date})
+        self.logger.debug(f"파티션 확인/생성: {partition_name}")
 
     def _upsert_fact_service_review_daily(self, session, target_date: date) -> None:
         """fact_service_review_daily UPSERT."""
@@ -182,6 +247,7 @@ class GoldAggregator:
 
     def _upsert_srv_daily_review_list(self, session, target_date: date) -> None:
         """srv_daily_review_list UPSERT (비정규화 와이드 테이블)."""
+        self._ensure_partition(session, target_date)
         sql = text("""
             INSERT INTO srv_daily_review_list (
                 review_id, date, service_id, refined_text, review_summary,
