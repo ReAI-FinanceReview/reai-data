@@ -14,6 +14,13 @@ def mock_s3():
         yield mock_client
 
 
+@pytest.fixture
+def mock_s3_constructor():
+    with patch('boto3.client') as mock_boto3:
+        mock_boto3.return_value = MagicMock()
+        yield mock_boto3
+
+
 def make_client():
     return MinIOClient(
         endpoint='http://localhost:9000',
@@ -88,3 +95,17 @@ def test_put_parquet_uploads(mock_s3):
     assert kwargs['Key'] == 'silver/reviews/app_id=app1/dt=2026-03-04/refined.parquet'
     assert kwargs['Bucket'] == 'reai-data'
     assert 'Body' in kwargs
+
+
+def test_init_with_endpoint_passes_endpoint_url(mock_s3_constructor):
+    """endpoint 있을 때 endpoint_url이 boto3에 전달된다."""
+    MinIOClient(endpoint='http://localhost:9000', access_key='a', secret_key='b', bucket='test')
+    _, kwargs = mock_s3_constructor.call_args
+    assert kwargs.get('endpoint_url') == 'http://localhost:9000'
+
+
+def test_init_without_endpoint_omits_endpoint_url(mock_s3_constructor):
+    """endpoint 없을 때 endpoint_url이 boto3에 전달되지 않는다."""
+    MinIOClient(endpoint=None, access_key='a', secret_key='b', bucket='test')
+    _, kwargs = mock_s3_constructor.call_args
+    assert 'endpoint_url' not in kwargs
