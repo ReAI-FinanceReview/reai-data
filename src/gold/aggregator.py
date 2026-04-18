@@ -99,28 +99,40 @@ class GoldAggregator:
         )
         return {"date": str(target_date), "tables_updated": updated, "dropped_partitions": dropped}
 
-    def run_all(self, retention_days: int = 14) -> dict:
-        """ANALYZED 레코드의 모든 distinct 날짜를 집계 (드레인 모드).
+    def run_range(
+        self,
+        start_date: date,
+        end_date: date,
+        retention_days: int = 14,
+    ) -> dict:
+        """ANALYZED 레코드 중 지정 날짜 범위만 집계.
 
-        gold_analyze가 날짜 무관하게 전체 드레인하기 때문에, 재시도로 이전 날짜
-        리뷰가 ANALYZED 되더라도 해당 날짜 집계가 누락되지 않도록 보장합니다.
-
-        날짜별로 독립 커밋하여 중간 실패 시에도 성공한 날짜의 진행 상황을 보존합니다.
-        모든 날짜 집계가 성공한 경우에만 TTL 파티션 삭제를 별도 트랜잭션으로 실행합니다.
-
-        Returns:
-            {"dates": list[str], "failed_dates": list[str], "tables_updated": list[str], "dropped_partitions": int}
+        예외 상황에서 과거 날짜를 명시적으로 재집계할 수 있도록 범위를 제한한다.
+        날짜별로 독립 커밋하여 중간 실패 시에도 성공한 날짜의 진행 상황을 보존한다.
         """
+        if start_date > end_date:
+            raise ValueError("start_date must be on or before end_date")
+
         session = self.db_connector.get_session()
         updated_dates: List[str] = []
         failed_dates: List[str] = []
         try:
-            dates = self._fetch_analyzed_dates(session)
+            dates = self._fetch_analyzed_dates(
+                session,
+                start_date=start_date,
+                end_date=end_date,
+            )
             if not dates:
-                self.logger.info("Gold Aggregator run_all: 집계 대상 날짜 없음")
+                self.logger.info(
+                    "Gold Aggregator run_range: 집계 대상 날짜 없음 "
+                    f"(start_date={start_date}, end_date={end_date})"
+                )
                 return {"dates": [], "failed_dates": [], "tables_updated": [], "dropped_partitions": 0}
 
-            self.logger.info(f"Gold Aggregator run_all: {len(dates)}개 날짜 집계 시작")
+            self.logger.info(
+                "Gold Aggregator run_range: "
+                f"{len(dates)}개 날짜 집계 시작 (start_date={start_date}, end_date={end_date})"
+            )
             for d in dates:
                 try:
                     self._upsert_fact_service_review_daily(session, d)
@@ -131,15 +143,15 @@ class GoldAggregator:
                     updated_dates.append(str(d))
                 except Exception:
                     session.rollback()
-                    self.logger.exception(f"Gold Aggregator run_all 날짜 집계 실패, 스킵: date={d}")
+                    self.logger.exception(f"Gold Aggregator run_range 날짜 집계 실패, 스킵: date={d}")
                     failed_dates.append(str(d))
 
             self.logger.info(
-                f"Gold Aggregator run_all 완료: updated={updated_dates}, failed={failed_dates}"
+                f"Gold Aggregator run_range 완료: updated={updated_dates}, failed={failed_dates}"
             )
             if failed_dates:
                 raise RuntimeError(
-                    f"Gold Aggregator run_all: 일부 날짜 집계 실패 {failed_dates} "
+                    f"Gold Aggregator run_range: 일부 날짜 집계 실패 {failed_dates} "
                     f"(성공: {updated_dates})"
                 )
         finally:
@@ -157,7 +169,7 @@ class GoldAggregator:
             finally:
                 session.close()
         except Exception:
-            self.logger.exception("run_all TTL 파티션 삭제 실패(집계는 성공 커밋됨)")
+            self.logger.exception("run_range TTL 파티션 삭제 실패(집계는 성공 커밋됨)")
 
         return {
             "dates": updated_dates,
@@ -171,20 +183,47 @@ class GoldAggregator:
             "dropped_partitions": dropped,
         }
 
+    def run_all(self, retention_days: int = 14) -> dict:
+        """ANALYZED 레코드의 모든 distinct 날짜를 집계.
+
+        전체 백필이 필요할 때만 명시적으로 사용한다.
+        """
+        return self.run_range(
+            start_date=date.min,
+            end_date=date.max,
+            retention_days=retention_days,
+        )
+
     # ------------------------------------------------------------------
     # Per-table UPSERT helpers
     # ------------------------------------------------------------------
 
-    def _fetch_analyzed_dates(self, session) -> List[date]:
-        """ANALYZED 레코드가 존재하는 모든 distinct 날짜 조회."""
-        sql = text("""
+    def _fetch_analyzed_dates(
+        self,
+        session,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[date]:
+        """ANALYZED 레코드가 존재하는 distinct 날짜 조회."""
+        clauses = [
+            "processing_status = 'ANALYZED'",
+            "review_created_at IS NOT NULL",
+        ]
+        params = {}
+        if start_date is not None:
+            clauses.append("DATE_TRUNC('day', review_created_at)::date >= :start_date")
+            params["start_date"] = start_date
+        if end_date is not None:
+            clauses.append("DATE_TRUNC('day', review_created_at)::date <= :end_date")
+            params["end_date"] = end_date
+
+        sql = text(f"""
             SELECT DISTINCT DATE_TRUNC('day', review_created_at)::date AS d
             FROM review_master_index
-            WHERE processing_status = 'ANALYZED'
-              AND review_created_at IS NOT NULL
+            WHERE {' AND '.join(clauses)}
             ORDER BY d
         """)
-        return [row.d for row in session.execute(sql)]
+        return [row.d for row in session.execute(sql, params)]
 
     def _drop_old_partitions(self, session, retention_days: int = 14) -> int:
         """retention_days 초과 파티션 DROP.
