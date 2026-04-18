@@ -100,11 +100,11 @@ class TestRun:
 
 
 # ---------------------------------------------------------------------------
-# run_all() — #57 드레인 모드
+# run_range() / run_all()
 # ---------------------------------------------------------------------------
 
-class TestRunAll:
-    def test_run_all_aggregates_all_analyzed_dates(self, mock_session):
+class TestRunRange:
+    def test_run_range_aggregates_only_bounded_analyzed_dates(self, mock_session):
         agg = _make_aggregator(mock_session)
         dates = [date(2025, 1, 13), date(2025, 1, 14), date(2025, 1, 15)]
         agg._fetch_analyzed_dates = MagicMock(return_value=dates)
@@ -114,8 +114,13 @@ class TestRunAll:
         agg._upsert_srv_daily_review_list = MagicMock()
         agg._drop_old_partitions = MagicMock(return_value=2)
 
-        result = agg.run_all()
+        result = agg.run_range(date(2025, 1, 13), date(2025, 1, 15))
 
+        agg._fetch_analyzed_dates.assert_called_once_with(
+            mock_session,
+            start_date=date(2025, 1, 13),
+            end_date=date(2025, 1, 15),
+        )
         assert agg._upsert_fact_service_review_daily.call_count == 3
         assert agg._upsert_srv_daily_review_list.call_count == 3
         assert result["dates"] == ["2025-01-13", "2025-01-14", "2025-01-15"]
@@ -123,18 +128,18 @@ class TestRunAll:
         assert "fact_service_review_daily" in result["tables_updated"]
         assert result["dropped_partitions"] == 2
 
-    def test_run_all_empty_returns_early(self, mock_session):
+    def test_run_range_empty_returns_early(self, mock_session):
         agg = _make_aggregator(mock_session)
         agg._fetch_analyzed_dates = MagicMock(return_value=[])
 
-        result = agg.run_all()
+        result = agg.run_range(date(2025, 1, 13), date(2025, 1, 15))
 
         assert result["dates"] == []
         assert result["failed_dates"] == []
         assert result["dropped_partitions"] == 0
         mock_session.commit.assert_not_called()
 
-    def test_run_all_commits_per_date(self, mock_session):
+    def test_run_range_commits_per_date(self, mock_session):
         """날짜별 독립 커밋 3회 + TTL 커밋 1회 = 총 4회."""
         agg = _make_aggregator(mock_session)
         agg._fetch_analyzed_dates = MagicMock(
@@ -149,12 +154,12 @@ class TestRunAll:
         ):
             setattr(agg, method, MagicMock(return_value=0))
 
-        agg.run_all()
+        agg.run_range(date(2025, 1, 13), date(2025, 1, 15))
 
         assert mock_session.commit.call_count == 4  # 3 per-date + 1 TTL
         assert mock_session.close.call_count == 2   # 집계 세션 + TTL 세션
 
-    def test_run_all_raises_if_any_date_failed(self, mock_session):
+    def test_run_range_raises_if_any_date_failed(self, mock_session):
         """실패 날짜 존재 시 RuntimeError — DAG가 실패로 인식하도록."""
         agg = _make_aggregator(mock_session)
         dates = [date(2025, 1, 13), date(2025, 1, 14), date(2025, 1, 15)]
@@ -169,12 +174,33 @@ class TestRunAll:
         agg._upsert_srv_daily_review_list = MagicMock()
 
         with pytest.raises(RuntimeError, match="2025-01-14"):
-            agg.run_all()
+            agg.run_range(date(2025, 1, 13), date(2025, 1, 15))
 
         # 성공 날짜는 이미 commit, 실패 날짜는 rollback — 부분 성공 보존됨
         assert mock_session.commit.call_count == 2
         assert mock_session.rollback.call_count == 1
         mock_session.close.assert_called_once()
+
+    def test_run_range_rejects_reversed_bounds(self, mock_session):
+        agg = _make_aggregator(mock_session)
+
+        with pytest.raises(ValueError, match="start_date must be on or before end_date"):
+            agg.run_range(date(2025, 1, 15), date(2025, 1, 13))
+
+
+class TestRunAll:
+    def test_run_all_delegates_to_full_range_fetch(self, mock_session):
+        agg = _make_aggregator(mock_session)
+        agg._fetch_analyzed_dates = MagicMock(return_value=[])
+
+        result = agg.run_all()
+
+        agg._fetch_analyzed_dates.assert_called_once_with(
+            mock_session,
+            start_date=date.min,
+            end_date=date.max,
+        )
+        assert result["dates"] == []
 
 
 # ---------------------------------------------------------------------------

@@ -81,9 +81,9 @@ gold_analyze = BashOperator(
     execution_timeout=timedelta(hours=3),
 )
 
-# Step 5: Gold 집계 (드레인 모드)
-# ANALYZED 레코드의 모든 distinct 날짜를 집계 — gold_analyze가 날짜 무관하게 전체
-# 드레인하므로, 재시도로 이전 날짜 리뷰가 ANALYZED 되더라도 집계 누락 방지.
+# Step 5: Gold 집계
+# 기본은 DAG 실행일 기준 단일 날짜 집계.
+# 과거 날짜 복구가 필요할 때만 start_date/end_date 범위 백필을 수동 실행한다.
 # UPSERT: fact_service_review_daily, fact_service_aspect_daily,
 #          fact_category_radar_scores, srv_daily_review_list
 gold_aggregate = BashOperator(
@@ -91,7 +91,7 @@ gold_aggregate = BashOperator(
     bash_command=(
         f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} -c "
         '"from src.pipeline.steps import run_aggregate; import sys; '
-        "r = run_aggregate(); "
+        "r = run_aggregate(target_date='{{ ds }}'); "
         "print(r.as_dict()); "
         "sys.exit(0 if r.status == 'success' else 1)\""
     ),

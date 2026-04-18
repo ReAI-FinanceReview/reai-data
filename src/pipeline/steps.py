@@ -83,21 +83,47 @@ def run_gold(batch_size: int = 100, limit: Optional[int] = None, config_path: Op
     return _handle_step("gold", _run)
 
 
-def run_aggregate(target_date: Optional[str] = None, config_path: Optional[str] = None) -> RunResult:
-    """Run Gold Layer aggregation step (fact tables + serving mart).
-
-    target_date 미지정 시 드레인 모드: ANALYZED 레코드의 모든 distinct 날짜를 집계.
-    gold_analyze가 날짜 무관하게 전체 드레인하므로, 재시도로 이전 날짜 리뷰가
-    ANALYZED 되더라도 집계 누락이 발생하지 않습니다.
-    """
+def run_aggregate(
+    target_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    config_path: Optional[str] = None,
+) -> RunResult:
+    """Run Gold Layer aggregation step (fact tables + serving mart)."""
     from src.gold.aggregator import GoldAggregator
+    from datetime import date as _date
+    from datetime import datetime
+
+    if target_date and (start_date or end_date):
+        return RunResult(
+            step="aggregate",
+            status="failed",
+            message="target_date cannot be combined with start_date/end_date",
+        )
+
+    if bool(start_date) ^ bool(end_date):
+        return RunResult(
+            step="aggregate",
+            status="failed",
+            message="start_date and end_date must be provided together",
+        )
 
     if target_date:
-        from datetime import datetime
         parsed_date = datetime.strptime(target_date, "%Y-%m-%d").date()
         return _handle_step("aggregate", lambda: GoldAggregator(config_path).run(target_date=parsed_date))
 
-    return _handle_step("aggregate", lambda: GoldAggregator(config_path).run_all())
+    if start_date and end_date:
+        parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        return _handle_step(
+            "aggregate",
+            lambda: GoldAggregator(config_path).run_range(
+                start_date=parsed_start,
+                end_date=parsed_end,
+            ),
+        )
+
+    return _handle_step("aggregate", lambda: GoldAggregator(config_path).run(target_date=_date.today()))
 
 
 def run_load(batch_size: int = 100, config_path: Optional[str] = None) -> RunResult:
