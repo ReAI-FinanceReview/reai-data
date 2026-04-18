@@ -28,22 +28,23 @@ class MinIOClient:
         secret_key: str = None,
         bucket: str = None,
     ):
-        raw_endpoint = endpoint or os.environ['MINIO_ENDPOINT']
-        if not raw_endpoint.startswith(('http://', 'https://')):
+        raw_endpoint = endpoint or os.environ.get('MINIO_ENDPOINT', '')
+        if raw_endpoint and not raw_endpoint.startswith(('http://', 'https://')):
             use_ssl = os.environ.get('MINIO_USE_SSL', 'false').lower() == 'true'
             scheme = 'https' if use_ssl else 'http'
             raw_endpoint = f'{scheme}://{raw_endpoint}'
-        self.endpoint = raw_endpoint
-        self.access_key = access_key or os.environ['MINIO_ACCESS_KEY']
-        self.secret_key = secret_key or os.environ['MINIO_SECRET_KEY']
+        self.endpoint = raw_endpoint or None
+        self.access_key = access_key or os.environ.get('MINIO_ACCESS_KEY')
+        self.secret_key = secret_key or os.environ.get('MINIO_SECRET_KEY')
         self.bucket = bucket or os.environ['MINIO_BUCKET']
 
-        self._client = boto3.client(
-            's3',
-            endpoint_url=self.endpoint,
+        client_kwargs = dict(
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
         )
+        if self.endpoint:
+            client_kwargs['endpoint_url'] = self.endpoint
+        self._client = boto3.client('s3', **client_kwargs)
 
     def list_objects(self, prefix: str) -> List[str]:
         """주어진 prefix의 모든 객체 키를 반환한다 (1000개 초과 페이지네이션 지원)."""
