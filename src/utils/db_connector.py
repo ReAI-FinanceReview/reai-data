@@ -2,6 +2,8 @@
 데이터베이스 연결 유틸리티
 """
 import os
+from contextlib import contextmanager
+
 import yaml
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
@@ -82,6 +84,12 @@ class DatabaseConnector:
     def get_session(self):
         """데이터베이스 세션을 반환합니다."""
         return self.Session()
+
+    @contextmanager
+    def get_autocommit_connection(self):
+        """DDL처럼 즉시 커밋이 필요한 작업용 autocommit 연결을 반환합니다."""
+        with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            yield conn
 
     def create_tables(self, base):
         """테이블을 생성합니다."""

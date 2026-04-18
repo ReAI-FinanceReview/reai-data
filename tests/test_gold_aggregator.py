@@ -19,9 +19,22 @@ def mock_session():
     return session
 
 
-def _make_aggregator(mock_session):
+@pytest.fixture
+def mock_autocommit_connection():
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.__exit__.return_value = None
+    return conn
+
+
+def _make_aggregator(mock_session, mock_autocommit_connection=None):
     with patch("src.gold.aggregator.DatabaseConnector") as MockDB:
         MockDB.return_value.get_session.return_value = mock_session
+        if mock_autocommit_connection is None:
+            mock_autocommit_connection = MagicMock()
+            mock_autocommit_connection.__enter__.return_value = mock_autocommit_connection
+            mock_autocommit_connection.__exit__.return_value = None
+        MockDB.return_value.get_autocommit_connection.return_value = mock_autocommit_connection
         from src.gold.aggregator import GoldAggregator
         agg = GoldAggregator.__new__(GoldAggregator)
         agg.logger = MagicMock()
@@ -182,35 +195,53 @@ class TestRunAll:
 # ---------------------------------------------------------------------------
 
 class TestEnsurePartition:
-    def test_ensure_partition_executes_ddl(self, mock_session):
-        agg = _make_aggregator(mock_session)
-        agg._ensure_partition(mock_session, date(2025, 1, 15))
-        mock_session.execute.assert_called_once()
-        ddl_text = str(mock_session.execute.call_args[0][0])
+    def test_ensure_partition_executes_ddl_in_autocommit_connection(
+        self, mock_session, mock_autocommit_connection
+    ):
+        agg = _make_aggregator(mock_session, mock_autocommit_connection)
+
+        agg._ensure_partition(date(2025, 1, 15))
+
+        agg.db_connector.get_autocommit_connection.assert_called_once_with()
+        mock_session.execute.assert_not_called()
+        mock_autocommit_connection.execute.assert_called_once()
+        ddl_text = str(mock_autocommit_connection.execute.call_args[0][0])
         assert "srv_daily_review_list_2025_01_15" in ddl_text
         assert "PARTITION OF public.srv_daily_review_list" in ddl_text
 
-    def test_ensure_partition_embeds_literal_date_bounds(self, mock_session):
+    def test_ensure_partition_embeds_literal_date_bounds(
+        self, mock_session, mock_autocommit_connection
+    ):
         """FOR VALUES FROM/TO는 bind parameter 불가 — ISO 날짜 리터럴로 직접 삽입."""
-        agg = _make_aggregator(mock_session)
-        agg._ensure_partition(mock_session, date(2025, 1, 15))
-        ddl_text = str(mock_session.execute.call_args[0][0])
+        agg = _make_aggregator(mock_session, mock_autocommit_connection)
+
+        agg._ensure_partition(date(2025, 1, 15))
+
+        ddl_text = str(mock_autocommit_connection.execute.call_args[0][0])
         assert "2025-01-15" in ddl_text
         assert "2025-01-16" in ddl_text
         # 파라미터 dict 없이 단일 인자로 호출됨
-        assert len(mock_session.execute.call_args[0]) == 1
+        assert len(mock_autocommit_connection.execute.call_args[0]) == 1
 
-    def test_ensure_partition_month_boundary(self, mock_session):
-        agg = _make_aggregator(mock_session)
-        agg._ensure_partition(mock_session, date(2025, 1, 31))
-        ddl_text = str(mock_session.execute.call_args[0][0])
+    def test_ensure_partition_month_boundary(
+        self, mock_session, mock_autocommit_connection
+    ):
+        agg = _make_aggregator(mock_session, mock_autocommit_connection)
+
+        agg._ensure_partition(date(2025, 1, 31))
+
+        ddl_text = str(mock_autocommit_connection.execute.call_args[0][0])
         assert "2025-01-31" in ddl_text
         assert "2025-02-01" in ddl_text
 
-    def test_ensure_partition_includes_public_schema(self, mock_session):
-        agg = _make_aggregator(mock_session)
-        agg._ensure_partition(mock_session, date(2025, 1, 15))
-        ddl_text = str(mock_session.execute.call_args[0][0])
+    def test_ensure_partition_includes_public_schema(
+        self, mock_session, mock_autocommit_connection
+    ):
+        agg = _make_aggregator(mock_session, mock_autocommit_connection)
+
+        agg._ensure_partition(date(2025, 1, 15))
+
+        ddl_text = str(mock_autocommit_connection.execute.call_args[0][0])
         assert "public.srv_daily_review_list_2025_01_15" in ddl_text
 
 
@@ -236,11 +267,11 @@ class TestUpsertQueries:
         agg._upsert_fact_category_radar_scores(mock_session, date(2025, 1, 15))
         mock_session.execute.assert_called_once()
 
-    def test_srv_daily_review_list_executes_sql(self, mock_session):
-        agg = _make_aggregator(mock_session)
+    def test_srv_daily_review_list_executes_sql(self, mock_session, mock_autocommit_connection):
+        agg = _make_aggregator(mock_session, mock_autocommit_connection)
         agg._upsert_srv_daily_review_list(mock_session, date(2025, 1, 15))
-        # _ensure_partition(DDL) + INSERT = 2 calls
-        assert mock_session.execute.call_count == 2
+        mock_autocommit_connection.execute.assert_called_once()
+        assert mock_session.execute.call_count == 1
 
 
 # ---------------------------------------------------------------------------
