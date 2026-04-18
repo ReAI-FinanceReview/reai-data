@@ -38,14 +38,15 @@ class GoldAggregator:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, target_date: Optional[date] = None) -> dict:
+    def run(self, target_date: Optional[date] = None, retention_days: int = 14) -> dict:
         """target_date 기준 집계 실행.
 
         Args:
             target_date: 집계할 날짜. None이면 오늘 날짜 사용.
+            retention_days: 파티션 보존 기간(일). 기본 14일.
 
         Returns:
-            {"date": str, "tables_updated": list[str]}
+            {"date": str, "tables_updated": list[str], "dropped_partitions": int}
         """
         if target_date is None:
             target_date = date.today()
@@ -67,9 +68,14 @@ class GoldAggregator:
             self._upsert_srv_daily_review_list(session, target_date)
             updated.append("srv_daily_review_list")
 
+            dropped = self._drop_old_partitions(session, retention_days)
+
             session.commit()
-            self.logger.info(f"Gold Aggregator 완료: date={target_date}, tables={updated}")
-            return {"date": str(target_date), "tables_updated": updated}
+            self.logger.info(
+                f"Gold Aggregator 완료: date={target_date}, tables={updated}, "
+                f"dropped_partitions={dropped}"
+            )
+            return {"date": str(target_date), "tables_updated": updated, "dropped_partitions": dropped}
 
         except Exception:
             session.rollback()
@@ -147,6 +153,32 @@ class GoldAggregator:
             ORDER BY d
         """)
         return [row.d for row in session.execute(sql)]
+
+    def _drop_old_partitions(self, session, retention_days: int = 14) -> int:
+        """retention_days 초과 파티션 DROP.
+
+        pg_catalog.pg_inherits 에서 srv_daily_review_list 자식 파티션 목록을 조회하고,
+        파티션명에서 날짜를 파싱하여 cutoff 이전 파티션을 삭제한다.
+        """
+        cutoff = date.today() - timedelta(days=retention_days)
+        sql = text(r"""
+            SELECT c.relname
+            FROM pg_catalog.pg_inherits i
+            JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid
+            JOIN pg_catalog.pg_class p ON p.oid = i.inhparentid
+            WHERE p.relname = 'srv_daily_review_list'
+              AND c.relname ~ '^srv_daily_review_list_\d{4}_\d{2}_\d{2}$'
+        """)
+        rows = session.execute(sql).fetchall()
+        dropped = 0
+        for (relname,) in rows:
+            date_part = relname[len("srv_daily_review_list_"):]
+            partition_date = date.fromisoformat(date_part.replace("_", "-"))
+            if partition_date < cutoff:
+                session.execute(text(f"DROP TABLE IF EXISTS public.{relname}"))
+                self.logger.info(f"파티션 삭제: {relname}")
+                dropped += 1
+        return dropped
 
     def _ensure_partition(self, session, target_date: date) -> None:
         """srv_daily_review_list 파티션이 없으면 생성.
