@@ -78,17 +78,20 @@ class GoldAggregator:
             session.close()
 
         dropped = 0
-        session = self.db_connector.get_session()
         try:
-            dropped = self._drop_old_partitions(session, retention_days)
-            session.commit()
+            session = self.db_connector.get_session()
+            try:
+                dropped = self._drop_old_partitions(session, retention_days)
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
         except Exception:
-            session.rollback()
             self.logger.exception(
                 f"TTL 파티션 삭제 실패(집계는 성공 커밋됨): target_date={target_date}"
             )
-        finally:
-            session.close()
 
         self.logger.info(
             f"Gold Aggregator 완료: date={target_date}, tables={updated}, "
@@ -103,7 +106,7 @@ class GoldAggregator:
         리뷰가 ANALYZED 되더라도 해당 날짜 집계가 누락되지 않도록 보장합니다.
 
         날짜별로 독립 커밋하여 중간 실패 시에도 성공한 날짜의 진행 상황을 보존합니다.
-        집계 루프 완료 후 TTL 파티션 삭제를 별도 트랜잭션으로 실행합니다.
+        모든 날짜 집계가 성공한 경우에만 TTL 파티션 삭제를 별도 트랜잭션으로 실행합니다.
 
         Returns:
             {"dates": list[str], "failed_dates": list[str], "tables_updated": list[str], "dropped_partitions": int}
@@ -143,15 +146,18 @@ class GoldAggregator:
             session.close()
 
         dropped = 0
-        session = self.db_connector.get_session()
         try:
-            dropped = self._drop_old_partitions(session, retention_days)
-            session.commit()
+            session = self.db_connector.get_session()
+            try:
+                dropped = self._drop_old_partitions(session, retention_days)
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
         except Exception:
-            session.rollback()
             self.logger.exception("run_all TTL 파티션 삭제 실패(집계는 성공 커밋됨)")
-        finally:
-            session.close()
 
         return {
             "dates": updated_dates,
