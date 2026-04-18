@@ -38,14 +38,15 @@ class GoldAggregator:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, target_date: Optional[date] = None) -> dict:
+    def run(self, target_date: Optional[date] = None, retention_days: int = 14) -> dict:
         """target_date 기준 집계 실행.
 
         Args:
             target_date: 집계할 날짜. None이면 오늘 날짜 사용.
+            retention_days: 파티션 보존 기간(일). 기본 14일.
 
         Returns:
-            {"date": str, "tables_updated": list[str]}
+            {"date": str, "tables_updated": list[str], "dropped_partitions": int}
         """
         if target_date is None:
             target_date = date.today()
@@ -68,8 +69,6 @@ class GoldAggregator:
             updated.append("srv_daily_review_list")
 
             session.commit()
-            self.logger.info(f"Gold Aggregator 완료: date={target_date}, tables={updated}")
-            return {"date": str(target_date), "tables_updated": updated}
 
         except Exception:
             session.rollback()
@@ -78,16 +77,39 @@ class GoldAggregator:
         finally:
             session.close()
 
-    def run_all(self) -> dict:
+        dropped = 0
+        try:
+            session = self.db_connector.get_session()
+            try:
+                dropped = self._drop_old_partitions(session, retention_days)
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        except Exception:
+            self.logger.exception(
+                f"TTL 파티션 삭제 실패(집계는 성공 커밋됨): target_date={target_date}"
+            )
+
+        self.logger.info(
+            f"Gold Aggregator 완료: date={target_date}, tables={updated}, "
+            f"dropped_partitions={dropped}"
+        )
+        return {"date": str(target_date), "tables_updated": updated, "dropped_partitions": dropped}
+
+    def run_all(self, retention_days: int = 14) -> dict:
         """ANALYZED 레코드의 모든 distinct 날짜를 집계 (드레인 모드).
 
         gold_analyze가 날짜 무관하게 전체 드레인하기 때문에, 재시도로 이전 날짜
         리뷰가 ANALYZED 되더라도 해당 날짜 집계가 누락되지 않도록 보장합니다.
 
         날짜별로 독립 커밋하여 중간 실패 시에도 성공한 날짜의 진행 상황을 보존합니다.
+        모든 날짜 집계가 성공한 경우에만 TTL 파티션 삭제를 별도 트랜잭션으로 실행합니다.
 
         Returns:
-            {"dates": list[str], "failed_dates": list[str], "tables_updated": list[str]}
+            {"dates": list[str], "failed_dates": list[str], "tables_updated": list[str], "dropped_partitions": int}
         """
         session = self.db_connector.get_session()
         updated_dates: List[str] = []
@@ -96,7 +118,7 @@ class GoldAggregator:
             dates = self._fetch_analyzed_dates(session)
             if not dates:
                 self.logger.info("Gold Aggregator run_all: 집계 대상 날짜 없음")
-                return {"dates": [], "failed_dates": [], "tables_updated": []}
+                return {"dates": [], "failed_dates": [], "tables_updated": [], "dropped_partitions": 0}
 
             self.logger.info(f"Gold Aggregator run_all: {len(dates)}개 날짜 집계 시작")
             for d in dates:
@@ -120,18 +142,34 @@ class GoldAggregator:
                     f"Gold Aggregator run_all: 일부 날짜 집계 실패 {failed_dates} "
                     f"(성공: {updated_dates})"
                 )
-            return {
-                "dates": updated_dates,
-                "failed_dates": failed_dates,
-                "tables_updated": [
-                    "fact_service_review_daily",
-                    "fact_service_aspect_daily",
-                    "fact_category_radar_scores",
-                    "srv_daily_review_list",
-                ],
-            }
         finally:
             session.close()
+
+        dropped = 0
+        try:
+            session = self.db_connector.get_session()
+            try:
+                dropped = self._drop_old_partitions(session, retention_days)
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        except Exception:
+            self.logger.exception("run_all TTL 파티션 삭제 실패(집계는 성공 커밋됨)")
+
+        return {
+            "dates": updated_dates,
+            "failed_dates": failed_dates,
+            "tables_updated": [
+                "fact_service_review_daily",
+                "fact_service_aspect_daily",
+                "fact_category_radar_scores",
+                "srv_daily_review_list",
+            ],
+            "dropped_partitions": dropped,
+        }
 
     # ------------------------------------------------------------------
     # Per-table UPSERT helpers
@@ -147,6 +185,32 @@ class GoldAggregator:
             ORDER BY d
         """)
         return [row.d for row in session.execute(sql)]
+
+    def _drop_old_partitions(self, session, retention_days: int = 14) -> int:
+        """retention_days 초과 파티션 DROP.
+
+        pg_catalog.pg_inherits 에서 srv_daily_review_list 자식 파티션 목록을 조회하고,
+        파티션명에서 날짜를 파싱하여 cutoff 이전 파티션을 삭제한다.
+        """
+        cutoff = date.today() - timedelta(days=retention_days)
+        sql = text(r"""
+            SELECT c.relname
+            FROM pg_catalog.pg_inherits i
+            JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid
+            JOIN pg_catalog.pg_class p ON p.oid = i.inhparentid
+            WHERE p.relname = 'srv_daily_review_list'
+              AND c.relname ~ '^srv_daily_review_list_\d{4}_\d{2}_\d{2}$'
+        """)
+        rows = session.execute(sql).fetchall()
+        dropped = 0
+        for (relname,) in rows:
+            date_part = relname[len("srv_daily_review_list_"):]
+            partition_date = date.fromisoformat(date_part.replace("_", "-"))
+            if partition_date < cutoff:
+                session.execute(text(f"DROP TABLE IF EXISTS public.{relname}"))
+                self.logger.info(f"파티션 삭제: {relname}")
+                dropped += 1
+        return dropped
 
     def _ensure_partition(self, session, target_date: date) -> None:
         """srv_daily_review_list 파티션이 없으면 생성.
