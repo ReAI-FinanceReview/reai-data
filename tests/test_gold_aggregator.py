@@ -1,6 +1,6 @@
 """Unit tests for GoldAggregator."""
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -40,6 +40,7 @@ class TestRun:
         agg._upsert_fact_service_aspect_daily = MagicMock()
         agg._upsert_fact_category_radar_scores = MagicMock()
         agg._upsert_srv_daily_review_list = MagicMock()
+        agg._drop_old_partitions = MagicMock(return_value=0)
 
         target = date(2025, 1, 15)
         result = agg.run(target_date=target)
@@ -55,6 +56,7 @@ class TestRun:
             "fact_category_radar_scores",
             "srv_daily_review_list",
         }
+        assert result["dropped_partitions"] == 0
 
     def test_run_defaults_to_today(self, mock_session):
         agg = _make_aggregator(mock_session)
@@ -62,6 +64,7 @@ class TestRun:
         agg._upsert_fact_service_aspect_daily = MagicMock()
         agg._upsert_fact_category_radar_scores = MagicMock()
         agg._upsert_srv_daily_review_list = MagicMock()
+        agg._drop_old_partitions = MagicMock(return_value=0)
 
         result = agg.run(target_date=None)
 
@@ -74,8 +77,9 @@ class TestRun:
             "_upsert_fact_service_aspect_daily",
             "_upsert_fact_category_radar_scores",
             "_upsert_srv_daily_review_list",
+            "_drop_old_partitions",
         ):
-            setattr(agg, method, MagicMock())
+            setattr(agg, method, MagicMock(return_value=0))
 
         agg.run(target_date=date.today())
 
@@ -232,3 +236,82 @@ class TestUpsertQueries:
         agg._upsert_srv_daily_review_list(mock_session, date(2025, 1, 15))
         # _ensure_partition(DDL) + INSERT = 2 calls
         assert mock_session.execute.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# _drop_old_partitions() — #56 TTL 파티션 삭제
+# ---------------------------------------------------------------------------
+
+class TestDropOldPartitions:
+    def _make_session_with_partitions(self, partition_names):
+        """mock_session.execute(catalog_sql).fetchall() 이 partition_names 반환하도록 설정."""
+        session = MagicMock()
+        fetch_result = MagicMock()
+        fetch_result.fetchall.return_value = [(name,) for name in partition_names]
+        session.execute.return_value = fetch_result
+        return session
+
+    def test_drops_partitions_older_than_retention(self):
+        today = date.today()
+        old_date = today - timedelta(days=15)
+        old_name = f"srv_daily_review_list_{old_date.strftime('%Y_%m_%d')}"
+        session = self._make_session_with_partitions([old_name])
+        agg = _make_aggregator(MagicMock())
+
+        dropped = agg._drop_old_partitions(session, retention_days=14)
+
+        assert dropped == 1
+        drop_calls = [
+            str(c[0][0]) for c in session.execute.call_args_list[1:]
+        ]
+        assert any(old_name in call for call in drop_calls)
+
+    def test_skips_recent_partitions(self):
+        today = date.today()
+        recent_date = today - timedelta(days=5)
+        recent_name = f"srv_daily_review_list_{recent_date.strftime('%Y_%m_%d')}"
+        session = self._make_session_with_partitions([recent_name])
+        agg = _make_aggregator(MagicMock())
+
+        dropped = agg._drop_old_partitions(session, retention_days=14)
+
+        assert dropped == 0
+        # catalog 조회 1회만 호출, DROP 없음
+        assert session.execute.call_count == 1
+
+    def test_returns_dropped_count(self):
+        today = date.today()
+        names = [
+            f"srv_daily_review_list_{(today - timedelta(days=d)).strftime('%Y_%m_%d')}"
+            for d in (20, 30, 40)
+        ]
+        session = self._make_session_with_partitions(names)
+        agg = _make_aggregator(MagicMock())
+
+        dropped = agg._drop_old_partitions(session, retention_days=14)
+
+        assert dropped == 3
+
+    def test_no_partitions_returns_zero(self):
+        session = self._make_session_with_partitions([])
+        agg = _make_aggregator(MagicMock())
+
+        dropped = agg._drop_old_partitions(session, retention_days=14)
+
+        assert dropped == 0
+
+    def test_run_calls_drop_old_partitions(self, mock_session):
+        agg = _make_aggregator(mock_session)
+        for method in (
+            "_upsert_fact_service_review_daily",
+            "_upsert_fact_service_aspect_daily",
+            "_upsert_fact_category_radar_scores",
+            "_upsert_srv_daily_review_list",
+        ):
+            setattr(agg, method, MagicMock())
+        agg._drop_old_partitions = MagicMock(return_value=2)
+
+        result = agg.run(target_date=date(2025, 1, 15), retention_days=7)
+
+        agg._drop_old_partitions.assert_called_once_with(mock_session, 7)
+        assert result["dropped_partitions"] == 2
