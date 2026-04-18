@@ -45,3 +45,17 @@ def test_run_aggregate_requires_complete_range():
 
     assert result.status == "failed"
     assert "start_date and end_date must be provided together" in result.message
+
+
+def test_run_aggregate_returns_failed_result_for_invalid_target_date():
+    result = run_aggregate(target_date="2025/01/15")
+
+    assert result.status == "failed"
+    assert "YYYY-MM-DD" in result.message
+
+
+def test_run_aggregate_returns_failed_result_for_invalid_range_date():
+    result = run_aggregate(start_date="2025-01-10", end_date="bad-date")
+
+    assert result.status == "failed"
+    assert "YYYY-MM-DD" in result.message

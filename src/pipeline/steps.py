@@ -94,6 +94,12 @@ def run_aggregate(
     from datetime import date as _date
     from datetime import datetime
 
+    def _parse_date_arg(arg_name: str, value: str):
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError(f"Invalid {arg_name}: {value!r}. Expected YYYY-MM-DD.") from None
+
     if target_date and (start_date or end_date):
         return RunResult(
             step="aggregate",
@@ -109,12 +115,18 @@ def run_aggregate(
         )
 
     if target_date:
-        parsed_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        try:
+            parsed_date = _parse_date_arg("target_date", target_date)
+        except ValueError as exc:
+            return RunResult(step="aggregate", status="failed", message=str(exc))
         return _handle_step("aggregate", lambda: GoldAggregator(config_path).run(target_date=parsed_date))
 
     if start_date and end_date:
-        parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
-        parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        try:
+            parsed_start = _parse_date_arg("start_date", start_date)
+            parsed_end = _parse_date_arg("end_date", end_date)
+        except ValueError as exc:
+            return RunResult(step="aggregate", status="failed", message=str(exc))
         return _handle_step(
             "aggregate",
             lambda: GoldAggregator(config_path).run_range(
