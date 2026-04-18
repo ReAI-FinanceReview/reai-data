@@ -84,28 +84,40 @@ class GoldAggregator:
         gold_analyze가 날짜 무관하게 전체 드레인하기 때문에, 재시도로 이전 날짜
         리뷰가 ANALYZED 되더라도 해당 날짜 집계가 누락되지 않도록 보장합니다.
 
+        날짜별로 독립 커밋하여 중간 실패 시에도 성공한 날짜의 진행 상황을 보존합니다.
+
         Returns:
-            {"dates": list[str], "tables_updated": list[str]}
+            {"dates": list[str], "failed_dates": list[str], "tables_updated": list[str]}
         """
         session = self.db_connector.get_session()
+        updated_dates: List[str] = []
+        failed_dates: List[str] = []
         try:
             dates = self._fetch_analyzed_dates(session)
             if not dates:
                 self.logger.info("Gold Aggregator run_all: 집계 대상 날짜 없음")
-                return {"dates": [], "tables_updated": []}
+                return {"dates": [], "failed_dates": [], "tables_updated": []}
 
             self.logger.info(f"Gold Aggregator run_all: {len(dates)}개 날짜 집계 시작")
             for d in dates:
-                self._upsert_fact_service_review_daily(session, d)
-                self._upsert_fact_service_aspect_daily(session, d)
-                self._upsert_fact_category_radar_scores(session, d)
-                self._upsert_srv_daily_review_list(session, d)
+                try:
+                    self._upsert_fact_service_review_daily(session, d)
+                    self._upsert_fact_service_aspect_daily(session, d)
+                    self._upsert_fact_category_radar_scores(session, d)
+                    self._upsert_srv_daily_review_list(session, d)
+                    session.commit()
+                    updated_dates.append(str(d))
+                except Exception:
+                    session.rollback()
+                    self.logger.exception(f"Gold Aggregator run_all 날짜 집계 실패, 스킵: date={d}")
+                    failed_dates.append(str(d))
 
-            session.commit()
-            updated_dates = [str(d) for d in dates]
-            self.logger.info(f"Gold Aggregator run_all 완료: dates={updated_dates}")
+            self.logger.info(
+                f"Gold Aggregator run_all 완료: updated={updated_dates}, failed={failed_dates}"
+            )
             return {
                 "dates": updated_dates,
+                "failed_dates": failed_dates,
                 "tables_updated": [
                     "fact_service_review_daily",
                     "fact_service_aspect_daily",
@@ -113,10 +125,6 @@ class GoldAggregator:
                     "srv_daily_review_list",
                 ],
             }
-        except Exception:
-            session.rollback()
-            self.logger.exception("Gold Aggregator run_all 실패")
-            raise
         finally:
             session.close()
 
@@ -136,15 +144,20 @@ class GoldAggregator:
         return [row.d for row in session.execute(sql)]
 
     def _ensure_partition(self, session, target_date: date) -> None:
-        """srv_daily_review_list 파티션이 없으면 생성."""
+        """srv_daily_review_list 파티션이 없으면 생성.
+
+        PostgreSQL의 FOR VALUES FROM ... TO ... 절은 bind parameter를 허용하지 않으므로
+        날짜를 ISO 문자열 리터럴로 직접 삽입. partition_name은 date.strftime으로
+        생성되어 숫자·언더스코어만 포함하므로 안전함.
+        """
         partition_name = f"srv_daily_review_list_{target_date.strftime('%Y_%m_%d')}"
         next_date = target_date + timedelta(days=1)
         ddl = text(
-            f"CREATE TABLE IF NOT EXISTS {partition_name} "
+            f"CREATE TABLE IF NOT EXISTS public.{partition_name} "
             f"PARTITION OF srv_daily_review_list "
-            f"FOR VALUES FROM (:start) TO (:end)"
+            f"FOR VALUES FROM ('{target_date.isoformat()}') TO ('{next_date.isoformat()}')"
         )
-        session.execute(ddl, {"start": target_date, "end": next_date})
+        session.execute(ddl)
         self.logger.debug(f"파티션 확인/생성: {partition_name}")
 
     def _upsert_fact_service_review_daily(self, session, target_date: date) -> None:
