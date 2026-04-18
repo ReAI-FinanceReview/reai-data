@@ -40,9 +40,10 @@ def test_postgres_and_minio_ports_are_exposed_for_host_use():
     assert compose["services"]["minio"]["ports"] == ["9000:9000", "9001:9001"]
 
 
-def test_minio_images_use_existing_official_tags():
+def test_minio_images_use_pinned_official_release_tags():
     compose = load_compose()
 
+    # This pins local development to reviewed release tags.
     assert compose["services"]["minio"]["image"] == "minio/minio:RELEASE.2025-09-07T16-13-09Z"
     assert compose["services"]["minio-init"]["image"] == "minio/mc:RELEASE.2025-08-13T08-35-41Z"
 

@@ -36,7 +36,7 @@ services:
   postgres:
     image: postgres:15-alpine
   minio:
-    image: minio/minio:RELEASE.2026-01-18T03-12-05Z
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -79,7 +79,7 @@ services:
     ports:
       - "5432:5432"
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
