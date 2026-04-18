@@ -84,19 +84,20 @@ def run_gold(batch_size: int = 100, limit: Optional[int] = None, config_path: Op
 
 
 def run_aggregate(target_date: Optional[str] = None, config_path: Optional[str] = None) -> RunResult:
-    """Run Gold Layer aggregation step (fact tables + serving mart)."""
-    from src.gold.aggregator import GoldAggregator
-    from datetime import date as _date
+    """Run Gold Layer aggregation step (fact tables + serving mart).
 
-    parsed_date = None
+    target_date 미지정 시 드레인 모드: ANALYZED 레코드의 모든 distinct 날짜를 집계.
+    gold_analyze가 날짜 무관하게 전체 드레인하므로, 재시도로 이전 날짜 리뷰가
+    ANALYZED 되더라도 집계 누락이 발생하지 않습니다.
+    """
+    from src.gold.aggregator import GoldAggregator
+
     if target_date:
         from datetime import datetime
         parsed_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        return _handle_step("aggregate", lambda: GoldAggregator(config_path).run(target_date=parsed_date))
 
-    return _handle_step(
-        "aggregate",
-        lambda: GoldAggregator(config_path).run(target_date=parsed_date or _date.today()),
-    )
+    return _handle_step("aggregate", lambda: GoldAggregator(config_path).run_all())
 
 
 def run_load(batch_size: int = 100, config_path: Optional[str] = None) -> RunResult:
