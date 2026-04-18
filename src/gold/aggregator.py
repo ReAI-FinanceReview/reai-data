@@ -212,12 +212,15 @@ class GoldAggregator:
                 dropped += 1
         return dropped
 
-    def _ensure_partition(self, session, target_date: date) -> None:
+    def _ensure_partition(self, target_date: date) -> None:
         """srv_daily_review_list 파티션이 없으면 생성.
 
         PostgreSQL의 FOR VALUES FROM ... TO ... 절은 bind parameter를 허용하지 않으므로
         날짜를 ISO 문자열 리터럴로 직접 삽입. partition_name은 date.strftime으로
         생성되어 숫자·언더스코어만 포함하므로 안전함.
+
+        집계 트랜잭션과 분리된 autocommit 연결에서 DDL을 즉시 커밋하여 parent table
+        락 보유 시간을 최소화한다.
         """
         partition_name = f"srv_daily_review_list_{target_date.strftime('%Y_%m_%d')}"
         next_date = target_date + timedelta(days=1)
@@ -226,7 +229,8 @@ class GoldAggregator:
             f"PARTITION OF public.srv_daily_review_list "
             f"FOR VALUES FROM ('{target_date.isoformat()}') TO ('{next_date.isoformat()}')"
         )
-        session.execute(ddl)
+        with self.db_connector.get_autocommit_connection() as conn:
+            conn.execute(ddl)
         self.logger.debug(f"파티션 확인/생성: {partition_name}")
 
     def _upsert_fact_service_review_daily(self, session, target_date: date) -> None:
@@ -329,7 +333,7 @@ class GoldAggregator:
 
     def _upsert_srv_daily_review_list(self, session, target_date: date) -> None:
         """srv_daily_review_list UPSERT (비정규화 와이드 테이블)."""
-        self._ensure_partition(session, target_date)
+        self._ensure_partition(target_date)
         sql = text("""
             INSERT INTO srv_daily_review_list (
                 review_id, date, service_id, refined_text, review_summary,
