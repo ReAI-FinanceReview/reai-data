@@ -115,6 +115,11 @@ class GoldAggregator:
             self.logger.info(
                 f"Gold Aggregator run_all 완료: updated={updated_dates}, failed={failed_dates}"
             )
+            if failed_dates:
+                raise RuntimeError(
+                    f"Gold Aggregator run_all: 일부 날짜 집계 실패 {failed_dates} "
+                    f"(성공: {updated_dates})"
+                )
             return {
                 "dates": updated_dates,
                 "failed_dates": failed_dates,
@@ -154,7 +159,7 @@ class GoldAggregator:
         next_date = target_date + timedelta(days=1)
         ddl = text(
             f"CREATE TABLE IF NOT EXISTS public.{partition_name} "
-            f"PARTITION OF srv_daily_review_list "
+            f"PARTITION OF public.srv_daily_review_list "
             f"FOR VALUES FROM ('{target_date.isoformat()}') TO ('{next_date.isoformat()}')"
         )
         session.execute(ddl)

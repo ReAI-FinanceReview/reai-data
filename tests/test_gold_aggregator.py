@@ -145,15 +145,13 @@ class TestRunAll:
         assert mock_session.commit.call_count == 3
         mock_session.close.assert_called_once()
 
-    def test_run_all_skips_failed_date_and_continues(self, mock_session):
-        """중간 날짜 실패 시 롤백 후 다음 날짜 계속 처리."""
+    def test_run_all_raises_if_any_date_failed(self, mock_session):
+        """실패 날짜 존재 시 RuntimeError — DAG가 실패로 인식하도록."""
         agg = _make_aggregator(mock_session)
         dates = [date(2025, 1, 13), date(2025, 1, 14), date(2025, 1, 15)]
         agg._fetch_analyzed_dates = MagicMock(return_value=dates)
 
-        call_count = {"n": 0}
         def side_effect(session, d):
-            call_count["n"] += 1
             if d == date(2025, 1, 14):
                 raise RuntimeError("DB error on Jan 14")
         agg._upsert_fact_service_review_daily = MagicMock(side_effect=side_effect)
@@ -161,10 +159,10 @@ class TestRunAll:
         agg._upsert_fact_category_radar_scores = MagicMock()
         agg._upsert_srv_daily_review_list = MagicMock()
 
-        result = agg.run_all()
+        with pytest.raises(RuntimeError, match="2025-01-14"):
+            agg.run_all()
 
-        assert result["dates"] == ["2025-01-13", "2025-01-15"]
-        assert result["failed_dates"] == ["2025-01-14"]
+        # 성공 날짜는 이미 commit, 실패 날짜는 rollback — 부분 성공 보존됨
         assert mock_session.commit.call_count == 2
         assert mock_session.rollback.call_count == 1
         mock_session.close.assert_called_once()
@@ -181,7 +179,7 @@ class TestEnsurePartition:
         mock_session.execute.assert_called_once()
         ddl_text = str(mock_session.execute.call_args[0][0])
         assert "srv_daily_review_list_2025_01_15" in ddl_text
-        assert "PARTITION OF srv_daily_review_list" in ddl_text
+        assert "PARTITION OF public.srv_daily_review_list" in ddl_text
 
     def test_ensure_partition_embeds_literal_date_bounds(self, mock_session):
         """FOR VALUES FROM/TO는 bind parameter 불가 — ISO 날짜 리터럴로 직접 삽입."""
