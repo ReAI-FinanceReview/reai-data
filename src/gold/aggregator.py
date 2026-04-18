@@ -68,14 +68,7 @@ class GoldAggregator:
             self._upsert_srv_daily_review_list(session, target_date)
             updated.append("srv_daily_review_list")
 
-            dropped = self._drop_old_partitions(session, retention_days)
-
             session.commit()
-            self.logger.info(
-                f"Gold Aggregator 완료: date={target_date}, tables={updated}, "
-                f"dropped_partitions={dropped}"
-            )
-            return {"date": str(target_date), "tables_updated": updated, "dropped_partitions": dropped}
 
         except Exception:
             session.rollback()
@@ -84,16 +77,36 @@ class GoldAggregator:
         finally:
             session.close()
 
-    def run_all(self) -> dict:
+        dropped = 0
+        session = self.db_connector.get_session()
+        try:
+            dropped = self._drop_old_partitions(session, retention_days)
+            session.commit()
+        except Exception:
+            session.rollback()
+            self.logger.exception(
+                f"TTL 파티션 삭제 실패(집계는 성공 커밋됨): target_date={target_date}"
+            )
+        finally:
+            session.close()
+
+        self.logger.info(
+            f"Gold Aggregator 완료: date={target_date}, tables={updated}, "
+            f"dropped_partitions={dropped}"
+        )
+        return {"date": str(target_date), "tables_updated": updated, "dropped_partitions": dropped}
+
+    def run_all(self, retention_days: int = 14) -> dict:
         """ANALYZED 레코드의 모든 distinct 날짜를 집계 (드레인 모드).
 
         gold_analyze가 날짜 무관하게 전체 드레인하기 때문에, 재시도로 이전 날짜
         리뷰가 ANALYZED 되더라도 해당 날짜 집계가 누락되지 않도록 보장합니다.
 
         날짜별로 독립 커밋하여 중간 실패 시에도 성공한 날짜의 진행 상황을 보존합니다.
+        집계 루프 완료 후 TTL 파티션 삭제를 별도 트랜잭션으로 실행합니다.
 
         Returns:
-            {"dates": list[str], "failed_dates": list[str], "tables_updated": list[str]}
+            {"dates": list[str], "failed_dates": list[str], "tables_updated": list[str], "dropped_partitions": int}
         """
         session = self.db_connector.get_session()
         updated_dates: List[str] = []
@@ -102,7 +115,7 @@ class GoldAggregator:
             dates = self._fetch_analyzed_dates(session)
             if not dates:
                 self.logger.info("Gold Aggregator run_all: 집계 대상 날짜 없음")
-                return {"dates": [], "failed_dates": [], "tables_updated": []}
+                return {"dates": [], "failed_dates": [], "tables_updated": [], "dropped_partitions": 0}
 
             self.logger.info(f"Gold Aggregator run_all: {len(dates)}개 날짜 집계 시작")
             for d in dates:
@@ -126,18 +139,31 @@ class GoldAggregator:
                     f"Gold Aggregator run_all: 일부 날짜 집계 실패 {failed_dates} "
                     f"(성공: {updated_dates})"
                 )
-            return {
-                "dates": updated_dates,
-                "failed_dates": failed_dates,
-                "tables_updated": [
-                    "fact_service_review_daily",
-                    "fact_service_aspect_daily",
-                    "fact_category_radar_scores",
-                    "srv_daily_review_list",
-                ],
-            }
         finally:
             session.close()
+
+        dropped = 0
+        session = self.db_connector.get_session()
+        try:
+            dropped = self._drop_old_partitions(session, retention_days)
+            session.commit()
+        except Exception:
+            session.rollback()
+            self.logger.exception("run_all TTL 파티션 삭제 실패(집계는 성공 커밋됨)")
+        finally:
+            session.close()
+
+        return {
+            "dates": updated_dates,
+            "failed_dates": failed_dates,
+            "tables_updated": [
+                "fact_service_review_daily",
+                "fact_service_aspect_daily",
+                "fact_category_radar_scores",
+                "srv_daily_review_list",
+            ],
+            "dropped_partitions": dropped,
+        }
 
     # ------------------------------------------------------------------
     # Per-table UPSERT helpers

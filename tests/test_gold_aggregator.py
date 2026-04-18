@@ -83,8 +83,9 @@ class TestRun:
 
         agg.run(target_date=date.today())
 
-        mock_session.commit.assert_called_once()
-        mock_session.close.assert_called_once()
+        # 집계 트랜잭션 1회 + TTL 트랜잭션 1회 = 2회
+        assert mock_session.commit.call_count == 2
+        assert mock_session.close.call_count == 2
 
     def test_run_rolls_back_on_exception(self, mock_session):
         agg = _make_aggregator(mock_session)
@@ -111,6 +112,7 @@ class TestRunAll:
         agg._upsert_fact_service_aspect_daily = MagicMock()
         agg._upsert_fact_category_radar_scores = MagicMock()
         agg._upsert_srv_daily_review_list = MagicMock()
+        agg._drop_old_partitions = MagicMock(return_value=2)
 
         result = agg.run_all()
 
@@ -119,6 +121,7 @@ class TestRunAll:
         assert result["dates"] == ["2025-01-13", "2025-01-14", "2025-01-15"]
         assert result["failed_dates"] == []
         assert "fact_service_review_daily" in result["tables_updated"]
+        assert result["dropped_partitions"] == 2
 
     def test_run_all_empty_returns_early(self, mock_session):
         agg = _make_aggregator(mock_session)
@@ -128,10 +131,11 @@ class TestRunAll:
 
         assert result["dates"] == []
         assert result["failed_dates"] == []
+        assert result["dropped_partitions"] == 0
         mock_session.commit.assert_not_called()
 
     def test_run_all_commits_per_date(self, mock_session):
-        """날짜별 독립 커밋 — 3날짜 → commit 3회."""
+        """날짜별 독립 커밋 3회 + TTL 커밋 1회 = 총 4회."""
         agg = _make_aggregator(mock_session)
         agg._fetch_analyzed_dates = MagicMock(
             return_value=[date(2025, 1, 13), date(2025, 1, 14), date(2025, 1, 15)]
@@ -141,13 +145,14 @@ class TestRunAll:
             "_upsert_fact_service_aspect_daily",
             "_upsert_fact_category_radar_scores",
             "_upsert_srv_daily_review_list",
+            "_drop_old_partitions",
         ):
-            setattr(agg, method, MagicMock())
+            setattr(agg, method, MagicMock(return_value=0))
 
         agg.run_all()
 
-        assert mock_session.commit.call_count == 3
-        mock_session.close.assert_called_once()
+        assert mock_session.commit.call_count == 4  # 3 per-date + 1 TTL
+        assert mock_session.close.call_count == 2   # 집계 세션 + TTL 세션
 
     def test_run_all_raises_if_any_date_failed(self, mock_session):
         """실패 날짜 존재 시 RuntimeError — DAG가 실패로 인식하도록."""
