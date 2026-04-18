@@ -38,6 +38,11 @@ class MinIOClient:
         self.secret_key = secret_key or os.environ.get('MINIO_SECRET_KEY')
         self.bucket = bucket or os.environ['MINIO_BUCKET']
 
+        if bool(self.access_key) != bool(self.secret_key):
+            logger.warning(
+                "access_key와 secret_key 중 하나만 설정됨 — boto3가 PartialCredentialsError로 실패할 수 있습니다."
+            )
+
         client_kwargs = dict(
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
@@ -45,6 +50,12 @@ class MinIOClient:
         if self.endpoint:
             client_kwargs['endpoint_url'] = self.endpoint
         self._client = boto3.client('s3', **client_kwargs)
+
+        logger.info(
+            f"Initialized MinIOClient: mode={'custom endpoint' if self.endpoint else 'native AWS S3'}, "
+            f"endpoint={self.endpoint}, bucket={self.bucket}, "
+            f"credentials={'set' if self.access_key else 'not set (using IAM/default chain)'}"
+        )
 
     def list_objects(self, prefix: str) -> List[str]:
         """주어진 prefix의 모든 객체 키를 반환한다 (1000개 초과 페이지네이션 지원)."""
