@@ -52,7 +52,7 @@ crawl_reviews = BashOperator(
 # IngestionBatch(PENDING) → ReviewMasterIndex(RAW)
 load_reviews = BashOperator(
     task_id="load_reviews",
-    bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/load_reviews.py",
+    bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/load_reviews.py --date {{{{ ds }}}}",
     dag=dag,
     execution_timeout=timedelta(minutes=30),
 )
@@ -73,7 +73,7 @@ gold_analyze = BashOperator(
     bash_command=(
         f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} -c "
         '"from src.pipeline.steps import run_gold; import sys; '
-        "r = run_gold(batch_size=100); "
+        "r = run_gold(batch_size=100, target_date='{{ ds }}'); "
         "print(r.as_dict()); "
         "sys.exit(0 if r.status == 'success' else 1)\""
     ),

@@ -13,9 +13,12 @@ Usage:
 
 from __future__ import annotations
 
+from datetime import date
 import traceback
 from typing import List, Optional
 from uuid import UUID
+
+from sqlalchemy import func
 
 from src.models.enums import ProcessingStatusType
 from src.models.review_master_index import ReviewMasterIndex
@@ -53,19 +56,21 @@ class GoldOrchestrator:
         self,
         batch_size: int = 100,
         limit: Optional[int] = None,
+        target_date: Optional[date] = None,
     ) -> dict:
         """CLEANED / 재시도 대상 레코드를 배치 처리.
 
         Args:
             batch_size: 한 번에 처리할 레코드 수.
             limit: 처리할 최대 레코드 수 (None = 무제한).
+            target_date: 처리할 리뷰 생성일. None이면 날짜 제한 없음.
 
         Returns:
             {"total": int, "analyzed": int, "failed": int}
         """
         session = self.db_connector.get_session()
         try:
-            review_ids = self._fetch_pending_ids(session, limit)
+            review_ids = self._fetch_pending_ids(session, limit, target_date=target_date)
             if not review_ids:
                 self.logger.info("Gold Orchestrator: 처리 대상 리뷰 없음")
                 return {"total": 0, "analyzed": 0, "failed": 0}
@@ -106,7 +111,10 @@ class GoldOrchestrator:
     # ------------------------------------------------------------------
 
     def _fetch_pending_ids(
-        self, session, limit: Optional[int]
+        self,
+        session,
+        limit: Optional[int],
+        target_date: Optional[date] = None,
     ) -> List[UUID]:
         """처리 대상 review_id 목록 조회.
 
@@ -121,6 +129,8 @@ class GoldOrchestrator:
                 & (ReviewMasterIndex.retry_count < _MAX_RETRY)
             )
         )
+        if target_date is not None:
+            query = query.filter(func.date(ReviewMasterIndex.review_created_at) == target_date)
         if limit is not None:
             query = query.limit(limit)
         return [row.review_id for row in query.all()]
