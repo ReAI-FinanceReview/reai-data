@@ -12,7 +12,7 @@ This module tests the load stage of the Batch DLQ architecture:
 
 import pytest
 from pathlib import Path
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from uuid6 import uuid7
 
@@ -33,30 +33,6 @@ def _make_loader(test_db_session):
     loader.db_connector = MagicMock()
     loader.db_connector.get_session.return_value = test_db_session
     return loader
-
-
-def test_load_pending_batches_applies_target_date_filter():
-    loader = BatchLoader.__new__(BatchLoader)
-    loader.logger = MagicMock()
-    loader.db_connector = MagicMock()
-
-    session = MagicMock()
-    loader.db_connector.get_session.return_value = session
-
-    base_query = session.query.return_value
-    status_query = base_query.filter.return_value
-    retry_query = status_query.filter.return_value
-    ordered_query = retry_query.order_by.return_value
-    dated_query = ordered_query.filter.return_value
-    dated_query.limit.return_value.all.return_value = []
-
-    result = loader.load_pending_batches(limit=5, target_date=date(2025, 1, 15))
-
-    assert result == 0
-    assert ordered_query.filter.called
-    dated_query.limit.assert_called_once_with(5)
-    session.close.assert_called_once()
-
 
 # ========================================
 # A. HAPPY PATH

@@ -4,11 +4,9 @@ ingestion_batch 테이블에서 PENDING/FAILED 배치를 조회하여
 Parquet 파일을 읽고 ReviewMasterIndex에 적재합니다.
 """
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Dict, Optional, Set
 from uuid import UUID
-
-from sqlalchemy import func
 
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
@@ -28,11 +26,7 @@ class BatchLoader:
         self.logger = get_logger('batch_loader')
         self._minio = None  # lazy initialization to avoid eager env var requirement
 
-    def load_pending_batches(
-        self,
-        limit: int = 100,
-        target_date: Optional[date] = None,
-    ) -> int:
+    def load_pending_batches(self, limit: int = 100) -> int:
         """PENDING/FAILED 상태 배치를 순차 적재.
 
         Returns:
@@ -40,7 +34,7 @@ class BatchLoader:
         """
         session = self.db_connector.get_session()
         try:
-            pending_query = (
+            pending_batches = (
                 session.query(IngestionBatch)
                 .filter(
                     IngestionBatch.status.in_([
@@ -50,11 +44,9 @@ class BatchLoader:
                 )
                 .filter(IngestionBatch.retry_count < IngestionBatch.max_retries)
                 .order_by(IngestionBatch.created_at.asc())
+                .limit(limit)
+                .all()
             )
-            if target_date is not None:
-                pending_query = pending_query.filter(func.date(IngestionBatch.created_at) == target_date)
-
-            pending_batches = pending_query.limit(limit).all()
 
             if not pending_batches:
                 self.logger.info("No pending batches to load")

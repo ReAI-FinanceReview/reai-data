@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from src.pipeline.steps import run_aggregate, run_gold, run_load
+from src.pipeline.steps import run_aggregate, run_gold
 
 
 @patch("src.gold.aggregator.GoldAggregator")
@@ -73,27 +73,8 @@ def test_run_gold_passes_target_date_to_orchestrator(mock_orchestrator):
     assert result.status == "success"
 
 
-@patch("src.loaders.batch_loader.BatchLoader")
-def test_run_load_passes_target_date_to_batch_loader(mock_loader):
-    instance = mock_loader.return_value
-    instance.load_pending_batches = MagicMock()
-
-    result = run_load(batch_size=100, target_date="2025-01-15")
-
-    instance.load_pending_batches.assert_called_once()
-    assert str(instance.load_pending_batches.call_args.kwargs["target_date"]) == "2025-01-15"
-    assert result.status == "success"
-
-
 def test_run_gold_returns_failed_result_for_invalid_target_date():
     result = run_gold(target_date="2025/01/15")
-
-    assert result.status == "failed"
-    assert "YYYY-MM-DD" in result.message
-
-
-def test_run_load_returns_failed_result_for_invalid_target_date():
-    result = run_load(target_date="2025/01/15")
 
     assert result.status == "failed"
     assert "YYYY-MM-DD" in result.message

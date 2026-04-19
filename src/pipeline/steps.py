@@ -156,29 +156,10 @@ def run_aggregate(
     return _handle_step("aggregate", lambda: GoldAggregator(config_path).run(target_date=_date.today()))
 
 
-def run_load(
-    batch_size: int = 100,
-    target_date: Optional[str] = None,
-    config_path: Optional[str] = None,
-) -> RunResult:
+def run_load(batch_size: int = 100, config_path: Optional[str] = None) -> RunResult:
     """Run Parquet batch → DB load step."""
     from src.loaders.batch_loader import BatchLoader
-
-    if target_date:
-        try:
-            parsed_date = _parse_date_arg("target_date", target_date)
-        except ValueError as exc:
-            return RunResult(step="load", status="failed", message=str(exc))
-    else:
-        parsed_date = None
-
-    return _handle_step(
-        "load",
-        lambda: BatchLoader(config_path).load_pending_batches(
-            limit=batch_size,
-            target_date=parsed_date,
-        ),
-    )
+    return _handle_step("load", lambda: BatchLoader(config_path).load_pending_batches(limit=batch_size))
 
 
 def run_steps(

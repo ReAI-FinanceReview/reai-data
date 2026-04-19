@@ -52,7 +52,7 @@ crawl_reviews = BashOperator(
 # IngestionBatch(PENDING) → ReviewMasterIndex(RAW)
 load_reviews = BashOperator(
     task_id="load_reviews",
-    bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/load_reviews.py --date {{{{ ds }}}}",
+    bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/load_reviews.py",
     dag=dag,
     execution_timeout=timedelta(minutes=30),
 )
