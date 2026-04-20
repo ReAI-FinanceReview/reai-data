@@ -88,7 +88,7 @@ def run_gold(
     """Run Gold Layer orchestration step (embedding → ABSA → action analysis)."""
     from src.gold.orchestrator import GoldOrchestrator
 
-    if target_date:
+    if target_date is not None:
         try:
             parsed_date = _parse_date_arg("target_date", target_date)
         except ValueError as exc:
@@ -97,7 +97,8 @@ def run_gold(
         parsed_date = None
 
     def _run():
-        result = GoldOrchestrator(config_path).run(
+        orchestrator = GoldOrchestrator(config_path) if config_path is not None else GoldOrchestrator()
+        result = orchestrator.run(
             batch_size=batch_size,
             limit=limit,
             target_date=parsed_date,

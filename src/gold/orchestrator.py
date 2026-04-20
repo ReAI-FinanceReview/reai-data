@@ -13,12 +13,10 @@ Usage:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 import traceback
 from typing import List, Optional
 from uuid import UUID
-
-from sqlalchemy import func
 
 from src.models.enums import ProcessingStatusType
 from src.models.review_master_index import ReviewMasterIndex
@@ -130,7 +128,12 @@ class GoldOrchestrator:
             )
         )
         if target_date is not None:
-            query = query.filter(func.date(ReviewMasterIndex.review_created_at) == target_date)
+            start = datetime.combine(target_date, time.min, tzinfo=UTC)
+            end = start + timedelta(days=1)
+            query = query.filter(
+                ReviewMasterIndex.review_created_at >= start,
+                ReviewMasterIndex.review_created_at < end,
+            )
         if limit is not None:
             query = query.limit(limit)
         return [row.review_id for row in query.all()]

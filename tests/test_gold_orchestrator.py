@@ -1,6 +1,6 @@
 """Unit tests for GoldOrchestrator."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -84,6 +84,10 @@ class TestFetchPendingIds:
 
         assert len(result) == 1
         assert filtered_query.filter.called
+
+        lower_bound, upper_bound = filtered_query.filter.call_args.args
+        assert lower_bound.right.value == datetime(2025, 1, 15, 0, 0, tzinfo=UTC)
+        assert upper_bound.right.value == datetime(2025, 1, 16, 0, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
