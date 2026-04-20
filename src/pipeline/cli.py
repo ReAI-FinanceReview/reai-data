@@ -1,5 +1,6 @@
 """Command-line interface for running pipeline steps."""
 import argparse
+from datetime import date
 import json
 from pathlib import Path
 from typing import List, Optional
@@ -31,6 +32,16 @@ def _parse_steps(steps_str: str) -> List[str]:
     return steps
 
 
+def _parse_target_date(value: str) -> str:
+    try:
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"Invalid --target-date {value!r}: expected YYYY-MM-DD"
+        ) from exc
+    return value
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run pipeline steps sequentially.")
     parser.add_argument(
@@ -42,7 +53,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for records processed.")
     parser.add_argument("--model-name", type=str, default="text-embedding-3-small", help="Embedding model name.")
     parser.add_argument("--config", type=str, default="config/crawler_config.yml", help="Path to crawler/config file.")
-    parser.add_argument("--target-date", default=None, help="Optional target date for date-scoped steps (YYYY-MM-DD).")
+    parser.add_argument(
+        "--target-date",
+        default=None,
+        type=_parse_target_date,
+        help="Optional target date for date-scoped steps (YYYY-MM-DD).",
+    )
     return parser
 
 
