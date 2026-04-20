@@ -42,6 +42,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for records processed.")
     parser.add_argument("--model-name", type=str, default="text-embedding-3-small", help="Embedding model name.")
     parser.add_argument("--config", type=str, default="config/crawler_config.yml", help="Path to crawler/config file.")
+    parser.add_argument("--target-date", default=None, help="Optional target date for date-scoped steps (YYYY-MM-DD).")
     return parser
 
 
@@ -57,6 +58,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         limit=args.limit,
         model_name=args.model_name,
         config_path=args.config,
+        target_date=args.target_date,
     )
 
     for result in results:

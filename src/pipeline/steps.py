@@ -169,6 +169,7 @@ def run_steps(
     limit: Optional[int] = None,
     model_name: str = "text-embedding-3-small",
     config_path: Optional[str] = None,
+    target_date: Optional[str] = None,
 ) -> List[RunResult]:
     """Run multiple steps in sequence; stop on first failure."""
     step_funcs: Dict[str, Callable[[], RunResult]] = {
@@ -178,8 +179,13 @@ def run_steps(
         "features": lambda: run_extract_features(batch_size=batch_size, limit=limit, config_path=config_path),
         "action": lambda: run_action_analysis(batch_size=batch_size, limit=limit, config_path=config_path),
         "embed": lambda: run_generate_embeddings(batch_size=batch_size, limit=limit, model_name=model_name, config_path=config_path),
-        "gold": lambda: run_gold(batch_size=batch_size, limit=limit, config_path=config_path),
-        "aggregate": lambda: run_aggregate(config_path=config_path),
+        "gold": lambda: run_gold(
+            batch_size=batch_size,
+            limit=limit,
+            config_path=config_path,
+            target_date=target_date,
+        ),
+        "aggregate": lambda: run_aggregate(config_path=config_path, target_date=target_date),
     }
 
     results: List[RunResult] = []
