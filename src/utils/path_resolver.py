@@ -14,8 +14,8 @@ Usage:
     >>> from utils.path_resolver import PathResolver
     >>> resolver = PathResolver()
     >>> bronze_path = resolver.resolve("${PARQUET_BASE_PATH}/bronze")
-    >>> # Returns: "/mnt/nas/reai-data/bronze" (production)
-    >>> # Or: "./data/parquet/bronze" (development)
+    >>> # Returns: "./data/parquet/bronze" by default
+    >>> # Or a custom path when PARQUET_BASE_PATH is set
 """
 
 import os
@@ -65,7 +65,7 @@ class PathResolver:
         """
         env_vars = {}
 
-        # PARQUET_BASE_PATH (critical for NAS-first architecture)
+        # PARQUET_BASE_PATH (local by default, override for shared storage)
         env_vars['PARQUET_BASE_PATH'] = os.getenv(
             'PARQUET_BASE_PATH',
             self.default_base_path
@@ -94,7 +94,7 @@ class PathResolver:
 
         Examples:
             >>> resolver.resolve("${PARQUET_BASE_PATH}/bronze")
-            '/mnt/nas/reai-data/bronze'
+            './data/parquet/bronze'
 
             >>> resolver.resolve("data/raw")
             'data/raw'
@@ -181,7 +181,7 @@ class PathResolver:
 
         Examples:
             >>> resolver.get_path('bronze_dir')
-            Path('/mnt/nas/reai-data/bronze')
+            Path('data/parquet/bronze')
         """
         config = self.load_config()
 
