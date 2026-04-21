@@ -1,5 +1,6 @@
 """Unit tests for GoldOrchestrator."""
 
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -73,6 +74,20 @@ class TestFetchPendingIds:
         orch = _make_orchestrator()
         result = orch._fetch_pending_ids(mock_session, limit=1)
         assert len(result) == 1
+
+    def test_applies_target_date_filter(self, mock_session):
+        filtered_query = mock_session.query.return_value.filter.return_value
+        filtered_query.filter.return_value.all.return_value = [_make_row(uuid4())]
+
+        orch = _make_orchestrator()
+        result = orch._fetch_pending_ids(mock_session, limit=None, target_date=date(2025, 1, 15))
+
+        assert len(result) == 1
+        assert filtered_query.filter.called
+
+        lower_bound, upper_bound = filtered_query.filter.call_args.args
+        assert lower_bound.right.value == datetime(2025, 1, 15, 0, 0, tzinfo=UTC)
+        assert upper_bound.right.value == datetime(2025, 1, 16, 0, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from src.pipeline.steps import run_aggregate
+from src.pipeline.steps import run_aggregate, run_gold
 
 
 @patch("src.gold.aggregator.GoldAggregator")
@@ -56,6 +56,43 @@ def test_run_aggregate_returns_failed_result_for_invalid_target_date():
 
 def test_run_aggregate_returns_failed_result_for_invalid_range_date():
     result = run_aggregate(start_date="2025-01-10", end_date="bad-date")
+
+    assert result.status == "failed"
+    assert "YYYY-MM-DD" in result.message
+
+
+@patch("src.gold.orchestrator.GoldOrchestrator")
+def test_run_gold_passes_target_date_to_orchestrator(mock_orchestrator):
+    instance = mock_orchestrator.return_value
+    instance.run.return_value = {"total": 1, "analyzed": 1, "failed": 0}
+
+    result = run_gold(batch_size=100, target_date="2025-01-15")
+
+    instance.run.assert_called_once()
+    assert str(instance.run.call_args.kwargs["target_date"]) == "2025-01-15"
+    assert result.status == "success"
+
+
+@patch("src.gold.orchestrator.GoldOrchestrator")
+def test_run_gold_uses_default_orchestrator_config_when_config_path_omitted(mock_orchestrator):
+    instance = mock_orchestrator.return_value
+    instance.run.return_value = {"total": 1, "analyzed": 1, "failed": 0}
+
+    result = run_gold(batch_size=100, target_date="2025-01-15")
+
+    mock_orchestrator.assert_called_once_with()
+    assert result.status == "success"
+
+
+def test_run_gold_returns_failed_result_for_invalid_target_date():
+    result = run_gold(target_date="2025/01/15")
+
+    assert result.status == "failed"
+    assert "YYYY-MM-DD" in result.message
+
+
+def test_run_gold_returns_failed_result_for_empty_target_date():
+    result = run_gold(target_date="")
 
     assert result.status == "failed"
     assert "YYYY-MM-DD" in result.message

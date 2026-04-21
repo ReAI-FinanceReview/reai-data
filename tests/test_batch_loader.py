@@ -34,7 +34,6 @@ def _make_loader(test_db_session):
     loader.db_connector.get_session.return_value = test_db_session
     return loader
 
-
 # ========================================
 # A. HAPPY PATH
 # ========================================

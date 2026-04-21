@@ -1,11 +1,19 @@
 """Pipeline step wrappers used by CLI and Airflow."""
 import warnings
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _parse_date_arg(arg_name: str, value: str):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError(f"Invalid {arg_name}: {value!r}. Expected YYYY-MM-DD.") from None
 
 
 @dataclass
@@ -71,12 +79,30 @@ def run_generate_embeddings(
     )
 
 
-def run_gold(batch_size: int = 100, limit: Optional[int] = None, config_path: Optional[str] = None) -> RunResult:
+def run_gold(
+    batch_size: int = 100,
+    limit: Optional[int] = None,
+    target_date: Optional[str] = None,
+    config_path: Optional[str] = None,
+) -> RunResult:
     """Run Gold Layer orchestration step (embedding → ABSA → action analysis)."""
     from src.gold.orchestrator import GoldOrchestrator
 
+    if target_date is not None:
+        try:
+            parsed_date = _parse_date_arg("target_date", target_date)
+        except ValueError as exc:
+            return RunResult(step="gold", status="failed", message=str(exc))
+    else:
+        parsed_date = None
+
     def _run():
-        result = GoldOrchestrator(config_path).run(batch_size=batch_size, limit=limit)
+        orchestrator = GoldOrchestrator(config_path) if config_path is not None else GoldOrchestrator()
+        result = orchestrator.run(
+            batch_size=batch_size,
+            limit=limit,
+            target_date=parsed_date,
+        )
         if result["total"] > 0 and result["analyzed"] == 0:
             raise RuntimeError(f"Gold: 0/{result['total']} succeeded")
 
@@ -92,13 +118,6 @@ def run_aggregate(
     """Run Gold Layer aggregation step (fact tables + serving mart)."""
     from src.gold.aggregator import GoldAggregator
     from datetime import date as _date
-    from datetime import datetime
-
-    def _parse_date_arg(arg_name: str, value: str):
-        try:
-            return datetime.strptime(value, "%Y-%m-%d").date()
-        except ValueError:
-            raise ValueError(f"Invalid {arg_name}: {value!r}. Expected YYYY-MM-DD.") from None
 
     if target_date and (start_date or end_date):
         return RunResult(
@@ -150,6 +169,7 @@ def run_steps(
     limit: Optional[int] = None,
     model_name: str = "text-embedding-3-small",
     config_path: Optional[str] = None,
+    target_date: Optional[str] = None,
 ) -> List[RunResult]:
     """Run multiple steps in sequence; stop on first failure."""
     step_funcs: Dict[str, Callable[[], RunResult]] = {
@@ -159,8 +179,13 @@ def run_steps(
         "features": lambda: run_extract_features(batch_size=batch_size, limit=limit, config_path=config_path),
         "action": lambda: run_action_analysis(batch_size=batch_size, limit=limit, config_path=config_path),
         "embed": lambda: run_generate_embeddings(batch_size=batch_size, limit=limit, model_name=model_name, config_path=config_path),
-        "gold": lambda: run_gold(batch_size=batch_size, limit=limit, config_path=config_path),
-        "aggregate": lambda: run_aggregate(config_path=config_path),
+        "gold": lambda: run_gold(
+            batch_size=batch_size,
+            limit=limit,
+            config_path=config_path,
+            target_date=target_date,
+        ),
+        "aggregate": lambda: run_aggregate(config_path=config_path, target_date=target_date),
     }
 
     results: List[RunResult] = []
