@@ -1,4 +1,4 @@
-"""Parquet writer utility for NAS storage.
+"""Parquet writer utility for local or shared storage.
 
 This module provides utilities for writing Pydantic schemas to Parquet files
 with support for partitioning and batch operations.
@@ -21,8 +21,8 @@ logger = get_logger(__name__)
 class ParquetWriter:
     """Write Pydantic schemas to Parquet files with partitioning support.
 
-    This class handles writing validated Pydantic data to Parquet files on NAS,
-    with support for:
+    This class handles writing validated Pydantic data to Parquet files under
+    the configured base path, with support for:
     - Time-based partitioning (year/month/day)
     - Batch writing for efficiency
     - Schema evolution tracking
@@ -38,7 +38,7 @@ class ParquetWriter:
         >>> from datetime import datetime, timezone
         >>>
         >>> writer = ParquetWriter(
-        ...     base_path="/mnt/nas/bronze/app_reviews",
+        ...     base_path="./data/parquet/bronze/app_reviews",
         ...     partition_by="year_month"
         ... )
         >>>
@@ -201,7 +201,7 @@ class ParquetWriter:
             >>> # With partition_by='year_month' and date=2026-02-04
             >>> path = writer._get_partition_path(datetime(2026, 2, 4))
             >>> str(path)
-            '/mnt/nas/bronze/app_reviews/year=2026/month=02'
+            'data/parquet/bronze/app_reviews/year=2026/month=02'
         """
         if self.partition_by == 'none':
             return self.base_path
@@ -229,8 +229,8 @@ class ParquetWriter:
             >>> partitions = writer.list_partitions()
             >>> for partition in partitions:
             ...     print(partition)
-            /mnt/nas/bronze/app_reviews/year=2026/month=01
-            /mnt/nas/bronze/app_reviews/year=2026/month=02
+            data/parquet/bronze/app_reviews/year=2026/month=01
+            data/parquet/bronze/app_reviews/year=2026/month=02
         """
         if self.partition_by == 'none':
             return [self.base_path]
@@ -301,7 +301,7 @@ def read_parquet_to_schemas(
     Example:
         >>> from src.schemas.parquet import AppReviewSchema
         >>> reviews = read_parquet_to_schemas(
-        ...     "/mnt/nas/bronze/app_reviews/year=2026/month=02/data.parquet",
+        ...     "./data/parquet/bronze/app_reviews/year=2026/month=02/data.parquet",
         ...     AppReviewSchema
         ... )
         >>> print(f"Read {len(reviews)} reviews")
