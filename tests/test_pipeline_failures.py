@@ -29,6 +29,8 @@ def test_fetch_review_dead_letters_queries_failed_max_retry_reviews():
     assert results == [sentinel.review]
     session.query.assert_called_once_with(ReviewMasterIndex)
     assert query.filter.call_count == 2
+    order_clause = str(query.order_by.call_args.args[0])
+    assert "NULLS LAST" in order_clause
     query.limit.assert_called_once_with(25)
     assert "processing_status = 'FAILED'" in REVIEW_DEAD_LETTER_SQL
     assert "retry_count >= 3" in REVIEW_DEAD_LETTER_SQL

@@ -42,7 +42,10 @@ def fetch_review_dead_letters(session, limit: int = 100):
         session.query(ReviewMasterIndex)
         .filter(ReviewMasterIndex.processing_status == ProcessingStatusType.FAILED)
         .filter(ReviewMasterIndex.retry_count >= 3)
-        .order_by(ReviewMasterIndex.review_created_at.asc(), ReviewMasterIndex.review_id.asc())
+        .order_by(
+            ReviewMasterIndex.review_created_at.asc().nulls_last(),
+            ReviewMasterIndex.review_id.asc(),
+        )
         .limit(limit)
         .all()
     )

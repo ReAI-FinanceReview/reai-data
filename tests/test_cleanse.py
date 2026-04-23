@@ -224,6 +224,7 @@ import pyarrow as pa
 from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import UUID
 from uuid6 import uuid7
 from src.processing.cleanse import (
     load_bronze_parquet,
@@ -290,13 +291,15 @@ def test_write_silver_table_columns():
 
 @pytest.fixture
 def pipeline(tmp_path):
+    review_id_1 = str(uuid7())
+    review_id_2 = str(uuid7())
     synonyms = {"게좌이체": "계좌이체"}
     profanity = ["욕설1"]
     (tmp_path / "synonyms.json").write_text(json.dumps(synonyms, ensure_ascii=False))
     (tmp_path / "profanity.json").write_text(json.dumps(profanity, ensure_ascii=False))
 
     bronze = pa.table({
-        'review_id': ['r1', 'r2'],
+        'review_id': [review_id_1, review_id_2],
         'app_id': ['app_001', 'app_001'],
         'platform_review_id': ['p1', 'p2'],
         'review_text': ['게좌이체 안 돼요 😊ㅋㅋㅋ', '욕설1 진짜 별로'],
@@ -355,10 +358,12 @@ def test_pipeline_skipped_rows_not_updated_to_cleaned(tmp_path):
     profanity = []
     (tmp_path / "synonyms.json").write_text(json.dumps(synonyms))
     (tmp_path / "profanity.json").write_text(json.dumps(profanity))
+    review_id_1 = str(uuid7())
+    review_id_2 = str(uuid7())
 
     # 2개 중 1개가 빈 텍스트
     bronze = pa.table({
-        'review_id': ['r1', 'r2'],
+        'review_id': [review_id_1, review_id_2],
         'app_id': ['app1', 'app1'],
         'platform_review_id': ['p1', 'p2'],
         'review_text': ['좋은 앱', ''],  # r2 는 빈 텍스트
@@ -435,7 +440,7 @@ def test_mark_review_failed_updates_master_index(tmp_path):
     mock_session = MagicMock()
     mock_db.get_session.return_value = mock_session
     record = SimpleNamespace(
-        processing_status=ProcessingStatusType.CLEANED,
+        processing_status=ProcessingStatusType.RAW,
         error_message=None,
         retry_count=2,
     )
@@ -455,6 +460,39 @@ def test_mark_review_failed_updates_master_index(tmp_path):
     assert record.error_message == "Cleanse failed: RuntimeError: cleanse boom"
     assert record.retry_count == 3
     mock_session.commit.assert_called_once()
+    mock_session.close.assert_called_once()
+
+
+def test_mark_review_failed_does_not_downgrade_processed_review(tmp_path):
+    """이미 처리된 리뷰는 cleanse 실패로 FAILED 상태로 되돌리지 않는다."""
+    synonyms = {}
+    profanity = []
+    (tmp_path / "synonyms.json").write_text(json.dumps(synonyms))
+    (tmp_path / "profanity.json").write_text(json.dumps(profanity))
+
+    mock_db = MagicMock()
+    mock_session = MagicMock()
+    mock_db.get_session.return_value = mock_session
+    record = SimpleNamespace(
+        processing_status=ProcessingStatusType.ANALYZED,
+        error_message="gold analyze failed",
+        retry_count=4,
+    )
+    mock_session.get.return_value = record
+
+    p = ReviewCleaningPipeline(
+        minio_client=MagicMock(),
+        db_connector=mock_db,
+        synonyms_path=str(tmp_path / "synonyms.json"),
+        profanity_path=str(tmp_path / "profanity.json"),
+    )
+
+    p._mark_review_failed(str(uuid7()), "Cleanse failed: RuntimeError: cleanse boom")
+
+    assert record.processing_status == ProcessingStatusType.ANALYZED
+    assert record.error_message == "gold analyze failed"
+    assert record.retry_count == 4
+    mock_session.commit.assert_not_called()
     mock_session.close.assert_called_once()
 
 
@@ -515,7 +553,7 @@ def test_mark_review_failed_reraises_db_failure(tmp_path):
     mock_db = MagicMock()
     mock_session = MagicMock()
     mock_session.get.return_value = SimpleNamespace(
-        processing_status=ProcessingStatusType.CLEANED,
+        processing_status=ProcessingStatusType.RAW,
         error_message=None,
         retry_count=0,
     )
@@ -590,11 +628,13 @@ def test_update_db_status_recovers_prior_cleanse_failures(tmp_path):
 
     p._update_db_status([str(uuid7())])
 
+    review_ids_filter = mock_query.filter.call_args.args[0]
     status_filter = mock_query.filter.call_args.args[1]
     filter_expression = str(
         status_filter.compile(compile_kwargs={"literal_binds": True})
     )
     update_values = mock_query.update.call_args.args[0]
+    assert all(isinstance(review_id, UUID) for review_id in review_ids_filter.right.value)
     assert "Cleanse failed:%" in filter_expression
     assert update_values["processing_status"] == ProcessingStatusType.CLEANED
     assert update_values["error_message"] is None

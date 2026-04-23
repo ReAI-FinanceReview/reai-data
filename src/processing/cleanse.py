@@ -301,6 +301,25 @@ class ReviewCleaningPipeline:
                 raise LookupError(
                     f"ReviewMasterIndex not found for failed review: {review_id}"
                 )
+            is_prior_cleanse_failure = (
+                record.processing_status == ProcessingStatusType.FAILED
+                and (record.error_message or "").startswith("Cleanse failed:")
+            )
+            if record.processing_status == ProcessingStatusType.FAILED and not is_prior_cleanse_failure:
+                logger.info(
+                    "  Skip cleanse failure overwrite for non-cleanse FAILED review: "
+                    f"review_id={review_id}"
+                )
+                return
+            if record.processing_status not in {
+                ProcessingStatusType.RAW,
+                ProcessingStatusType.FAILED,
+            }:
+                logger.info(
+                    "  Skip cleanse failure overwrite for already-processed review: "
+                    f"review_id={review_id}, status={record.processing_status}"
+                )
+                return
             record.processing_status = ProcessingStatusType.FAILED
             record.error_message = error_message
             record.retry_count = (record.retry_count or 0) + 1
@@ -325,10 +344,12 @@ class ReviewCleaningPipeline:
         if not review_ids:
             return
 
+        parsed_review_ids = [UUID(str(review_id)) for review_id in review_ids]
+
         session = self.db.get_session()
         try:
             session.query(ReviewMasterIndex).filter(
-                ReviewMasterIndex.review_id.in_(review_ids),
+                ReviewMasterIndex.review_id.in_(parsed_review_ids),
                 or_(
                     ReviewMasterIndex.processing_status == ProcessingStatusType.RAW,
                     and_(
@@ -344,7 +365,7 @@ class ReviewCleaningPipeline:
                 synchronize_session=False,
             )
             session.commit()
-            logger.info(f"  Updated {len(review_ids)} records to CLEANED")
+            logger.info(f"  Updated {len(parsed_review_ids)} records to CLEANED")
         except Exception as e:
             session.rollback()
             logger.exception("DB status update failed")

@@ -11,7 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.crawlers.appstore_crawler import AppStoreCrawler, ParquetWriteError
+from src.crawlers.appstore_crawler import AppStoreCrawler
+from src.crawlers.exceptions import ParquetWriteError
 from src.models.enums import IngestionBatchStatusType, PlatformType
 from src.models.ingestion_batch import IngestionBatch
 
