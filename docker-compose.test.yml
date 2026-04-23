@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   test-postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg17
     container_name: reai-test-postgres
     environment:
       POSTGRES_DB: testdb

@@ -49,6 +49,7 @@ def test_db_url() -> str:
     1. TEST_DATABASE_URL environment variable
        - 서버 개발 시 (VS Code Remote SSH): postgresql://vector_mgr:...@reai.kro.kr:55000/testdb
        - 로컬 개발 시: docker-compose.test.yml 실행 후 localhost:5433/testdb
+         (pgvector/pgvector:pg17 이미지 필요: schema_v4.sql의 vector extension 사용)
     2. Default: postgresql://testuser:testpass@localhost:5433/testdb (docker-compose.test.yml 기본값)
 
     Note: Tests require a real PostgreSQL database (not SQLite).
@@ -87,8 +88,9 @@ def test_db_schema(test_db_engine):
     2. Executes schema_v4.sql to create all 19 tables, 6 ENUMs, and indexes
     3. Runs once per test session
 
-    Note: uuid-ossp extension line is filtered out because Python uuid7()
-    is used for UUID generation and the DB extension is not required.
+    Note: Local Docker tests require a pgvector-capable PostgreSQL 17 image.
+    uuid-ossp is filtered out because Python uuid7() is used for UUID generation
+    and the DB extension is not required.
     """
     schema_file = Path(__file__).parent.parent / "sql" / "schema_v4.sql"
     sql_content = schema_file.read_text()
