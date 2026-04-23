@@ -1,7 +1,7 @@
-"""Test SQL Schema Validation (sql/schema_v2.sql)
+"""Test SQL Schema Validation (sql/schema_v4.sql)
 
-This module validates that sql/schema_v2.sql creates the correct database schema:
-- Extensions (uuid-ossp, vector, ltree)
+This module validates that sql/schema_v4.sql creates the correct database schema:
+- Extensions (vector)
 - ENUM types (platform_type, app_type, etc.)
 - Tables (apps, review_master_index, etc.)
 - Constraints (PKs, FKs, unique constraints)
@@ -21,8 +21,8 @@ from sqlalchemy import inspect, text
 # ========================================
 
 def test_schema_file_exists():
-    """Test that schema_v2.sql file exists and is readable."""
-    schema_file = Path(__file__).parent.parent / "sql" / "schema_v2.sql"
+    """Test that schema_v4.sql file exists and is readable."""
+    schema_file = Path(__file__).parent.parent / "sql" / "schema_v4.sql"
     assert schema_file.exists(), f"Schema file not found: {schema_file}"
     assert schema_file.is_file(), f"Schema path is not a file: {schema_file}"
 
@@ -34,7 +34,7 @@ def test_schema_file_exists():
 
 @pytest.mark.requires_db
 def test_schema_sql_syntax_valid(test_db_engine, test_db_schema):
-    """Test that schema_v2.sql executes without syntax errors.
+    """Test that schema_v4.sql executes without syntax errors.
 
     This test is implicitly validated by test_db_schema fixture.
     If schema has syntax errors, fixture initialization will fail.
@@ -133,6 +133,7 @@ def test_all_tables_created(test_db_session):
         'apps',
         'app_service',
         'app_metadata',
+        'ingestion_batch',
         'review_master_index',
         'app_reviews',
         'reviews_preprocessed',
@@ -140,6 +141,10 @@ def test_all_tables_created(test_db_session):
         'review_aspects',
         'review_action_analysis',
         'reviews_assigned',
+        'fact_service_review_daily',
+        'fact_service_aspect_daily',
+        'fact_category_radar_scores',
+        'srv_daily_review_list',
         'organizations',
         'profanities',
         'synonyms',
@@ -279,12 +284,11 @@ def test_indexes_exist(test_db_session):
 
     index_names = {row[0] for row in result}
 
-    # Critical indexes for Phase 3 NAS-first architecture
+    # Critical indexes for current schema v4 architecture
     expected_indexes = {
         'idx_review_master_index_processing_status',
         'idx_review_master_index_app_id',
-        'idx_review_master_index_failed',  # WHERE processing_status = 'FAILED'
-        'idx_review_master_index_retry',   # WHERE retry_count < 3
+        'idx_review_master_index_storage_path',
     }
 
     missing_indexes = expected_indexes - index_names
@@ -295,6 +299,28 @@ def test_indexes_exist(test_db_session):
 
     assert len(critical_missing) == 0, \
         f"Critical indexes missing: {critical_missing}"
+
+
+@pytest.mark.requires_db
+def test_ingestion_batch_indexes_exist(test_db_session):
+    """Test that batch-level DLQ indexes exist."""
+    result = test_db_session.execute(text(
+        """
+        SELECT indexname
+        FROM pg_indexes
+        WHERE tablename = 'ingestion_batch'
+        """
+    ))
+
+    index_names = {row[0] for row in result}
+    expected_indexes = {
+        'idx_ingestion_batch_status',
+        'idx_ingestion_batch_pending',
+        'idx_ingestion_batch_source_app',
+    }
+
+    assert expected_indexes.issubset(index_names), \
+        f"Missing ingestion_batch indexes: {expected_indexes - index_names}"
 
 
 @pytest.mark.requires_db

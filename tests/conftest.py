@@ -11,7 +11,7 @@ including:
 Architecture:
 - Session-scoped DB engine (shared across all tests)
 - Function-scoped DB sessions (isolated with rollback)
-- Automatic schema initialization from sql/schema_v2.sql
+- Automatic schema initialization from sql/schema_v4.sql
 - Real PostgreSQL for schema validation (no SQLite mocks)
 """
 

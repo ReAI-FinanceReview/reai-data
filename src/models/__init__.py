@@ -1,6 +1,6 @@
 """데이터 모델 패키지 초기화
 
-SQLAlchemy models for schema_v2.sql (hybrid DB+NAS architecture)
+SQLAlchemy models for schema_v4.sql (hybrid DB+MinIO/NAS architecture)
 """
 
 __version__ = "5.0.0"  # Bump version for schema v4 (ingestion_batch)
