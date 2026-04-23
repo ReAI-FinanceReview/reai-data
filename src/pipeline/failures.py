@@ -31,6 +31,13 @@ LIMIT :limit
 """
 
 
+def _normalize_limit(limit: int) -> int:
+    """Return a safe positive limit value for operational query helpers."""
+    if not isinstance(limit, int) or limit <= 0:
+        return 100
+    return limit
+
+
 def fetch_review_dead_letters(session, limit: int = 100):
     """Return retry-exhausted review rows from ``review_master_index``.
 
@@ -38,6 +45,7 @@ def fetch_review_dead_letters(session, limit: int = 100):
     state after at least three attempts. The caller owns any follow-up action,
     such as manual inspection, retry scheduling, or reporting.
     """
+    limit = _normalize_limit(limit)
     return (
         session.query(ReviewMasterIndex)
         .filter(ReviewMasterIndex.processing_status == ProcessingStatusType.FAILED)
@@ -57,6 +65,7 @@ def fetch_batch_dead_letters(session, limit: int = 100):
     Batch dead letters represent ingestion jobs that have already been promoted
     to ``DEAD_LETTER`` status by batch-level retry policy.
     """
+    limit = _normalize_limit(limit)
     return (
         session.query(IngestionBatch)
         .filter(IngestionBatch.status == IngestionBatchStatusType.DEAD_LETTER)

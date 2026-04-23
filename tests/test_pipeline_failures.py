@@ -46,3 +46,21 @@ def test_fetch_batch_dead_letters_queries_dead_letter_batches():
     query.filter.assert_called_once()
     query.limit.assert_called_once_with(10)
     assert "status = 'DEAD_LETTER'" in BATCH_DEAD_LETTER_SQL
+
+
+def test_fetch_review_dead_letters_normalizes_invalid_limit_to_default():
+    session, query = _session_with_query_result([sentinel.review])
+
+    results = fetch_review_dead_letters(session, limit=0)
+
+    assert results == [sentinel.review]
+    query.limit.assert_called_once_with(100)
+
+
+def test_fetch_batch_dead_letters_normalizes_invalid_limit_to_default():
+    session, query = _session_with_query_result([sentinel.batch])
+
+    results = fetch_batch_dead_letters(session, limit=None)
+
+    assert results == [sentinel.batch]
+    query.limit.assert_called_once_with(100)
