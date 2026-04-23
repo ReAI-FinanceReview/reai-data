@@ -71,7 +71,7 @@ def test_model_uses_central_enums():
     # This tests that ENUMs are properly referenced in model definitions
 
     # App model uses PlatformType
-    assert hasattr(App, 'platform')
+    assert hasattr(App, 'platform_type')
 
     # ReviewMasterIndex uses PlatformType and ProcessingStatusType
     assert hasattr(ReviewMasterIndex, 'platform_type')
