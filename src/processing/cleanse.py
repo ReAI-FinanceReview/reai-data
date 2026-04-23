@@ -135,6 +135,7 @@ from datetime import date as DateType
 from collections import defaultdict
 from typing import List, Dict, Any
 import time
+from uuid import UUID
 import pyarrow as pa
 
 from src.utils.logger import get_logger
@@ -235,14 +236,25 @@ class ReviewCleaningPipeline:
             if not text.strip():
                 skipped += 1
                 continue
-            cleaned = self.cleaner.clean(text)
-            app_id = row['app_id']
+            review_id = row.get('review_id')
+            try:
+                review_id = row['review_id']
+                cleaned = self.cleaner.clean(text)
+                app_id = row['app_id']
+                platform_review_id = row['platform_review_id']
+            except Exception as exc:
+                err_msg = f"Cleanse failed: {type(exc).__name__}: {exc}"
+                logger.exception(f"  Row cleanse failed: review_id={review_id}")
+                if review_id:
+                    self._mark_review_failed(review_id, err_msg)
+                continue
+
             groups[app_id].append({
-                'review_id': row['review_id'],
-                'platform_review_id': row['platform_review_id'],
+                'review_id': review_id,
+                'platform_review_id': platform_review_id,
                 'refined_text': cleaned,
             })
-            review_ids_by_app[app_id].append(row['review_id'])
+            review_ids_by_app[app_id].append(review_id)
             processed += 1
 
         for app_id, records in groups.items():
@@ -256,6 +268,33 @@ class ReviewCleaningPipeline:
             f"skipped={skipped}, elapsed={elapsed}s"
         )
         return {'processed': processed, 'skipped': skipped, 'elapsed_sec': elapsed}
+
+    def _mark_review_failed(self, review_id: str, error_message: str) -> None:
+        """Record a row-level cleanse failure in ReviewMasterIndex."""
+        from src.models.review_master_index import ReviewMasterIndex
+        from src.models.enums import ProcessingStatusType
+
+        try:
+            parsed_review_id = UUID(str(review_id))
+        except (TypeError, ValueError):
+            logger.warning(f"  Invalid review_id for failure tracking: {review_id}")
+            return
+
+        session = self.db.get_session()
+        try:
+            record = session.get(ReviewMasterIndex, parsed_review_id)
+            if record is None:
+                logger.warning(f"  ReviewMasterIndex not found for failed review: {review_id}")
+                return
+            record.processing_status = ProcessingStatusType.FAILED
+            record.error_message = error_message
+            record.retry_count = (record.retry_count or 0) + 1
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception(f"  Failed to mark review as FAILED: review_id={review_id}")
+        finally:
+            session.close()
 
     def _update_db_status(self, review_ids: List[str]) -> None:
         """ReviewMasterIndex의 처리 상태를 RAW → CLEANED로 업데이트한다."""

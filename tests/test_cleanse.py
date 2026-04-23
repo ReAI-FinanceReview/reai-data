@@ -222,12 +222,15 @@ def test_cleaner_profanity_dict_format(tmp_synonyms, tmp_profanity_dict):
 
 import pyarrow as pa
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid6 import uuid7
 from src.processing.cleanse import (
     load_bronze_parquet,
     write_silver_parquet,
     ReviewCleaningPipeline,
 )
+from src.models.enums import ProcessingStatusType
 
 
 def _make_bronze_minio(table: pa.Table):
@@ -378,3 +381,78 @@ def test_pipeline_skipped_rows_not_updated_to_cleaned(tmp_path):
 
     # DB 세션이 커밋됐다는 것은 r1만 처리됐다는 것
     mock_session.commit.assert_called_once()
+
+
+def test_pipeline_marks_failed_row_and_continues(tmp_path):
+    """정제 중 특정 row가 실패해도 해당 row만 FAILED 처리하고 나머지는 계속 처리한다."""
+    synonyms = {}
+    profanity = []
+    (tmp_path / "synonyms.json").write_text(json.dumps(synonyms))
+    (tmp_path / "profanity.json").write_text(json.dumps(profanity))
+
+    failed_review_id = str(uuid7())
+    ok_review_id = str(uuid7())
+    bronze = pa.table({
+        'review_id': [failed_review_id, ok_review_id],
+        'app_id': ['app1', 'app1'],
+        'platform_review_id': ['p1', 'p2'],
+        'review_text': ['실패할 리뷰', '정상 리뷰'],
+    })
+    mock_minio = _make_bronze_minio(bronze)
+    mock_db = MagicMock()
+    mock_db.get_session.return_value = MagicMock()
+
+    p = ReviewCleaningPipeline(
+        minio_client=mock_minio,
+        db_connector=mock_db,
+        synonyms_path=str(tmp_path / "synonyms.json"),
+        profanity_path=str(tmp_path / "profanity.json"),
+    )
+    p.cleaner.clean = MagicMock(side_effect=[RuntimeError("cleanse boom"), "정상 리뷰"])
+    p._mark_review_failed = MagicMock()
+
+    result = p.run(target_date=date(2026, 3, 4))
+
+    assert result['processed'] == 1
+    assert result['skipped'] == 0
+    p._mark_review_failed.assert_called_once()
+    args = p._mark_review_failed.call_args.args
+    assert args[0] == failed_review_id
+    assert "RuntimeError: cleanse boom" in args[1]
+
+    table = mock_minio.put_parquet.call_args[0][1]
+    assert table.column('review_id').to_pylist() == [ok_review_id]
+
+
+def test_mark_review_failed_updates_master_index(tmp_path):
+    """row-level cleanse 실패는 review_master_index의 FAILED 상태와 retry_count에 기록된다."""
+    synonyms = {}
+    profanity = []
+    (tmp_path / "synonyms.json").write_text(json.dumps(synonyms))
+    (tmp_path / "profanity.json").write_text(json.dumps(profanity))
+
+    mock_db = MagicMock()
+    mock_session = MagicMock()
+    mock_db.get_session.return_value = mock_session
+    record = SimpleNamespace(
+        processing_status=ProcessingStatusType.CLEANED,
+        error_message=None,
+        retry_count=2,
+    )
+    mock_session.get.return_value = record
+
+    p = ReviewCleaningPipeline(
+        minio_client=MagicMock(),
+        db_connector=mock_db,
+        synonyms_path=str(tmp_path / "synonyms.json"),
+        profanity_path=str(tmp_path / "profanity.json"),
+    )
+    review_id = str(uuid7())
+
+    p._mark_review_failed(review_id, "Cleanse failed: RuntimeError: cleanse boom")
+
+    assert record.processing_status == ProcessingStatusType.FAILED
+    assert record.error_message == "Cleanse failed: RuntimeError: cleanse boom"
+    assert record.retry_count == 3
+    mock_session.commit.assert_called_once()
+    mock_session.close.assert_called_once()
