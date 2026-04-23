@@ -293,12 +293,8 @@ def test_indexes_exist(test_db_session):
 
     missing_indexes = expected_indexes - index_names
 
-    # Allow some flexibility (partial index names might differ)
-    critical_missing = [idx for idx in missing_indexes
-                        if 'processing_status' in idx or 'app_id' in idx]
-
-    assert len(critical_missing) == 0, \
-        f"Critical indexes missing: {critical_missing}"
+    assert not missing_indexes, \
+        f"Expected indexes missing: {missing_indexes}"
 
 
 @pytest.mark.requires_db
