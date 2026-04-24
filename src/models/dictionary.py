@@ -64,7 +64,7 @@ class Profanity(Base):
 
 
 class FinancialTerm(Base):
-    """금융 용어 사전 모델 (custom table, not in schema_v2.sql)"""
+    """금융 용어 사전 모델 (custom table, not in schema_v4.sql)"""
     __tablename__ = 'financial_terms'
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment='용어 ID')

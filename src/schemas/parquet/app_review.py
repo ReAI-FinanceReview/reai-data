@@ -1,7 +1,7 @@
 """Pydantic schema for app_reviews (Bronze layer - NAS Parquet).
 
 This schema validates raw review data stored in Parquet files on NAS.
-Corresponds to the app_reviews table structure in schema_v2.sql.
+Corresponds to the app_reviews table structure in schema_v4.sql.
 """
 
 from typing import Optional

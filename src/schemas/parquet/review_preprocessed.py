@@ -1,7 +1,7 @@
 """Pydantic schema for reviews_preprocessed (Silver layer - NAS Parquet).
 
 This schema validates preprocessed review data stored in Parquet files on NAS.
-Corresponds to the reviews_preprocessed table structure in schema_v2.sql.
+Corresponds to the reviews_preprocessed table structure in schema_v4.sql.
 """
 
 from typing import Optional
