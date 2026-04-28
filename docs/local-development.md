@@ -51,14 +51,14 @@ This command is intentionally local-development oriented:
 ```bash
 PYTHONPATH=. uv run python scripts/crawl_reviews.py
 PYTHONPATH=. uv run python scripts/load_reviews.py
-PYTHONPATH=. uv run python scripts/cleanse_reviews.py --date 2026-04-26
+PYTHONPATH=. uv run python scripts/cleanse_reviews.py --date YYYY-MM-DD
 ```
 
 Notes:
 
 - `crawl_reviews.py` uploads Bronze Parquet batches to MinIO and registers `ingestion_batch` rows.
 - `load_reviews.py` consumes those pending batches into PostgreSQL.
-- `cleanse_reviews.py --date ...` must match the Bronze partition date you actually crawled.
+- Replace `YYYY-MM-DD` with the Bronze partition date you actually crawled, or use a shell expression such as `$(date -I)` for today's partition.
 - Gold analyze/aggregate steps require a real `OPENAI_API_KEY`.
 
 ## Verify results

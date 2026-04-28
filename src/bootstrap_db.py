@@ -20,7 +20,7 @@ SQL_FILE_ORDER = (
     "app_metadata_data.sql",
 )
 
-LOCAL_DB_HOSTS = {"localhost", "127.0.0.1"}
+LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 @dataclass(frozen=True)
@@ -171,4 +171,3 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     return 0
-

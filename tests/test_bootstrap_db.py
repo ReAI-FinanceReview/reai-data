@@ -4,10 +4,12 @@ import pytest
 from sqlalchemy.engine import make_url
 
 from src.bootstrap_db import (
+    BootstrapError,
     BootstrapVerification,
     build_verification_queries,
     get_bootstrap_sql_paths,
     is_local_database_url,
+    validate_bootstrap_target,
 )
 
 
@@ -28,11 +30,23 @@ def test_bootstrap_sql_paths_are_in_required_order():
 def test_is_local_database_url_accepts_localhost_targets():
     assert is_local_database_url(make_url("postgresql://reai:reai@localhost:5432/reai"))
     assert is_local_database_url(make_url("postgresql://reai:reai@127.0.0.1:5432/reai"))
+    assert is_local_database_url(make_url("postgresql://reai:reai@[::1]:5432/reai"))
 
 
 def test_is_local_database_url_rejects_remote_targets():
     assert not is_local_database_url(make_url("postgresql://reai:reai@db.internal:5432/reai"))
     assert not is_local_database_url(make_url("postgresql://reai:reai@10.0.0.15:5432/reai"))
+
+
+def test_validate_bootstrap_target_accepts_localhost_url():
+    validated = validate_bootstrap_target("postgresql://reai:reai@localhost:5432/reai")
+
+    assert validated.host == "localhost"
+
+
+def test_validate_bootstrap_target_rejects_remote_url():
+    with pytest.raises(BootstrapError):
+        validate_bootstrap_target("postgresql://reai:reai@db.internal:5432/reai")
 
 
 def test_build_verification_queries_check_required_seed_counts():
@@ -57,4 +71,3 @@ def test_local_docs_reference_bootstrap_command():
     assert "scripts/bootstrap_db.py" in content
     assert "app_metadata_data.sql" in content
     assert "crawl_reviews.py" in content
-
