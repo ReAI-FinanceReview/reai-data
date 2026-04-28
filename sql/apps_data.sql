@@ -147,4 +147,8 @@ VALUES
   ('01960001-003e-7000-8000-000000000000', 'com.kjbank.asb.pbanking',       'PLAYSTORE', '광주 와뱅크'),
 
   -- 지방은행: 제주은행 (1개)
-  ('01960001-003f-7000-8000-000000000000', 'com.jejubank.smartnew',         'PLAYSTORE', '제주은행 JBANK');
+  ('01960001-003f-7000-8000-000000000000', 'com.jejubank.smartnew',         'PLAYSTORE', '제주은행 JBANK')
+ON CONFLICT (app_id) DO UPDATE
+SET platform_app_id = EXCLUDED.platform_app_id,
+    platform_type = EXCLUDED.platform_type,
+    name = EXCLUDED.name;

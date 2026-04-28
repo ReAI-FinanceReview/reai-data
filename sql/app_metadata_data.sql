@@ -150,4 +150,11 @@ VALUES
   ('01960001-003e-7000-8000-000000000000', '01960000-0024-7000-8000-000000000000', 'JB금융그룹',     '지방은행', 'CONSUMER',  '2025-01-01', NULL, TRUE),  -- 광주 와뱅크
 
   -- 지방은행: 제주은행 ---------------------------------------------
-  ('01960001-003f-7000-8000-000000000000', '01960000-0026-7000-8000-000000000000', '제주은행',       '지방은행', 'CONSUMER',  '2025-01-01', NULL, TRUE);  -- 제주은행 JBANK
+  ('01960001-003f-7000-8000-000000000000', '01960000-0026-7000-8000-000000000000', '제주은행',       '지방은행', 'CONSUMER',  '2025-01-01', NULL, TRUE)  -- 제주은행 JBANK
+ON CONFLICT (app_id, valid_from) DO UPDATE
+SET service_id = EXCLUDED.service_id,
+    group_id = EXCLUDED.group_id,
+    group_type = EXCLUDED.group_type,
+    app_type = EXCLUDED.app_type,
+    valid_to = EXCLUDED.valid_to,
+    is_active = EXCLUDED.is_active;

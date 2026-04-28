@@ -4,7 +4,7 @@ This module defines the AppMetadata model that links physical apps to logical se
 and tracks historical changes using Slowly Changing Dimension Type 2 pattern.
 """
 
-from sqlalchemy import Column, Integer, Text, Date, Boolean, Enum as SQLEnum, ForeignKey
+from sqlalchemy import Column, Integer, Text, Date, Boolean, Enum as SQLEnum, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 
 from .base import Base
@@ -18,6 +18,9 @@ class AppMetadata(Base):
     SCD Type 2 패턴을 사용하여 변경 이력을 추적합니다.
     """
     __tablename__ = 'app_metadata'
+    __table_args__ = (
+        UniqueConstraint('app_id', 'valid_from', name='uq_app_metadata_app_id_valid_from'),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment='메타데이터 레코드 ID')
     app_id = Column(

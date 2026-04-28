@@ -98,7 +98,8 @@ CREATE TABLE app_metadata
   valid_from DATE,
   valid_to   DATE,
   is_active  BOOLEAN,
-  PRIMARY KEY (id)
+  PRIMARY KEY (id),
+  CONSTRAINT uq_app_metadata_app_id_valid_from UNIQUE (app_id, valid_from)
 );
 
 COMMENT ON TABLE app_metadata IS '연결 및 이력 관리 (SCD Type 2)';
