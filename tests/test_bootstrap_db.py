@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 
+from src import bootstrap_db as bootstrap_module
 from src.bootstrap_db import (
     BootstrapError,
     BootstrapVerification,
@@ -155,3 +156,67 @@ def test_local_docs_reference_bootstrap_command():
     assert "scripts/bootstrap_db.py" in content
     assert "app_metadata_data.sql" in content
     assert "crawl_reviews.py" in content
+
+
+def test_build_alembic_config_points_at_project_script_location():
+    database_url = "postgresql+psycopg2://reai:reai@localhost:5432/reai"
+
+    config = bootstrap_module.build_alembic_config(ROOT, database_url)
+
+    assert config.config_file_name == str(ROOT / "alembic.ini")
+    assert config.get_main_option("script_location") == str(ROOT / "alembic")
+    assert config.get_main_option("sqlalchemy.url") == database_url
+
+
+def test_bootstrap_runs_alembic_after_sql_and_seed(monkeypatch):
+    calls = []
+
+    class FakeEngine:
+        def dispose(self):
+            calls.append("dispose")
+
+    database_url = "postgresql+psycopg2://reai:reai@localhost:5432/reai"
+
+    monkeypatch.setattr(bootstrap_module, "get_project_root", lambda: ROOT)
+    monkeypatch.setattr(
+        bootstrap_module,
+        "load_database_url",
+        lambda root, explicit_url=None: database_url,
+    )
+    monkeypatch.setattr(bootstrap_module, "validate_bootstrap_target", lambda url: make_url(url))
+    monkeypatch.setattr(
+        bootstrap_module,
+        "ensure_sql_files_exist",
+        lambda sql_paths: calls.append("ensure_sql_files_exist"),
+    )
+    monkeypatch.setattr(bootstrap_module, "create_engine", lambda url: FakeEngine())
+    monkeypatch.setattr(bootstrap_module, "reset_public_schema", lambda engine: calls.append("reset"))
+    monkeypatch.setattr(
+        bootstrap_module,
+        "execute_sql_file",
+        lambda engine, sql_path: calls.append(sql_path.name),
+    )
+    monkeypatch.setattr(
+        bootstrap_module,
+        "run_alembic_baseline_and_migrations",
+        lambda root, database_url, stdout=print: calls.append("alembic"),
+    )
+    monkeypatch.setattr(
+        bootstrap_module,
+        "run_verifications",
+        lambda engine, verifications: calls.append("verify"),
+    )
+
+    bootstrap_module.bootstrap_database(stdout=lambda message: None)
+
+    assert calls == [
+        "ensure_sql_files_exist",
+        "reset",
+        "schema_v4.sql",
+        "app_service_data.sql",
+        "apps_data.sql",
+        "app_metadata_data.sql",
+        "alembic",
+        "verify",
+        "dispose",
+    ]
