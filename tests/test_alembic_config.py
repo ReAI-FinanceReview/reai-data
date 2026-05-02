@@ -46,3 +46,13 @@ def test_baseline_sql_snapshot_matches_schema_v4_at_adoption():
     schema_v4 = ROOT / "sql" / "schema_v4.sql"
 
     assert baseline_sql.read_text() == schema_v4.read_text()
+
+
+def test_schema_management_docs_define_migration_workflow_and_seed_ownership():
+    content = (ROOT / "docs" / "schema-management.md").read_text()
+
+    assert "sql/schema_v4.sql is the immutable Alembic baseline snapshot" in content
+    assert "uv run alembic stamp 20260430_0001" in content
+    assert "uv run alembic revision --autogenerate -m" in content
+    assert "uv run alembic upgrade head" in content
+    assert "Required business reference rows remain in seed SQL" in content

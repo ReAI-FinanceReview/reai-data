@@ -42,9 +42,12 @@ PYTHONPATH=. uv run python scripts/bootstrap_db.py
 This command is intentionally local-development oriented:
 
 - it resets the `public` schema
-- reapplies `schema_v4.sql`
+- reapplies the immutable `schema_v4.sql` Alembic baseline
 - loads required reference seed data from `app_service_data.sql`, `apps_data.sql`, and `app_metadata_data.sql`
+- stamps the Alembic baseline revision and applies migrations to `head`
 - verifies the expected seed counts before returning success
+
+Schema migration commands and reference-data ownership are documented in `docs/schema-management.md`.
 
 ## Run the minimum ETL flow
 

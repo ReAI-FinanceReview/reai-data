@@ -156,6 +156,7 @@ def test_local_docs_reference_bootstrap_command():
     assert "scripts/bootstrap_db.py" in content
     assert "app_metadata_data.sql" in content
     assert "crawl_reviews.py" in content
+    assert "stamps the Alembic baseline" in content
 
 
 def test_build_alembic_config_points_at_project_script_location():
