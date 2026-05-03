@@ -8,7 +8,6 @@ import yaml
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.engine.base import Engine
 
 # 이 모듈을 사용하려면 psycopg2-binary가 설치되어 있어야 합니다.
 # pip install psycopg2-binary
@@ -83,7 +82,9 @@ class DatabaseConnector:
 
     def get_session(self):
         """데이터베이스 세션을 반환합니다."""
-        return self.Session()
+        session = self.Session()
+        session.info["owned_by_db_connector"] = True
+        return session
 
     @contextmanager
     def get_autocommit_connection(self):

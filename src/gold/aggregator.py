@@ -236,7 +236,7 @@ class GoldAggregator:
             SELECT c.relname
             FROM pg_catalog.pg_inherits i
             JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid
-            JOIN pg_catalog.pg_class p ON p.oid = i.inhparentid
+            JOIN pg_catalog.pg_class p ON p.oid = i.inhparent
             WHERE p.relname = 'srv_daily_review_list'
               AND c.relname ~ '^srv_daily_review_list_\d{4}_\d{2}_\d{2}$'
         """)
@@ -290,9 +290,9 @@ class GoldAggregator:
                 COUNT(DISTINCT CASE WHEN avg_sent.avg_score >= 0.5 THEN rmi.review_id END) AS pos_count,
                 COUNT(DISTINCT CASE WHEN avg_sent.avg_score <  0.5 THEN rmi.review_id END) AS neg_count,
                 ROUND(
-                    SUM(CASE WHEN raa.is_action_required THEN 1 ELSE 0 END)::FLOAT
+                    SUM(CASE WHEN raa.is_action_required THEN 1 ELSE 0 END)::NUMERIC
                     / NULLIF(COUNT(*), 0), 4
-                ) AS action_ratio
+                )::FLOAT AS action_ratio
             FROM review_master_index rmi
             JOIN review_action_analysis raa USING (review_id)
             JOIN app_reviews ar ON ar.platform_review_id = rmi.platform_review_id
@@ -387,23 +387,25 @@ class GoldAggregator:
                 raa.review_summary,
                 ar.rating,
                 rmi.review_created_at                          AS reviewed_at,
-                (SELECT AVG(sentiment_score) FROM review_aspects
-                 WHERE review_id = rmi.review_id)              AS sentiment_score,
+                (SELECT AVG(ra_sent.sentiment_score)
+                 FROM review_aspects ra_sent
+                 WHERE ra_sent.review_id = rmi.review_id)      AS sentiment_score,
                 raa.is_action_required,
                 raa.is_attention_required,
                 rvs.assigned_dept,
-                ARRAY(SELECT DISTINCT keyword FROM review_aspects
-                      WHERE review_id = rmi.review_id
-                        AND keyword IS NOT NULL)               AS keyword,
+                ARRAY(SELECT DISTINCT ra_kw.keyword
+                      FROM review_aspects ra_kw
+                      WHERE ra_kw.review_id = rmi.review_id
+                        AND ra_kw.keyword IS NOT NULL)         AS keyword,
                 rvs.confidence
             FROM review_master_index rmi
             JOIN review_action_analysis raa USING (review_id)
             JOIN app_reviews ar ON ar.platform_review_id = rmi.platform_review_id
-            LEFT JOIN reviews_preprocessed rp USING (review_id)
+            LEFT JOIN reviews_preprocessed rp ON rp.review_id = rmi.review_id
             LEFT JOIN (
                 SELECT DISTINCT ON (review_id) review_id, assigned_dept, confidence
                 FROM reviews_assigned ORDER BY review_id, created_at DESC
-            ) rvs USING (review_id)
+            ) rvs ON rvs.review_id = rmi.review_id
             WHERE rmi.processing_status = 'ANALYZED'
               AND DATE_TRUNC('day', rmi.review_created_at)::date = :target_date
             ON CONFLICT (review_id, date)
