@@ -11,10 +11,11 @@ This module tests the load stage of the Batch DLQ architecture:
 """
 
 import pytest
-from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from uuid6 import uuid7
+
+from sqlalchemy import text
 
 from src.loaders.batch_loader import BatchLoader
 from src.models.app_metadata import AppMetadata
@@ -318,6 +319,84 @@ def test_service_id_populated_from_app_metadata(test_db_session):
     ).first()
     assert review is not None
     assert review.service_id == service_id, "service_id should be populated from app_metadata"
+
+
+@pytest.mark.requires_db
+def test_load_bare_minio_object_key_from_daily_crawl_batch(test_db_session):
+    """Daily crawler batches store a bare MinIO key; loader must read it from MinIO."""
+    import pyarrow as pa
+    from datetime import date
+
+    now = datetime.now(timezone.utc)
+    app_id = uuid7()
+    service_id = uuid7()
+
+    service = AppService(service_id=service_id, service_name='Seeded Service')
+    app = App(
+        app_id=app_id,
+        platform_app_id='seeded_appstore_001',
+        platform_type=PlatformType.APPSTORE,
+        name='Seeded App',
+    )
+    metadata = AppMetadata(
+        app_id=app_id,
+        service_id=service_id,
+        is_active=True,
+        valid_from=date.today(),
+    )
+    test_db_session.add_all([service, app, metadata])
+    test_db_session.commit()
+
+    review_schema = AppReviewSchema(
+        review_id=str(uuid7()),
+        app_id=str(app_id),
+        platform_type='APPSTORE',
+        platform_review_id='daily_crawl_review_001',
+        reviewer_name='Seed User',
+        review_text='공식 seed 앱에서 수집한 리뷰',
+        rating=4,
+        reviewed_at=datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc),
+        is_reply=False,
+        reply_comment=None,
+    )
+    batch = IngestionBatch(
+        batch_id=uuid7(),
+        source_type=PlatformType.APPSTORE,
+        platform_app_id='daily_batch',
+        app_name=None,
+        storage_path=(
+            'bronze/app_reviews/year=2026/month=05/day=03/'
+            'appstore_20260503_145830_064432.parquet'
+        ),
+        file_format='parquet',
+        record_count=1,
+        status=IngestionBatchStatusType.PENDING,
+        retry_count=0,
+        max_retries=3,
+        created_at=now,
+        updated_at=now,
+    )
+    test_db_session.add(batch)
+    test_db_session.commit()
+
+    loader = _make_loader(test_db_session)
+    loader._minio = MagicMock()
+    loader._minio.get_parquet.return_value = pa.Table.from_pylist([review_schema.model_dump()])
+
+    loaded = loader.load_pending_batches(limit=100)
+
+    assert loaded == 1
+    loader._minio.get_parquet.assert_called_once_with(batch.storage_path)
+    review = test_db_session.query(ReviewMasterIndex).filter_by(
+        platform_review_id='daily_crawl_review_001'
+    ).one()
+    assert review.service_id == service_id
+    assert batch.status == IngestionBatchStatusType.LOADED
+    assert batch.error_message is None
+    stored_review_count = test_db_session.execute(
+        text("SELECT COUNT(*) FROM app_reviews WHERE platform_review_id = 'daily_crawl_review_001'")
+    ).scalar_one()
+    assert stored_review_count == 1
 
 
 @pytest.mark.requires_db

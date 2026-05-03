@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Optional, Set
 from uuid import UUID
 
-import pyarrow.parquet as pq
+from sqlalchemy import text
 from sqlalchemy.exc import PendingRollbackError
 
 from src.utils.db_connector import DatabaseConnector
@@ -121,18 +121,14 @@ class BatchLoader:
             f"(retry={batch.retry_count})"
         )
 
-        # 1. MinIO에서 Parquet 읽기
-        if _is_local_storage_path(batch.storage_path):
-            table = pq.read_table(batch.storage_path)
-        else:
-            if getattr(self, "_minio", None) is None:
-                self._minio = MinIOClient()
-            table = self._minio.get_parquet(_object_key_from_storage_path(batch.storage_path))
+        # 1. Parquet 읽기: 로컬 파일, s3:// URI, MinIO object key를 모두 지원한다.
+        table = self._read_batch_table(batch.storage_path)
         data_dicts = table.to_pylist()
         records = [AppReviewSchema(**d) for d in data_dicts]
         if not records:
             self.logger.warning(f"Batch {batch.batch_id}: empty Parquet file")
             batch.status = IngestionBatchStatusType.LOADED
+            batch.error_message = None
             batch.loaded_at = datetime.now(timezone.utc)
             batch.updated_at = datetime.now(timezone.utc)
             session.commit()
@@ -160,6 +156,7 @@ class BatchLoader:
         if not new_records:
             self.logger.info(f"Batch {batch.batch_id}: all records already loaded (idempotent)")
             batch.status = IngestionBatchStatusType.LOADED
+            batch.error_message = None
             batch.loaded_at = datetime.now(timezone.utc)
             batch.updated_at = datetime.now(timezone.utc)
             session.commit()
@@ -169,6 +166,7 @@ class BatchLoader:
         now = datetime.now(timezone.utc)
         service_id_cache: Dict[UUID, Optional[UUID]] = {}
         master_index_records = []
+        app_review_rows = []
         for record in new_records:
             app_uuid = UUID(record.app_id)
             self._ensure_app_exists(session, app_uuid, record, batch, platform_type)
@@ -191,10 +189,43 @@ class BatchLoader:
                 retry_count=0
             )
             master_index_records.append(master_index)
+            app_review_rows.append(
+                {
+                    "review_id": UUID(record.review_id),
+                    "app_id": app_uuid,
+                    "platform_type": platform_type.value,
+                    "platform_review_id": record.platform_review_id,
+                    "reviewer_name": record.reviewer_name,
+                    "review_text": record.review_text,
+                    "rating": record.rating,
+                    "reviewed_at": record.reviewed_at,
+                    "is_reply": record.is_reply or False,
+                    "reply_comment": record.reply_comment,
+                }
+            )
 
         # 4. DB 적재 + 배치 상태 업데이트
         session.add_all(master_index_records)
+        if app_review_rows:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO app_reviews (
+                        review_id, app_id, platform_type, country_code,
+                        platform_review_id, reviewer_name, review_text, rating,
+                        app_version, reviewed_at, is_reply, reply_comment
+                    )
+                    VALUES (
+                        :review_id, :app_id, :platform_type, 'kr',
+                        :platform_review_id, :reviewer_name, :review_text, :rating,
+                        NULL, :reviewed_at, :is_reply, :reply_comment
+                    )
+                    """
+                ),
+                app_review_rows,
+            )
         batch.status = IngestionBatchStatusType.LOADED
+        batch.error_message = None
         batch.loaded_at = now
         batch.updated_at = now
         session.commit()

@@ -3,10 +3,21 @@
 
 Issue #14: Implement Review Data Cleansing Pipeline (Bronze to Silver)
 """
+from collections import defaultdict
+from datetime import date as DateType
+import json
 import re
+import time
+from typing import Any, Dict, List
 import unicodedata
+from uuid import UUID
 
 import emoji
+from flashtext import KeywordProcessor
+import pyarrow as pa
+
+from src.utils.logger import get_logger
+from src.utils.minio_client import MinIOClient
 
 
 # =========================================================
@@ -74,9 +85,6 @@ def mask_pii(text: str) -> str:
 # ReviewCleaner: 8-step 정제 파이프라인 클래스
 # =========================================================
 
-import json
-from flashtext import KeywordProcessor
-
 
 class ReviewCleaner:
     """텍스트 정제 파이프라인 클래스.
@@ -130,16 +138,6 @@ class ReviewCleaner:
 # =========================================================
 # Bronze 로더 / Silver 라이터
 # =========================================================
-
-from datetime import date as DateType
-from collections import defaultdict
-from typing import List, Dict, Any
-import time
-from uuid import UUID
-import pyarrow as pa
-
-from src.utils.logger import get_logger
-from src.utils.minio_client import MinIOClient
 
 logger = get_logger(__name__)
 
@@ -268,7 +266,7 @@ class ReviewCleaningPipeline:
         for app_id, records in groups.items():
             write_silver_parquet(self.minio, app_id, target_date, records)
             logger.info(f"  Wrote {len(records)} rows → Silver (app_id={app_id})")
-            self._update_db_status(review_ids_by_app[app_id])
+            self._update_db_status(review_ids_by_app[app_id], preprocessed_records=records)
 
         elapsed = round(time.time() - start, 2)
         logger.info(
@@ -331,14 +329,21 @@ class ReviewCleaningPipeline:
         finally:
             session.close()
 
-    def _update_db_status(self, review_ids: List[str]) -> None:
-        """ReviewMasterIndex의 처리 상태를 CLEANED로 업데이트한다.
+    def _update_db_status(
+        self,
+        review_ids: List[str],
+        preprocessed_records: List[Dict[str, Any]] | None = None,
+    ) -> None:
+        """reviews_preprocessed 적재 후 ReviewMasterIndex를 CLEANED로 업데이트한다.
 
         정상 RAW row와 이전 cleanse 단계에서 실패했던 row만 성공 처리한다.
         다른 단계의 FAILED row는 이 단계의 성공으로 복구하지 않는다.
         """
+        from sqlalchemy import func
+        from sqlalchemy.dialects.postgresql import insert
         from sqlalchemy import and_, or_
         from src.models.review_master_index import ReviewMasterIndex
+        from src.models.review_preprocessed import ReviewPreprocessed
         from src.models.enums import ProcessingStatusType
 
         if not review_ids:
@@ -348,6 +353,28 @@ class ReviewCleaningPipeline:
 
         session = self.db.get_session()
         try:
+            if preprocessed_records:
+                rows = [
+                    {
+                        "review_id": UUID(str(record["review_id"])),
+                        "platform_review_id": record["platform_review_id"],
+                        "refined_text": record["refined_text"],
+                    }
+                    for record in preprocessed_records
+                ]
+                stmt = insert(ReviewPreprocessed).values(rows)
+                session.execute(
+                    stmt.on_conflict_do_update(
+                        index_elements=[ReviewPreprocessed.platform_review_id],
+                        set_={
+                            "review_id": stmt.excluded.review_id,
+                            "platform_review_id": stmt.excluded.platform_review_id,
+                            "refined_text": stmt.excluded.refined_text,
+                            "updated_at": func.now(),
+                        },
+                    )
+                )
+
             session.query(ReviewMasterIndex).filter(
                 ReviewMasterIndex.review_id.in_(parsed_review_ids),
                 or_(
@@ -366,7 +393,7 @@ class ReviewCleaningPipeline:
             )
             session.commit()
             logger.info(f"  Updated {len(parsed_review_ids)} records to CLEANED")
-        except Exception as e:
+        except Exception:
             session.rollback()
             logger.exception("DB status update failed")
             raise
