@@ -1,7 +1,7 @@
 """Unit tests for GoldAggregator."""
 
 from datetime import date, timedelta
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -366,6 +366,16 @@ class TestDropOldPartitions:
         dropped = agg._drop_old_partitions(session, retention_days=14)
 
         assert dropped == 0
+
+    def test_catalog_query_uses_postgresql_inhparent_column(self):
+        session = self._make_session_with_partitions([])
+        agg = _make_aggregator(MagicMock())
+
+        agg._drop_old_partitions(session, retention_days=14)
+
+        catalog_sql = str(session.execute.call_args_list[0][0][0])
+        assert "i.inhparent" in catalog_sql
+        assert "i.inhparentid" not in catalog_sql
 
     def test_run_calls_drop_old_partitions(self, mock_session):
         agg = _make_aggregator(mock_session)

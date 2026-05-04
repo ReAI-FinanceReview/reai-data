@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+_UNSET = object()
 
 
 class MinIOClient:
@@ -23,20 +24,22 @@ class MinIOClient:
 
     def __init__(
         self,
-        endpoint: str = None,
-        access_key: str = None,
-        secret_key: str = None,
-        bucket: str = None,
+        endpoint: str | None | object = _UNSET,
+        access_key: str | None | object = _UNSET,
+        secret_key: str | None | object = _UNSET,
+        bucket: str | None | object = _UNSET,
     ):
-        raw_endpoint = endpoint or os.environ.get('MINIO_ENDPOINT', '')
+        raw_endpoint = os.environ.get('MINIO_ENDPOINT', '') if endpoint is _UNSET else (endpoint or '')
         if raw_endpoint and not raw_endpoint.startswith(('http://', 'https://')):
             use_ssl = os.environ.get('MINIO_USE_SSL', 'false').lower() == 'true'
             scheme = 'https' if use_ssl else 'http'
             raw_endpoint = f'{scheme}://{raw_endpoint}'
         self.endpoint = raw_endpoint or None
-        self.access_key = access_key or os.environ.get('MINIO_ACCESS_KEY')
-        self.secret_key = secret_key or os.environ.get('MINIO_SECRET_KEY')
-        self.bucket = bucket or os.environ['MINIO_BUCKET']
+        self.access_key = os.environ.get('MINIO_ACCESS_KEY') if access_key is _UNSET else access_key
+        self.secret_key = os.environ.get('MINIO_SECRET_KEY') if secret_key is _UNSET else secret_key
+        self.bucket = os.environ.get('MINIO_BUCKET') if bucket is _UNSET else bucket
+        if not self.bucket:
+            raise ValueError("MINIO_BUCKET must be set or bucket must be provided")
 
         if bool(self.access_key) != bool(self.secret_key):
             raise ValueError(

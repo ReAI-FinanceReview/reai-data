@@ -64,6 +64,56 @@ Notes:
 - Replace `YYYY-MM-DD` with the Bronze partition date you actually crawled, or use a shell expression such as `$(date -I)` for today's partition.
 - Gold analyze/aggregate steps require a real `OPENAI_API_KEY`.
 
+## Prove backend datamart serving readiness
+
+After the minimum ETL flow and Gold analysis have completed for a date, run the
+real pipeline entrypoint for the backend-facing mart step:
+
+```bash
+PYTHONPATH=. uv run python scripts/run_pipeline.py --steps gold,aggregate --target-date YYYY-MM-DD
+```
+
+For a PR-safe PostgreSQL proof that does not require live store or LLM access,
+run the focused contract suite against the Docker test database:
+
+```bash
+docker compose -f docker-compose.test.yml up -d test-postgres
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
+PYTHONPATH=. uv run pytest tests/test_backend_datamart_contract.py -q
+```
+
+This suite seeds upstream analyzed review rows, invokes the real `aggregate`
+step dispatcher, and asserts generated rows plus backend-facing semantics in:
+
+- `fact_service_review_daily`
+- `fact_service_aspect_daily`
+- `fact_category_radar_scores`
+- `srv_daily_review_list`
+
+## Manual live crawl smoke evidence
+
+For release evidence, keep live crawl proof separate from PR automation because
+store responses and LLM credentials can be externally flaky. Record:
+
+- crawl command used
+- source/service target
+- timestamp
+- `target_date`
+- row counts for all four backend-facing mart tables
+- failures or caveats
+
+Use this SQL shape for the row-count evidence:
+
+```sql
+SELECT 'fact_service_review_daily' AS table_name, COUNT(*) FROM fact_service_review_daily WHERE date = :target_date
+UNION ALL
+SELECT 'fact_service_aspect_daily', COUNT(*) FROM fact_service_aspect_daily WHERE date = :target_date
+UNION ALL
+SELECT 'fact_category_radar_scores', COUNT(*) FROM fact_category_radar_scores WHERE date = :target_date
+UNION ALL
+SELECT 'srv_daily_review_list', COUNT(*) FROM srv_daily_review_list WHERE date = :target_date;
+```
+
 ## Verify results
 
 - DataGrip / PostgreSQL:

@@ -117,6 +117,20 @@ def test_init_partial_credentials_raises(mock_s3_constructor):
         MinIOClient(endpoint=None, access_key='a', secret_key=None, bucket='test')
 
 
+def test_init_missing_bucket_raises(mock_s3_constructor, monkeypatch):
+    """bucket 파라미터와 MINIO_BUCKET 환경변수가 모두 없으면 즉시 실패한다."""
+    monkeypatch.delenv("MINIO_BUCKET", raising=False)
+
+    with pytest.raises(ValueError, match="MINIO_BUCKET"):
+        MinIOClient(endpoint=None, access_key=None, secret_key=None)
+
+
+def test_init_explicit_none_bucket_raises(mock_s3_constructor):
+    """bucket=None은 지연 실패가 아니라 생성자 실패로 처리한다."""
+    with pytest.raises(ValueError, match="MINIO_BUCKET"):
+        MinIOClient(endpoint=None, access_key=None, secret_key=None, bucket=None)
+
+
 def test_init_no_credentials_allowed(mock_s3_constructor):
     """둘 다 None이면 IAM 모드로 정상 초기화된다."""
     client = MinIOClient(endpoint=None, access_key=None, secret_key=None, bucket='test')

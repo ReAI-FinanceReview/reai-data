@@ -22,14 +22,12 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any
-from uuid import UUID
 from uuid6 import uuid7
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool
 
-from src.models.base import Base
 from src.models.apps import App
 from src.models.review_master_index import ReviewMasterIndex
 from src.models.ingestion_batch import IngestionBatch
@@ -50,13 +48,15 @@ def test_db_url() -> str:
        - 서버 개발 시 (VS Code Remote SSH): postgresql://vector_mgr:...@reai.kro.kr:55000/testdb
        - 로컬 개발 시: docker-compose.test.yml 실행 후 localhost:5433/testdb
          (pgvector/pgvector:pg17 이미지 필요: schema_v4.sql의 vector extension 사용)
-    2. Default: postgresql://testuser:testpass@localhost:5433/testdb (docker-compose.test.yml 기본값)
+    2. Default: postgresql://testuser:testpass@localhost:{TEST_POSTGRES_PORT:-5433}/testdb
+       (docker-compose.test.yml 기본값과 동일한 포트)
 
     Note: Tests require a real PostgreSQL database (not SQLite).
     testdb는 프로덕션 DB(postgres)와 완전히 분리된 전용 테스트 DB여야 한다.
     DROP SCHEMA public CASCADE가 실행되므로 절대 프로덕션 DB를 가리켜선 안 된다.
     """
-    default_url = "postgresql://testuser:testpass@localhost:5433/testdb"
+    test_postgres_port = os.getenv("TEST_POSTGRES_PORT", "5433")
+    default_url = f"postgresql://testuser:testpass@localhost:{test_postgres_port}/testdb"
     return os.getenv("TEST_DATABASE_URL", default_url)
 
 
@@ -333,7 +333,7 @@ def db_with_failed_reviews(test_db_session: Session) -> Session:
         ReviewMasterIndex(
             review_id=uuid7(),
             app_id=app.app_id,
-            platform_review_id=f'failed_review_0',
+            platform_review_id='failed_review_0',
             platform_type=PlatformType.APPSTORE,
             review_created_at=now,
             ingested_at=now,
@@ -346,7 +346,7 @@ def db_with_failed_reviews(test_db_session: Session) -> Session:
         ReviewMasterIndex(
             review_id=uuid7(),
             app_id=app.app_id,
-            platform_review_id=f'failed_review_1',
+            platform_review_id='failed_review_1',
             platform_type=PlatformType.APPSTORE,
             review_created_at=now,
             ingested_at=now,
@@ -359,7 +359,7 @@ def db_with_failed_reviews(test_db_session: Session) -> Session:
         ReviewMasterIndex(
             review_id=uuid7(),
             app_id=app.app_id,
-            platform_review_id=f'failed_review_3',
+            platform_review_id='failed_review_3',
             platform_type=PlatformType.APPSTORE,
             review_created_at=now,
             ingested_at=now,
