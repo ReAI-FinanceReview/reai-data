@@ -197,10 +197,12 @@ class BaseCrawler(ABC):
             List of new (non-duplicate) reviews
         """
         new_reviews = []
+        seen_platform_ids = set(existing_platform_ids)
         for review in reviews_data:
             platform_review_id = self._extract_platform_review_id(review)
-            if platform_review_id and platform_review_id not in existing_platform_ids:
+            if platform_review_id and platform_review_id not in seen_platform_ids:
                 new_reviews.append(review)
+                seen_platform_ids.add(platform_review_id)
 
         return new_reviews
 
@@ -288,6 +290,101 @@ class BaseCrawler(ABC):
             raise
         finally:
             session.close()
+
+    def save_crawl_batch(
+        self,
+        app_id: str,
+        app_name: Optional[str],
+        reviews_data: List[Dict[str, Any]],
+        build_parquet_records_func: Callable,
+    ) -> Tuple[Optional[UUID], int, Optional[Path]]:
+        """앱 단위 리뷰를 로컬 Parquet 파일과 PENDING ingestion_batch로 저장."""
+        from ..crawlers.exceptions import ParquetWriteError
+        from ..models.ingestion_batch import IngestionBatch
+        from ..models.enums import IngestionBatchStatusType
+
+        if not self.enable_parquet:
+            return None, 0, None
+
+        session = self.db_connector.get_session()
+        try:
+            platform_type = self._get_platform_type()
+            app = self._get_or_create_app(session, app_id, app_name, platform_type)
+            existing_platform_ids = self._get_existing_platform_ids(
+                session, app.app_id, platform_type
+            )
+            memory_key = (platform_type.value, app_id)
+            seen_by_app = getattr(self, "_seen_crawl_platform_ids", {})
+            existing_platform_ids.update(seen_by_app.get(memory_key, set()))
+            new_reviews_data = self._filter_new_reviews(reviews_data, existing_platform_ids)
+
+            if not new_reviews_data:
+                session.commit()
+                return None, 0, None
+
+            review_id_map, reviewed_at_cache = self._create_review_id_and_timestamp_caches(
+                new_reviews_data,
+                self._parse_reviewed_at,
+            )
+            parquet_records = build_parquet_records_func(
+                new_reviews_data,
+                review_id_map,
+                reviewed_at_cache,
+                app,
+            )
+
+            if not parquet_records:
+                session.commit()
+                return None, 0, None
+
+            try:
+                parquet_path = self.parquet_writer.write_batch(parquet_records)
+            except Exception as exc:
+                session.rollback()
+                raise ParquetWriteError(str(exc)) from exc
+
+            now = datetime.now(timezone.utc)
+            batch = IngestionBatch(
+                batch_id=uuid7(),
+                source_type=platform_type,
+                platform_app_id=app_id,
+                app_name=app_name,
+                storage_path=str(parquet_path),
+                file_format="parquet",
+                record_count=len(parquet_records),
+                status=IngestionBatchStatusType.PENDING,
+                retry_count=0,
+                max_retries=self.max_retries,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(batch)
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
+                self._cleanup_local_parquet_artifact(parquet_path)
+                raise
+
+            seen_by_app.setdefault(memory_key, set()).update(review_id_map)
+            self._seen_crawl_platform_ids = seen_by_app
+            return batch.batch_id, len(parquet_records), parquet_path
+
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def _cleanup_local_parquet_artifact(self, parquet_path: Path) -> None:
+        """Remove a local Parquet artifact after DB registration failure."""
+        try:
+            Path(parquet_path).unlink(missing_ok=True)
+            self.logger.warning(f"Rolled back orphaned local Parquet file: {parquet_path}")
+        except Exception as cleanup_err:
+            self.logger.error(
+                f"Failed to clean up orphaned local Parquet file {parquet_path}: {cleanup_err}"
+            )
 
     def save_daily_batch(
         self,

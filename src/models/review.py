@@ -31,7 +31,7 @@ class Review(Base):
         nullable=False,
         comment='앱 ID (references Parquet, no FK)'
     )
-    platform = Column(
+    platform_type = Column(
         SQLEnum(PlatformType, name='platform_type', create_type=False),
         nullable=False,
         comment='플랫폼 타입 (APPSTORE, PLAYSTORE)'
@@ -75,5 +75,5 @@ class Review(Base):
     def __repr__(self):
         return (
             f"<Review(review_id={self.review_id}, app_id={self.app_id}, "
-            f"platform={self.platform}, rating={self.rating})>"
+            f"platform_type={self.platform_type}, rating={self.rating})>"
         )

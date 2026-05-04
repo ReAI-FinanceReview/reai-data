@@ -6,6 +6,7 @@ and tracks historical changes using Slowly Changing Dimension Type 2 pattern.
 
 from sqlalchemy import Column, Integer, Text, Date, Boolean, Enum as SQLEnum, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 
 from .base import Base
 from .enums import AppType
@@ -44,6 +45,9 @@ class AppMetadata(Base):
     valid_from = Column(Date, comment='유효 시작일')
     valid_to = Column(Date, comment='유효 종료일 (NULL이면 현재 유효)')
     is_active = Column(Boolean, comment='활성 여부')
+
+    app = relationship('App')
+    service = relationship('AppService')
 
     def __repr__(self):
         return (

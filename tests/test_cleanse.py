@@ -1,11 +1,25 @@
+from datetime import date
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pyarrow as pa
 import pytest
+from uuid6 import uuid7
+
+from src.models.enums import ProcessingStatusType
+from src.models.review_preprocessed import ReviewPreprocessed
 from src.processing.cleanse import (
+    ReviewCleaner,
+    ReviewCleaningPipeline,
+    load_bronze_parquet,
     normalize_unicode,
     normalize_whitespace,
     remove_emojis,
     reduce_repeated_chars,
     remove_special_chars,
     mask_pii,
+    write_silver_parquet,
 )
 
 
@@ -149,11 +163,6 @@ def test_normalize_whitespace_empty():
 # ReviewCleaner
 # ========================================
 
-import json
-import tempfile
-from pathlib import Path
-from src.processing.cleanse import ReviewCleaner
-
 
 @pytest.fixture
 def tmp_synonyms(tmp_path):
@@ -219,18 +228,6 @@ def test_cleaner_profanity_dict_format(tmp_synonyms, tmp_profanity_dict):
 # ========================================
 # Bronze 로더 / Silver 라이터 / Pipeline
 # ========================================
-
-import pyarrow as pa
-from datetime import date
-from types import SimpleNamespace
-from unittest.mock import MagicMock
-from uuid6 import uuid7
-from src.processing.cleanse import (
-    load_bronze_parquet,
-    write_silver_parquet,
-    ReviewCleaningPipeline,
-)
-from src.models.enums import ProcessingStatusType
 
 
 def _make_bronze_minio(table: pa.Table):
@@ -462,6 +459,87 @@ def test_mark_review_failed_updates_master_index(tmp_path):
     mock_session.close.assert_called_once()
 
 
+def _make_pipeline_for_update_db_status(tmp_path, db_session):
+    synonyms = {}
+    profanity = []
+    (tmp_path / "synonyms.json").write_text(json.dumps(synonyms))
+    (tmp_path / "profanity.json").write_text(json.dumps(profanity))
+    mock_db = MagicMock()
+    mock_db.get_session.return_value = db_session
+    return ReviewCleaningPipeline(
+        minio_client=MagicMock(),
+        db_connector=mock_db,
+        synonyms_path=str(tmp_path / "synonyms.json"),
+        profanity_path=str(tmp_path / "profanity.json"),
+    )
+
+
+@pytest.mark.requires_db
+def test_update_db_status_upserts_preprocessed_text_without_rewriting_review_id(
+    tmp_path,
+    test_db_session,
+):
+    review_id = uuid7()
+    platform_review_id = "cleanse-upsert-stable"
+    test_db_session.add(
+        ReviewPreprocessed(
+            review_id=review_id,
+            platform_review_id=platform_review_id,
+            refined_text="old text",
+        )
+    )
+    test_db_session.commit()
+
+    pipeline = _make_pipeline_for_update_db_status(tmp_path, test_db_session)
+    pipeline._update_db_status(
+        [str(review_id)],
+        [
+            {
+                "review_id": str(review_id),
+                "platform_review_id": platform_review_id,
+                "refined_text": "new text",
+            }
+        ],
+    )
+
+    stored = test_db_session.query(ReviewPreprocessed).filter_by(
+        platform_review_id=platform_review_id
+    ).one()
+    assert stored.review_id == review_id
+    assert stored.refined_text == "new text"
+
+
+@pytest.mark.requires_db
+def test_update_db_status_rejects_platform_review_id_review_id_mismatch(
+    tmp_path,
+    test_db_session,
+):
+    stored_review_id = uuid7()
+    incoming_review_id = uuid7()
+    platform_review_id = "cleanse-upsert-mismatch"
+    test_db_session.add(
+        ReviewPreprocessed(
+            review_id=stored_review_id,
+            platform_review_id=platform_review_id,
+            refined_text="old text",
+        )
+    )
+    test_db_session.commit()
+
+    pipeline = _make_pipeline_for_update_db_status(tmp_path, test_db_session)
+    with pytest.raises(ValueError, match="different review_id"):
+        pipeline._update_db_status(
+            [str(incoming_review_id)],
+            [
+                {
+                    "review_id": str(incoming_review_id),
+                    "platform_review_id": platform_review_id,
+                    "refined_text": "new text",
+                }
+            ],
+        )
+
+
 def test_mark_review_failed_ignores_already_processed_review(tmp_path):
     """이미 처리된 리뷰는 cleanse 실패로 상태를 변경하지 않는다."""
     synonyms = {}
@@ -670,3 +748,75 @@ def test_update_db_status_recovers_prior_cleanse_failures(tmp_path):
     assert update_values["processing_status"] == ProcessingStatusType.CLEANED
     assert update_values["error_message"] is None
     mock_session.commit.assert_called_once()
+
+
+@pytest.mark.requires_db
+def test_update_db_status_upserts_reviews_preprocessed_rows(tmp_path, test_db_session):
+    """Bronze→Silver 성공 시 DB Gold 입력 테이블도 같이 적재되어야 한다."""
+    from datetime import datetime, timezone
+
+    from src.models.apps import App
+    from src.models.enums import PlatformType
+    from src.models.review_master_index import ReviewMasterIndex
+    from src.models.review_preprocessed import ReviewPreprocessed
+
+    synonyms = {}
+    profanity = []
+    (tmp_path / "synonyms.json").write_text(json.dumps(synonyms))
+    (tmp_path / "profanity.json").write_text(json.dumps(profanity))
+
+    app_id = uuid7()
+    review_id = uuid7()
+    platform_review_id = "seed-review-001"
+    test_db_session.add(
+        App(
+            app_id=app_id,
+            platform_app_id="seeded_appstore_001",
+            platform_type=PlatformType.APPSTORE,
+            name="Seeded App",
+        )
+    )
+    test_db_session.add(
+        ReviewMasterIndex(
+            review_id=review_id,
+            app_id=app_id,
+            platform_review_id=platform_review_id,
+            platform_type=PlatformType.APPSTORE,
+            review_created_at=datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc),
+            ingested_at=datetime(2026, 5, 3, 12, 1, tzinfo=timezone.utc),
+            processing_status=ProcessingStatusType.RAW,
+            parquet_written_at=datetime(2026, 5, 3, 12, 1, tzinfo=timezone.utc),
+            storage_path="bronze/app_reviews/year=2026/month=05/day=03/data.parquet",
+            retry_count=0,
+            is_active=True,
+            is_reply=False,
+        )
+    )
+    test_db_session.commit()
+
+    mock_db = MagicMock()
+    mock_db.get_session.return_value = test_db_session
+    pipeline = ReviewCleaningPipeline(
+        minio_client=MagicMock(),
+        db_connector=mock_db,
+        synonyms_path=str(tmp_path / "synonyms.json"),
+        profanity_path=str(tmp_path / "profanity.json"),
+    )
+
+    pipeline._update_db_status(
+        [str(review_id)],
+        preprocessed_records=[
+            {
+                "review_id": str(review_id),
+                "platform_review_id": platform_review_id,
+                "refined_text": "공식 seed 앱 리뷰 정제문",
+            }
+        ],
+    )
+
+    preprocessed = test_db_session.get(ReviewPreprocessed, review_id)
+    master = test_db_session.get(ReviewMasterIndex, review_id)
+    assert preprocessed is not None
+    assert preprocessed.platform_review_id == platform_review_id
+    assert preprocessed.refined_text == "공식 seed 앱 리뷰 정제문"
+    assert master.processing_status == ProcessingStatusType.CLEANED

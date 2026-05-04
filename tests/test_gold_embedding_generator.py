@@ -20,6 +20,7 @@ from src.gold.embedding_generator import GoldEmbeddingGenerator
 from src.models.review_embedding import ReviewEmbedding
 from src.models.review_preprocessed import ReviewPreprocessed
 from src.models.review_master_index import ReviewMasterIndex
+from src.models.apps import App
 from src.models.enums import ProcessingStatusType, PlatformType
 
 
@@ -53,6 +54,14 @@ def _add_preprocessed(session, review_id: UUID, text: str = "테스트 리뷰"):
 
 def _add_master_index(session, review_id: UUID, status: ProcessingStatusType):
     app_id = uuid7()
+    session.add(
+        App(
+            app_id=app_id,
+            platform_app_id=f"app_{app_id}",
+            platform_type=PlatformType.APPSTORE,
+            name="Embedding Test App",
+        )
+    )
     rmi = ReviewMasterIndex(
         review_id=review_id,
         app_id=app_id,
