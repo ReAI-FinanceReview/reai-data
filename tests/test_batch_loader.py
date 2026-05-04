@@ -134,6 +134,19 @@ def test_load_missing_parquet_marks_failed(test_db_session, temp_bronze_dir):
     assert updated_batch.error_message is not None
 
 
+def test_read_missing_absolute_parquet_path_fails_without_minio(tmp_path):
+    """Absolute local paths must fail locally instead of falling through to MinIO."""
+    loader = BatchLoader.__new__(BatchLoader)
+    loader._minio = MagicMock()
+
+    missing_path = tmp_path / "missing.parquet"
+
+    with pytest.raises(FileNotFoundError, match="Parquet file not found"):
+        loader._read_batch_table(str(missing_path))
+
+    loader._minio.get_parquet.assert_not_called()
+
+
 @pytest.mark.requires_db
 def test_load_db_failure_marks_batch_failed(test_db_session, db_with_pending_batches):
     """Test DB failure causes FAILED status + retry_count increment."""

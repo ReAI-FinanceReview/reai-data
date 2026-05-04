@@ -252,6 +252,8 @@ class BatchLoader:
         local_path = Path(storage_path)
         if local_path.exists():
             return pq.read_table(local_path)
+        if local_path.is_absolute():
+            raise FileNotFoundError(f"Parquet file not found: {storage_path}")
         if self._minio is None:
             self._minio = MinIOClient()
         return self._minio.get_parquet(storage_path)
