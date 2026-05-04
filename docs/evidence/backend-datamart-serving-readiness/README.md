@@ -1,9 +1,11 @@
 # Backend Datamart Serving Readiness Evidence
 
 This directory is the release evidence path for backend datamart serving readiness.
-Automated PR checks prove the local Docker PostgreSQL + MinIO integration path with
-a deterministic fixture. Live crawl remains a manual smoke proof because external
-store/network availability and production credentials are not PR-gate inputs.
+Automated PR checks prove the local Docker PostgreSQL aggregate path with a
+deterministic fixture. The Docker test stack also provisions MinIO with the same
+runtime environment names used by the pipeline, but live object proof remains a
+manual smoke proof because external store/network availability and production
+credentials are not PR-gate inputs.
 
 ## Automated local proof
 
@@ -11,12 +13,13 @@ Start the isolated test services, then run the readiness proof:
 
 ```bash
 docker compose -f docker-compose.test.yml up -d test-postgres test-minio test-minio-init
-PYTHONPATH=. TEST_MINIO_ENDPOINT=localhost:9002 TEST_MINIO_BUCKET=reai-test-data \
+PYTHONPATH=. MINIO_ENDPOINT=localhost:9002 MINIO_ACCESS_KEY=minio \
+  MINIO_SECRET_KEY=minio123 MINIO_BUCKET=reai-data \
   uv run pytest -q tests/test_backend_datamart_serving_readiness.py
 ```
 
-The test writes and reads a real MinIO Parquet object, invokes the real pipeline
-CLI aggregate entrypoint, and asserts generated rows plus semantics for:
+The automated test seeds upstream PostgreSQL pipeline tables, invokes the real
+pipeline CLI aggregate entrypoint, and asserts generated rows plus semantics for:
 
 - `fact_service_review_daily`
 - `fact_service_aspect_daily`

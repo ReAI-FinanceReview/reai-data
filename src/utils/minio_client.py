@@ -37,7 +37,9 @@ class MinIOClient:
         self.endpoint = raw_endpoint or None
         self.access_key = os.environ.get('MINIO_ACCESS_KEY') if access_key is _UNSET else access_key
         self.secret_key = os.environ.get('MINIO_SECRET_KEY') if secret_key is _UNSET else secret_key
-        self.bucket = os.environ['MINIO_BUCKET'] if bucket is _UNSET else bucket
+        self.bucket = os.environ.get('MINIO_BUCKET') if bucket is _UNSET else bucket
+        if not self.bucket:
+            raise ValueError("MINIO_BUCKET must be set or bucket must be provided")
 
         if bool(self.access_key) != bool(self.secret_key):
             raise ValueError(

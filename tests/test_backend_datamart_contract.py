@@ -290,91 +290,95 @@ def test_backend_datamart_accepts_backend_dashboard_read_shapes(test_db_session)
     """Insert contract rows and prove backend-style queries work on PostgreSQL."""
     service_id = uuid7()
     review_id = uuid7()
-    _create_contract_partition(test_db_session)
-    _insert_contract_rows(test_db_session, service_id, review_id)
+    _cleanup_contract_probe(test_db_session, service_id=service_id, review_id=review_id)
+    try:
+        _create_contract_partition(test_db_session)
+        _insert_contract_rows(test_db_session, service_id, review_id)
 
-    summary_row = test_db_session.execute(
-        text(
-            """
-            SELECT
-                total_review_cnt,
-                action_required_cnt,
-                attention_required_cnt,
-                avg_rating,
-                action_ratio
-            FROM fact_service_review_daily
-            WHERE service_id = :service_id
-              AND date = :target_date
-              AND platform_type = 'APPSTORE'
-            """
-        ),
-        {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
-    ).one()
-    assert summary_row.total_review_cnt == 3
-    assert summary_row.action_required_cnt == 1
-    assert summary_row.attention_required_cnt == 2
-    assert summary_row.avg_rating == 4.25
-    assert summary_row.action_ratio == 0.3333
+        summary_row = test_db_session.execute(
+            text(
+                """
+                SELECT
+                    total_review_cnt,
+                    action_required_cnt,
+                    attention_required_cnt,
+                    avg_rating,
+                    action_ratio
+                FROM fact_service_review_daily
+                WHERE service_id = :service_id
+                  AND date = :target_date
+                  AND platform_type = 'APPSTORE'
+                """
+            ),
+            {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
+        ).one()
+        assert summary_row.total_review_cnt == 3
+        assert summary_row.action_required_cnt == 1
+        assert summary_row.attention_required_cnt == 2
+        assert summary_row.avg_rating == 4.25
+        assert summary_row.action_ratio == 0.3333
 
-    aspect_row = test_db_session.execute(
-        text(
-            """
-            SELECT keyword, mention_cnt, avg_sentiment_score
-            FROM fact_service_aspect_daily
-            WHERE service_id = :service_id
-              AND date = :target_date
-            ORDER BY mention_cnt DESC
-            LIMIT 1
-            """
-        ),
-        {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
-    ).one()
-    assert aspect_row.keyword == "login"
-    assert aspect_row.mention_cnt == 2
-    assert aspect_row.avg_sentiment_score == 0.75
+        aspect_row = test_db_session.execute(
+            text(
+                """
+                SELECT keyword, mention_cnt, avg_sentiment_score
+                FROM fact_service_aspect_daily
+                WHERE service_id = :service_id
+                  AND date = :target_date
+                ORDER BY mention_cnt DESC
+                LIMIT 1
+                """
+            ),
+            {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
+        ).one()
+        assert aspect_row.keyword == "login"
+        assert aspect_row.mention_cnt == 2
+        assert aspect_row.avg_sentiment_score == 0.75
 
-    radar_row = test_db_session.execute(
-        text(
-            """
-            SELECT category_type::text, avg_sentiment_score, review_cnt
-            FROM fact_category_radar_scores
-            WHERE service_id = :service_id
-              AND date = :target_date
-              AND category_type = 'USABILITY'
-            """
-        ),
-        {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
-    ).one()
-    assert radar_row.category_type == "USABILITY"
-    assert radar_row.avg_sentiment_score == 0.82
-    assert radar_row.review_cnt == 3
+        radar_row = test_db_session.execute(
+            text(
+                """
+                SELECT category_type::text, avg_sentiment_score, review_cnt
+                FROM fact_category_radar_scores
+                WHERE service_id = :service_id
+                  AND date = :target_date
+                  AND category_type = 'USABILITY'
+                """
+            ),
+            {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
+        ).one()
+        assert radar_row.category_type == "USABILITY"
+        assert radar_row.avg_sentiment_score == 0.82
+        assert radar_row.review_cnt == 3
 
-    review_row = test_db_session.execute(
-        text(
-            """
-            SELECT
-                review_id,
-                review_summary,
-                rating,
-                sentiment_score,
-                assigned_dept,
-                keyword,
-                confidence
-            FROM srv_daily_review_list
-            WHERE service_id = :service_id
-              AND date = :target_date
-              AND is_action_required IS TRUE
-            """
-        ),
-        {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
-    ).one()
-    assert UUID(str(review_row.review_id)) == review_id
-    assert review_row.review_summary == "Login flow needs attention"
-    assert review_row.rating == 2
-    assert review_row.sentiment_score == 0.25
-    assert review_row.assigned_dept == ["CX", "APP"]
-    assert review_row.keyword == ["login", "error"]
-    assert review_row.confidence == 0.91
+        review_row = test_db_session.execute(
+            text(
+                """
+                SELECT
+                    review_id,
+                    review_summary,
+                    rating,
+                    sentiment_score,
+                    assigned_dept,
+                    keyword,
+                    confidence
+                FROM srv_daily_review_list
+                WHERE service_id = :service_id
+                  AND date = :target_date
+                  AND is_action_required IS TRUE
+                """
+            ),
+            {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
+        ).one()
+        assert UUID(str(review_row.review_id)) == review_id
+        assert review_row.review_summary == "Login flow needs attention"
+        assert review_row.rating == 2
+        assert review_row.sentiment_score == 0.25
+        assert review_row.assigned_dept == ["CX", "APP"]
+        assert review_row.keyword == ["login", "error"]
+        assert review_row.confidence == 0.91
+    finally:
+        _cleanup_contract_probe(test_db_session, service_id=service_id, review_id=review_id)
 
 
 @pytest.mark.requires_db
@@ -539,6 +543,44 @@ def _create_contract_partition(test_db_session) -> None:
             FOR VALUES FROM ('2026-05-02') TO ('2026-05-03')
             """
         )
+    )
+
+
+def _cleanup_contract_probe(test_db_session, *, service_id, review_id) -> None:
+    test_db_session.execute(text(f"DROP TABLE IF EXISTS public.{CONTRACT_PARTITION_NAME}"))
+    test_db_session.execute(
+        text(
+            """
+            DELETE FROM fact_service_review_daily
+            WHERE service_id = :service_id
+              AND date = :target_date
+            """
+        ),
+        {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
+    )
+    test_db_session.execute(
+        text(
+            """
+            DELETE FROM fact_service_aspect_daily
+            WHERE service_id = :service_id
+              AND date = :target_date
+            """
+        ),
+        {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
+    )
+    test_db_session.execute(
+        text(
+            """
+            DELETE FROM fact_category_radar_scores
+            WHERE service_id = :service_id
+              AND date = :target_date
+            """
+        ),
+        {"service_id": service_id, "target_date": CONTRACT_TARGET_DATE},
+    )
+    test_db_session.execute(
+        text("DELETE FROM app_service WHERE service_id = :service_id"),
+        {"service_id": service_id},
     )
 
 

@@ -357,7 +357,12 @@ class BaseCrawler(ABC):
                 updated_at=now,
             )
             session.add(batch)
-            session.commit()
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
+                self._cleanup_local_parquet_artifact(parquet_path)
+                raise
 
             seen_by_app.setdefault(memory_key, set()).update(review_id_map)
             self._seen_crawl_platform_ids = seen_by_app
@@ -368,6 +373,16 @@ class BaseCrawler(ABC):
             raise
         finally:
             session.close()
+
+    def _cleanup_local_parquet_artifact(self, parquet_path: Path) -> None:
+        """Remove a local Parquet artifact after DB registration failure."""
+        try:
+            Path(parquet_path).unlink(missing_ok=True)
+            self.logger.warning(f"Rolled back orphaned local Parquet file: {parquet_path}")
+        except Exception as cleanup_err:
+            self.logger.error(
+                f"Failed to clean up orphaned local Parquet file {parquet_path}: {cleanup_err}"
+            )
 
     def save_daily_batch(
         self,

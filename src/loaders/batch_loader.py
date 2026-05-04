@@ -241,9 +241,7 @@ class BatchLoader:
             self._minio = None
 
         if storage_path.startswith(("s3://", "minio://")):
-            key = storage_path.split("://", 1)[1]
-            if "/" in key:
-                key = key.split("/", 1)[1]
+            key = _object_key_from_storage_path(storage_path)
             if self._minio is None:
                 self._minio = MinIOClient()
             return self._minio.get_parquet(key)
@@ -326,6 +324,13 @@ class BatchLoader:
         if not missing_ids:
             return
 
+        if batch.platform_app_id == "daily_batch":
+            missing = ", ".join(str(app_id) for app_id in sorted(missing_ids, key=str))
+            raise ValueError(
+                "Daily batch requires app seed rows before loading; "
+                f"missing app_id(s): {missing}"
+            )
+
         for app_id in missing_ids:
             session.add(
                 App(
@@ -354,5 +359,10 @@ def _is_local_storage_path(storage_path: str) -> bool:
 
 def _object_key_from_storage_path(storage_path: str) -> str:
     if storage_path.startswith("s3://"):
-        return storage_path.removeprefix("s3://").split("/", 1)[1]
+        path_without_scheme = storage_path.removeprefix("s3://")
+        if "/" not in path_without_scheme:
+            raise ValueError(f"s3 storage path must include bucket and key: {storage_path}")
+        return path_without_scheme.split("/", 1)[1]
+    if storage_path.startswith("minio://"):
+        return storage_path.removeprefix("minio://")
     return storage_path

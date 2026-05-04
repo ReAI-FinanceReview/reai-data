@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 from uuid6 import uuid7
@@ -33,6 +33,41 @@ EXPECTED_TABLES = (
     "fact_category_radar_scores",
     "srv_daily_review_list",
 )
+ROW_COUNT_STATEMENTS = {
+    "fact_service_review_daily": text(
+        """
+        SELECT COUNT(*)
+        FROM fact_service_review_daily
+        WHERE date = :target_date
+          AND service_id = :service_id
+        """
+    ),
+    "fact_service_aspect_daily": text(
+        """
+        SELECT COUNT(*)
+        FROM fact_service_aspect_daily
+        WHERE date = :target_date
+          AND service_id = :service_id
+        """
+    ),
+    "fact_category_radar_scores": text(
+        """
+        SELECT COUNT(*)
+        FROM fact_category_radar_scores
+        WHERE date = :target_date
+          AND service_id = :service_id
+        """
+    ),
+    "srv_daily_review_list": text(
+        """
+        SELECT COUNT(*)
+        FROM srv_daily_review_list
+        WHERE date = :target_date
+          AND service_id = :service_id
+        """
+    ),
+}
+assert tuple(ROW_COUNT_STATEMENTS) == EXPECTED_TABLES
 
 
 @pytest.mark.requires_db
@@ -79,7 +114,7 @@ def test_backend_datamarts_are_populated_by_real_pipeline_cli_aggregate_step(
             assert row_counts == {
                 "fact_service_review_daily": 1,
                 "fact_service_aspect_daily": 3,
-                "fact_category_radar_scores": 2,
+                "fact_category_radar_scores": 3,
                 "srv_daily_review_list": 3,
             }
 
@@ -144,6 +179,7 @@ def test_backend_datamarts_are_populated_by_real_pipeline_cli_aggregate_step(
                 (row.category_type, float(row.score), row.review_cnt)
                 for row in radar
             ] == [
+                ("DESIGN", 0.8, 1),
                 ("SPEED", 0.9, 1),
                 ("USABILITY", 0.4, 2),
             ]
@@ -381,7 +417,7 @@ def _seed_analyzed_pipeline_rows(
         (review_ids[0], "login", 0.2, "USABILITY"),
         (review_ids[1], "transfer", 0.9, "SPEED"),
         (review_ids[2], "login", 0.6, "USABILITY"),
-        (review_ids[2], "design", 0.8, "OTHER"),
+        (review_ids[2], "design", 0.8, "DESIGN"),
     ]
     for review_id, keyword, score, category in aspect_rows:
         session.execute(
@@ -402,16 +438,9 @@ def _seed_analyzed_pipeline_rows(
 
 def _fetch_row_counts(session, service_id) -> dict[str, int]:
     counts = {}
-    for table_name in EXPECTED_TABLES:
+    for table_name, statement in ROW_COUNT_STATEMENTS.items():
         counts[table_name] = session.execute(
-            text(
-                f"""
-                SELECT COUNT(*)
-                FROM {table_name}
-                WHERE date = :target_date
-                  AND service_id = :service_id
-                """
-            ),
+            statement,
             {"target_date": TARGET_DATE, "service_id": service_id},
         ).scalar_one()
     return counts
@@ -429,8 +458,8 @@ def _cleanup_serving_readiness_rows(
         "target_date": TARGET_DATE,
         "service_id": service_id,
         "app_id": app_id,
-        "review_ids": tuple(review_ids),
-        "platform_review_ids": tuple(platform_review_ids),
+        "review_ids": list(review_ids),
+        "platform_review_ids": list(platform_review_ids),
     }
     session.execute(
         text(
@@ -460,23 +489,51 @@ def _cleanup_serving_readiness_rows(
         ),
         params,
     )
-    session.execute(text("DELETE FROM reviews_assigned WHERE review_id IN :review_ids"), params)
     session.execute(
-        text("DELETE FROM review_action_analysis WHERE review_id IN :review_ids"),
-        params,
-    )
-    session.execute(text("DELETE FROM review_aspects WHERE review_id IN :review_ids"), params)
-    session.execute(
-        text("DELETE FROM reviews_preprocessed WHERE review_id IN :review_ids"),
+        _text_with_expanding_param(
+            "DELETE FROM reviews_assigned WHERE review_id IN :review_ids",
+            "review_ids",
+        ),
         params,
     )
     session.execute(
-        text("DELETE FROM app_reviews WHERE platform_review_id IN :platform_review_ids"),
+        _text_with_expanding_param(
+            "DELETE FROM review_action_analysis WHERE review_id IN :review_ids",
+            "review_ids",
+        ),
         params,
     )
     session.execute(
-        text("DELETE FROM review_master_index WHERE review_id IN :review_ids"),
+        _text_with_expanding_param(
+            "DELETE FROM review_aspects WHERE review_id IN :review_ids",
+            "review_ids",
+        ),
+        params,
+    )
+    session.execute(
+        _text_with_expanding_param(
+            "DELETE FROM reviews_preprocessed WHERE review_id IN :review_ids",
+            "review_ids",
+        ),
+        params,
+    )
+    session.execute(
+        _text_with_expanding_param(
+            "DELETE FROM app_reviews WHERE platform_review_id IN :platform_review_ids",
+            "platform_review_ids",
+        ),
+        params,
+    )
+    session.execute(
+        _text_with_expanding_param(
+            "DELETE FROM review_master_index WHERE review_id IN :review_ids",
+            "review_ids",
+        ),
         params,
     )
     session.execute(text("DELETE FROM apps WHERE app_id = :app_id"), params)
     session.execute(text("DELETE FROM app_service WHERE service_id = :service_id"), params)
+
+
+def _text_with_expanding_param(sql: str, param_name: str):
+    return text(sql).bindparams(bindparam(param_name, expanding=True))

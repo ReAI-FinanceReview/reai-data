@@ -362,13 +362,52 @@ class ReviewCleaningPipeline:
                     }
                     for record in preprocessed_records
                 ]
+                review_id_by_platform_review_id: dict[str, UUID] = {}
+                for row in rows:
+                    platform_review_id = row["platform_review_id"]
+                    review_id = row["review_id"]
+                    existing_review_id = review_id_by_platform_review_id.get(platform_review_id)
+                    if existing_review_id is not None and existing_review_id != review_id:
+                        raise ValueError(
+                            "Conflicting review_id values for platform_review_id="
+                            f"{platform_review_id}: {existing_review_id} != {review_id}"
+                        )
+                    review_id_by_platform_review_id[platform_review_id] = review_id
+
+                existing_preprocessed_rows = (
+                    session.query(
+                        ReviewPreprocessed.platform_review_id,
+                        ReviewPreprocessed.review_id,
+                    )
+                    .filter(
+                        ReviewPreprocessed.platform_review_id.in_(
+                            list(review_id_by_platform_review_id)
+                        )
+                    )
+                    .all()
+                )
+                mismatched_rows = [
+                    (
+                        platform_review_id,
+                        stored_review_id,
+                        review_id_by_platform_review_id[platform_review_id],
+                    )
+                    for platform_review_id, stored_review_id in existing_preprocessed_rows
+                    if stored_review_id != review_id_by_platform_review_id[platform_review_id]
+                ]
+                if mismatched_rows:
+                    platform_review_id, stored_review_id, incoming_review_id = mismatched_rows[0]
+                    raise ValueError(
+                        "Existing reviews_preprocessed row has a different review_id for "
+                        f"platform_review_id={platform_review_id}: "
+                        f"{stored_review_id} != {incoming_review_id}"
+                    )
+
                 stmt = insert(ReviewPreprocessed).values(rows)
                 session.execute(
                     stmt.on_conflict_do_update(
                         index_elements=[ReviewPreprocessed.platform_review_id],
                         set_={
-                            "review_id": stmt.excluded.review_id,
-                            "platform_review_id": stmt.excluded.platform_review_id,
                             "refined_text": stmt.excluded.refined_text,
                             "updated_at": func.now(),
                         },

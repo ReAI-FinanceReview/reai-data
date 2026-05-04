@@ -8,10 +8,7 @@ This module tests the crawl stage of the Batch DLQ architecture:
 """
 
 import pytest
-from pathlib import Path
-from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
-from uuid6 import uuid7
 
 from src.crawlers.appstore_crawler import AppStoreCrawler
 from src.crawlers.exceptions import ParquetWriteError
@@ -290,12 +287,10 @@ def test_parquet_write_failure_no_ingestion_batch(
         'write_batch',
         side_effect=Exception("Permission denied")
     ):
-        try:
+        with pytest.raises(ParquetWriteError):
             crawler.save_crawl_batch(
                 '123456789', 'Test App', sample_appstore_reviews, crawler._build_parquet_records
             )
-        except ParquetWriteError:
-            pass
 
     # Verify NO ingestion_batch created
     batch_count = test_db_session.query(IngestionBatch).count()
@@ -304,6 +299,30 @@ def test_parquet_write_failure_no_ingestion_batch(
     # Verify NO Parquet files
     parquet_files = list(temp_bronze_dir.glob('**/*.parquet'))
     assert len(parquet_files) == 0
+
+
+@pytest.mark.requires_db
+def test_batch_registration_failure_removes_written_local_parquet(
+    test_db_session,
+    temp_bronze_dir,
+    sample_appstore_reviews,
+    monkeypatch,
+):
+    """Parquet write succeeds but ingestion_batch commit fails → local artifact is removed."""
+    crawler = _make_crawler(test_db_session, temp_bronze_dir)
+
+    def fail_commit():
+        raise RuntimeError("commit down")
+
+    monkeypatch.setattr(test_db_session, "commit", fail_commit)
+
+    with pytest.raises(RuntimeError, match="commit down"):
+        crawler.save_crawl_batch(
+            '123456789', 'Test App', sample_appstore_reviews, crawler._build_parquet_records
+        )
+
+    parquet_files = list(temp_bronze_dir.glob('**/*.parquet'))
+    assert parquet_files == []
 
 
 # ========================================

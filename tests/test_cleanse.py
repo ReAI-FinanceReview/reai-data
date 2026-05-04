@@ -8,6 +8,7 @@ import pytest
 from uuid6 import uuid7
 
 from src.models.enums import ProcessingStatusType
+from src.models.review_preprocessed import ReviewPreprocessed
 from src.processing.cleanse import (
     ReviewCleaner,
     ReviewCleaningPipeline,
@@ -456,6 +457,87 @@ def test_mark_review_failed_updates_master_index(tmp_path):
     assert record.retry_count == 3
     mock_session.commit.assert_called_once()
     mock_session.close.assert_called_once()
+
+
+def _make_pipeline_for_update_db_status(tmp_path, db_session):
+    synonyms = {}
+    profanity = []
+    (tmp_path / "synonyms.json").write_text(json.dumps(synonyms))
+    (tmp_path / "profanity.json").write_text(json.dumps(profanity))
+    mock_db = MagicMock()
+    mock_db.get_session.return_value = db_session
+    return ReviewCleaningPipeline(
+        minio_client=MagicMock(),
+        db_connector=mock_db,
+        synonyms_path=str(tmp_path / "synonyms.json"),
+        profanity_path=str(tmp_path / "profanity.json"),
+    )
+
+
+@pytest.mark.requires_db
+def test_update_db_status_upserts_preprocessed_text_without_rewriting_review_id(
+    tmp_path,
+    test_db_session,
+):
+    review_id = uuid7()
+    platform_review_id = "cleanse-upsert-stable"
+    test_db_session.add(
+        ReviewPreprocessed(
+            review_id=review_id,
+            platform_review_id=platform_review_id,
+            refined_text="old text",
+        )
+    )
+    test_db_session.commit()
+
+    pipeline = _make_pipeline_for_update_db_status(tmp_path, test_db_session)
+    pipeline._update_db_status(
+        [str(review_id)],
+        [
+            {
+                "review_id": str(review_id),
+                "platform_review_id": platform_review_id,
+                "refined_text": "new text",
+            }
+        ],
+    )
+
+    stored = test_db_session.query(ReviewPreprocessed).filter_by(
+        platform_review_id=platform_review_id
+    ).one()
+    assert stored.review_id == review_id
+    assert stored.refined_text == "new text"
+
+
+@pytest.mark.requires_db
+def test_update_db_status_rejects_platform_review_id_review_id_mismatch(
+    tmp_path,
+    test_db_session,
+):
+    stored_review_id = uuid7()
+    incoming_review_id = uuid7()
+    platform_review_id = "cleanse-upsert-mismatch"
+    test_db_session.add(
+        ReviewPreprocessed(
+            review_id=stored_review_id,
+            platform_review_id=platform_review_id,
+            refined_text="old text",
+        )
+    )
+    test_db_session.commit()
+
+    pipeline = _make_pipeline_for_update_db_status(tmp_path, test_db_session)
+    with pytest.raises(ValueError, match="different review_id"):
+        pipeline._update_db_status(
+            [str(incoming_review_id)],
+            [
+                {
+                    "review_id": str(incoming_review_id),
+                    "platform_review_id": platform_review_id,
+                    "refined_text": "new text",
+                }
+            ],
+        )
 
 
 def test_mark_review_failed_ignores_already_processed_review(tmp_path):

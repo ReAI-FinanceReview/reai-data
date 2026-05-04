@@ -17,7 +17,7 @@ from uuid6 import uuid7
 
 from sqlalchemy import text
 
-from src.loaders.batch_loader import BatchLoader
+from src.loaders.batch_loader import BatchLoader, _object_key_from_storage_path
 from src.models.app_metadata import AppMetadata
 from src.models.app_service import AppService
 from src.models.apps import App
@@ -397,6 +397,75 @@ def test_load_bare_minio_object_key_from_daily_crawl_batch(test_db_session):
         text("SELECT COUNT(*) FROM app_reviews WHERE platform_review_id = 'daily_crawl_review_001'")
     ).scalar_one()
     assert stored_review_count == 1
+
+
+def test_object_key_from_storage_path_preserves_minio_key_prefix():
+    assert (
+        _object_key_from_storage_path(
+            "minio://bronze/app_reviews/year=2026/month=05/file.parquet"
+        )
+        == "bronze/app_reviews/year=2026/month=05/file.parquet"
+    )
+    assert (
+        _object_key_from_storage_path(
+            "s3://reai-data/bronze/app_reviews/year=2026/month=05/file.parquet"
+        )
+        == "bronze/app_reviews/year=2026/month=05/file.parquet"
+    )
+    assert (
+        _object_key_from_storage_path(
+            "bronze/app_reviews/year=2026/month=05/file.parquet"
+        )
+        == "bronze/app_reviews/year=2026/month=05/file.parquet"
+    )
+
+
+@pytest.mark.requires_db
+def test_daily_batch_missing_app_seed_fails_without_synthetic_daily_app(test_db_session):
+    """Daily crawl batches must rely on seeded App rows, not a synthetic daily_batch app."""
+    import pyarrow as pa
+
+    now = datetime.now(timezone.utc)
+    missing_app_id = uuid7()
+    review_schema = AppReviewSchema(
+        review_id=str(uuid7()),
+        app_id=str(missing_app_id),
+        platform_type='APPSTORE',
+        platform_review_id='daily_missing_seed_review_001',
+        reviewer_name='Seed User',
+        review_text='Missing seed app should fail',
+        rating=4,
+        reviewed_at=datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc),
+        is_reply=False,
+        reply_comment=None,
+    )
+    batch = IngestionBatch(
+        batch_id=uuid7(),
+        source_type=PlatformType.APPSTORE,
+        platform_app_id='daily_batch',
+        app_name=None,
+        storage_path='bronze/app_reviews/year=2026/month=05/day=03/missing_seed.parquet',
+        file_format='parquet',
+        record_count=1,
+        status=IngestionBatchStatusType.PENDING,
+        retry_count=0,
+        max_retries=3,
+        created_at=now,
+        updated_at=now,
+    )
+    test_db_session.add(batch)
+    test_db_session.commit()
+
+    loader = _make_loader(test_db_session)
+    loader._minio = MagicMock()
+    loader._minio.get_parquet.return_value = pa.Table.from_pylist([review_schema.model_dump()])
+
+    loaded = loader.load_pending_batches(limit=100)
+
+    assert loaded == 0
+    assert batch.status == IngestionBatchStatusType.FAILED
+    assert "Daily batch requires app seed rows" in batch.error_message
+    assert test_db_session.query(App).filter_by(platform_app_id='daily_batch').count() == 0
 
 
 @pytest.mark.requires_db
