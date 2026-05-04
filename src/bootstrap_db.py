@@ -164,11 +164,15 @@ def bootstrap_database(database_url: str | None = None, *, stdout=print) -> None
         stdout("- resetting public schema")
         reset_public_schema(engine)
 
-        for sql_path in sql_paths:
-            stdout(f"- applying {sql_path.name}")
-            execute_sql_file(engine, sql_path)
+        schema_path, *seed_paths = sql_paths
+        stdout(f"- applying {schema_path.name}")
+        execute_sql_file(engine, schema_path)
 
         run_alembic_baseline_and_migrations(root, resolved_url, stdout=stdout)
+
+        for sql_path in seed_paths:
+            stdout(f"- applying {sql_path.name}")
+            execute_sql_file(engine, sql_path)
 
         stdout("- running verification queries")
         run_verifications(engine, build_verification_queries())

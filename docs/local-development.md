@@ -43,8 +43,8 @@ This command is intentionally local-development oriented:
 
 - it resets the `public` schema
 - reapplies the immutable `schema_v4.sql` Alembic baseline
-- loads required reference seed data from `app_service_data.sql`, `apps_data.sql`, and `app_metadata_data.sql`
 - stamps the Alembic baseline revision and applies migrations to `head`
+- loads required reference seed data from `app_service_data.sql`, `apps_data.sql`, and `app_metadata_data.sql`
 - verifies the expected seed counts before returning success
 
 Schema migration commands and reference-data ownership are documented in `docs/schema-management.md`.

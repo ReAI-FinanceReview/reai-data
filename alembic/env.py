@@ -8,9 +8,6 @@ from alembic import context
 from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
-from src.models import Base
-
-
 config = context.config
 
 if config.config_file_name is not None:
@@ -19,7 +16,9 @@ if config.config_file_name is not None:
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
-target_metadata = Base.metadata
+# ORM metadata is not yet a lossless representation of the schema_v4 baseline.
+# Keep autogenerate disabled until model/schema alignment is handled explicitly.
+target_metadata = None
 
 
 def get_database_url() -> str:

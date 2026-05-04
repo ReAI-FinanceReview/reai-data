@@ -156,7 +156,7 @@ def test_local_docs_reference_bootstrap_command():
     assert "scripts/bootstrap_db.py" in content
     assert "app_metadata_data.sql" in content
     assert "crawl_reviews.py" in content
-    assert "stamps the Alembic baseline" in content
+    assert content.index("applies migrations to `head`") < content.index("loads required reference seed data")
 
 
 def test_build_alembic_config_points_at_project_script_location():
@@ -199,7 +199,7 @@ def test_bootstrap_explicit_database_url_controls_alembic_when_env_differs(
             pass
 
 
-def test_bootstrap_runs_alembic_after_sql_and_seed(monkeypatch):
+def test_bootstrap_runs_migrations_before_seed_sql(monkeypatch):
     calls = []
 
     class FakeEngine:
@@ -244,10 +244,10 @@ def test_bootstrap_runs_alembic_after_sql_and_seed(monkeypatch):
         "ensure_sql_files_exist",
         "reset",
         "schema_v4.sql",
+        "alembic",
         "app_service_data.sql",
         "apps_data.sql",
         "app_metadata_data.sql",
-        "alembic",
         "verify",
         "dispose",
     ]

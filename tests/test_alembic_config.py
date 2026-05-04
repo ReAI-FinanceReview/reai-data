@@ -27,14 +27,14 @@ def test_alembic_ini_points_to_local_script_directory():
     assert "sqlalchemy.url" not in config["alembic"]
 
 
-def test_alembic_env_imports_project_metadata():
+def test_alembic_env_disables_autogenerate_until_metadata_alignment():
     env_py = (ROOT / "alembic" / "env.py").read_text()
+    schema_docs = (ROOT / "docs" / "schema-management.md").read_text()
 
-    assert "from src.models import Base" in env_py
-    assert "target_metadata = Base.metadata" in env_py
+    assert "from src.models import Base" not in env_py
+    assert "target_metadata = None" in env_py
+    assert "Autogenerate and `alembic check`" in schema_docs
     assert 'config.attributes.get("database_url")' in env_py
-    assert "compare_type=True" in env_py
-    assert "compare_server_default=True" in env_py
 
 
 def test_baseline_revision_file_exists_and_is_head():
@@ -58,7 +58,8 @@ def test_schema_management_docs_define_migration_workflow_and_seed_ownership():
 
     assert "sql/schema_v4.sql is the immutable Alembic baseline snapshot" in content
     assert "uv run alembic stamp 20260430_0001" in content
-    assert "uv run alembic revision --autogenerate -m" in content
+    assert "uv run alembic revision -m" in content
+    assert "uv run alembic revision --autogenerate" not in content
     assert "uv run alembic upgrade head" in content
     assert "creates the structural schema only" in content
     assert "Required business reference rows remain in seed SQL" in content
