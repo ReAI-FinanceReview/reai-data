@@ -18,6 +18,8 @@ Empty databases can be created through Alembic with:
 PYTHONPATH=. uv run alembic upgrade head
 ```
 
+This creates the structural schema only. It does not populate the required local reference catalog rows. Those rows come from `sql/app_service_data.sql`, `sql/apps_data.sql`, and `sql/app_metadata_data.sql`; load those seed files or run `scripts/bootstrap_db.py` when the database must be usable for local workflows.
+
 Local development can continue using:
 
 ```bash

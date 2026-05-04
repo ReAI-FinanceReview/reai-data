@@ -17,11 +17,14 @@ def test_alembic_dependency_is_declared():
 
 def test_alembic_ini_points_to_local_script_directory():
     config = configparser.ConfigParser()
-    config.read(ROOT / "alembic.ini")
+    alembic_ini = ROOT / "alembic.ini"
+    read_files = config.read(alembic_ini)
 
+    assert read_files == [str(alembic_ini)]
     assert config["alembic"]["script_location"] == "alembic"
     assert config["alembic"]["prepend_sys_path"] == "."
     assert config["alembic"]["path_separator"] == "os"
+    assert "sqlalchemy.url" not in config["alembic"]
 
 
 def test_alembic_env_imports_project_metadata():
@@ -57,4 +60,5 @@ def test_schema_management_docs_define_migration_workflow_and_seed_ownership():
     assert "uv run alembic stamp 20260430_0001" in content
     assert "uv run alembic revision --autogenerate -m" in content
     assert "uv run alembic upgrade head" in content
+    assert "creates the structural schema only" in content
     assert "Required business reference rows remain in seed SQL" in content

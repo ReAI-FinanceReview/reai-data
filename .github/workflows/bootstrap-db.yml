@@ -59,8 +59,8 @@ jobs:
       - name: Bootstrap local database
         run: PYTHONPATH=. uv run python scripts/bootstrap_db.py --database-url postgresql+psycopg2://reai:reai@localhost:5432/reai
 
-      - name: Verify Alembic revision after bootstrap
-        run: PYTHONPATH=. uv run alembic current
+      - name: Verify Alembic revision is at head after bootstrap
+        run: PYTHONPATH=. uv run alembic current --check-heads
 
       - name: Run focused bootstrap tests
         run: PYTHONPATH=. uv run pytest tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py tests/test_alembic_config.py
