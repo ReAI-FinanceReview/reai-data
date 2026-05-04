@@ -218,6 +218,66 @@ def test_partial_duplicate_batch(test_db_session, temp_bronze_dir):
 
 
 @pytest.mark.requires_db
+def test_duplicate_platform_review_id_within_batch_keeps_first_occurrence(
+    test_db_session,
+    temp_bronze_dir,
+):
+    """Duplicate platform_review_id values in one crawl batch keep only the first review."""
+    crawler = _make_crawler(test_db_session, temp_bronze_dir)
+    app_id = 'batch_duplicate_app'
+    reviews = [
+        {
+            'id': {'label': 'duplicate_in_batch'},
+            'author': {'name': {'label': 'FirstUser'}},
+            'im:name': {'label': 'Test App'},
+            'content': {'label': 'First duplicate review'},
+            'im:rating': {'label': '5'},
+            'updated': {'label': '2026-02-04T12:00:00Z'},
+        },
+        {
+            'id': {'label': 'duplicate_in_batch'},
+            'author': {'name': {'label': 'SecondUser'}},
+            'im:name': {'label': 'Test App'},
+            'content': {'label': 'Second duplicate review'},
+            'im:rating': {'label': '1'},
+            'updated': {'label': '2026-02-05T12:00:00Z'},
+        },
+        {
+            'id': {'label': 'unique_in_batch'},
+            'author': {'name': {'label': 'UniqueUser'}},
+            'im:name': {'label': 'Test App'},
+            'content': {'label': 'Unique review'},
+            'im:rating': {'label': '4'},
+            'updated': {'label': '2026-02-06T12:00:00Z'},
+        },
+    ]
+
+    batch_id, count, parquet_path = crawler.save_crawl_batch(
+        app_id, 'Test App', reviews, crawler._build_parquet_records
+    )
+
+    assert count == 2
+
+    batch = test_db_session.query(IngestionBatch).filter_by(
+        batch_id=batch_id
+    ).one()
+    assert batch.record_count == 2
+
+    records = read_parquet_to_schemas(parquet_path, AppReviewSchema)
+    assert len(records) == 2
+    assert {record.platform_review_id for record in records} == {
+        'duplicate_in_batch',
+        'unique_in_batch',
+    }
+    duplicate_record = next(
+        record for record in records
+        if record.platform_review_id == 'duplicate_in_batch'
+    )
+    assert duplicate_record.review_text == 'First duplicate review'
+    assert duplicate_record.reviewer_name == 'FirstUser'
+
+
+@pytest.mark.requires_db
 def test_empty_new_reviews_returns_zero(test_db_session, temp_bronze_dir):
     """Test that all-duplicate batch returns 0."""
     crawler = _make_crawler(test_db_session, temp_bronze_dir)

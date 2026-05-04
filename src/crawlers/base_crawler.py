@@ -197,10 +197,12 @@ class BaseCrawler(ABC):
             List of new (non-duplicate) reviews
         """
         new_reviews = []
+        seen_platform_ids = set(existing_platform_ids)
         for review in reviews_data:
             platform_review_id = self._extract_platform_review_id(review)
-            if platform_review_id and platform_review_id not in existing_platform_ids:
+            if platform_review_id and platform_review_id not in seen_platform_ids:
                 new_reviews.append(review)
+                seen_platform_ids.add(platform_review_id)
 
         return new_reviews
 
