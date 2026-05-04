@@ -167,6 +167,36 @@ def test_build_alembic_config_points_at_project_script_location():
     assert config.config_file_name == str(ROOT / "alembic.ini")
     assert config.get_main_option("script_location") == str(ROOT / "alembic")
     assert config.get_main_option("sqlalchemy.url") == database_url
+    assert config.attributes["database_url"] == database_url
+
+
+def test_bootstrap_explicit_database_url_controls_alembic_when_env_differs(
+    monkeypatch,
+    test_db_engine,
+    test_db_url,
+):
+    if not is_local_database_url(make_url(test_db_url)):
+        pytest.skip("bootstrap safety test requires a local PostgreSQL target")
+
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg2://reai:reai@localhost:1/should_not_be_used_by_alembic",
+    )
+
+    try:
+        bootstrap_module.bootstrap_database(test_db_url, stdout=lambda message: None)
+        with test_db_engine.connect() as conn:
+            assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
+                bootstrap_module.ALEMBIC_BASELINE_REVISION
+            )
+            assert conn.execute(text("SELECT COUNT(*) FROM app_service")).scalar_one() == 39
+    except (OperationalError, PsycopgOperationalError) as exc:
+        pytest.skip(f"test PostgreSQL is not available: {exc}")
+    finally:
+        try:
+            _reset_schema(test_db_engine)
+        except (OperationalError, PsycopgOperationalError):
+            pass
 
 
 def test_bootstrap_runs_alembic_after_sql_and_seed(monkeypatch):

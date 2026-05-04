@@ -21,6 +21,7 @@ def test_alembic_ini_points_to_local_script_directory():
 
     assert config["alembic"]["script_location"] == "alembic"
     assert config["alembic"]["prepend_sys_path"] == "."
+    assert config["alembic"]["path_separator"] == "os"
 
 
 def test_alembic_env_imports_project_metadata():
@@ -28,6 +29,7 @@ def test_alembic_env_imports_project_metadata():
 
     assert "from src.models import Base" in env_py
     assert "target_metadata = Base.metadata" in env_py
+    assert 'config.attributes.get("database_url")' in env_py
     assert "compare_type=True" in env_py
     assert "compare_server_default=True" in env_py
 

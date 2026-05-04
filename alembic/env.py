@@ -24,11 +24,23 @@ target_metadata = Base.metadata
 
 def get_database_url() -> str:
     x_args = context.get_x_argument(as_dictionary=True)
-    return (
-        x_args.get("database_url")
-        or os.getenv("DATABASE_URL")
-        or config.get_main_option("sqlalchemy.url")
-    )
+    x_database_url = x_args.get("database_url")
+    if x_database_url:
+        return x_database_url
+
+    programmatic_url = config.attributes.get("database_url")
+    if programmatic_url:
+        return str(programmatic_url)
+
+    env_database_url = os.getenv("DATABASE_URL")
+    if env_database_url:
+        return env_database_url
+
+    configured_url = config.get_main_option("sqlalchemy.url")
+    if configured_url:
+        return configured_url
+
+    raise RuntimeError("DATABASE_URL or alembic sqlalchemy.url is required")
 
 
 def run_migrations_offline() -> None:

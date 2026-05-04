@@ -129,6 +129,7 @@ def build_alembic_config(root: Path, database_url: str) -> Config:
     alembic_config = Config(str(root / "alembic.ini"))
     alembic_config.set_main_option("script_location", str(root / "alembic"))
     alembic_config.set_main_option("sqlalchemy.url", database_url)
+    alembic_config.attributes["database_url"] = database_url
     return alembic_config
 
 
