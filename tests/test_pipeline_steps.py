@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from src.pipeline.steps import run_aggregate, run_gold
+from src.pipeline.steps import run_aggregate, run_gold, run_post_aggregate_validation, run_steps
 
 
 @patch("src.gold.aggregator.GoldAggregator")
@@ -96,3 +96,19 @@ def test_run_gold_returns_failed_result_for_empty_target_date():
 
     assert result.status == "failed"
     assert "YYYY-MM-DD" in result.message
+
+
+def test_run_post_aggregate_validation_returns_failed_result_for_invalid_target_date():
+    result = run_post_aggregate_validation(target_date="2025/01/15")
+
+    assert result.status == "failed"
+    assert "YYYY-MM-DD" in result.message
+
+
+def test_run_steps_supports_post_aggregate_validate_step_name():
+    results = run_steps(["post_aggregate_validate"], target_date="")
+
+    assert len(results) == 1
+    assert results[0].step == "post_aggregate_validate"
+    assert results[0].status == "failed"
+    assert "YYYY-MM-DD" in results[0].message
