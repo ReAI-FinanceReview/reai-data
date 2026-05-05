@@ -166,7 +166,7 @@ class GoldActionAnalyzer:
             with session.begin_nested():
                 record = self._build_record(session, review_id)
                 if record is None:
-                    return True  # 데이터 부족 → skip
+                    return False  # 필수 upstream 데이터 부족 → ANALYZED 전환 금지
                 session.merge(record)
         except Exception as exc:
             self.logger.error(f"[{review_id}] ActionAnalyzer 실패: {exc}")
@@ -221,7 +221,7 @@ class GoldActionAnalyzer:
         from src.models.review import Review as AppReview
         rmi = session.get(ReviewMasterIndex, review_id)
         if rmi is None:
-            self.logger.warning(f"[{review_id}] ReviewMasterIndex 없음 — skip")
+            self.logger.warning(f"[{review_id}] ReviewMasterIndex 없음")
             return None
 
         app_review = (
@@ -240,7 +240,7 @@ class GoldActionAnalyzer:
 
         preprocessed = session.get(ReviewPreprocessed, review_id)
         if preprocessed is None or not preprocessed.refined_text:
-            self.logger.warning(f"[{review_id}] refined_text 없음 — skip")
+            self.logger.warning(f"[{review_id}] refined_text 없음")
             return None
 
         text = preprocessed.refined_text

@@ -51,8 +51,9 @@ from src.utils.logger import get_logger
 _SENTIMENT_DICT: Dict[str, float] = {
     # 긍정
     "편리": 0.85, "편의": 0.80, "빠르": 0.80, "간편": 0.85,
-    "좋": 0.80, "훌륭": 0.90, "만족": 0.85, "추천": 0.85,
-    "쉽": 0.80, "깔끔": 0.75, "안정": 0.80, "친절": 0.80,
+    "좋": 0.80, "굿": 0.80, "훌륭": 0.90, "만족": 0.85, "추천": 0.85,
+    "쉽": 0.80, "편하": 0.80, "깔끔": 0.75, "안정": 0.80, "친절": 0.80,
+    "감사": 0.85,
     "개선": 0.70, "업데이트": 0.65, "해결": 0.75,
     # 부정
     "불편": 0.20, "느리": 0.20, "오류": 0.10, "버그": 0.10,
@@ -70,6 +71,9 @@ _ADV_WEIGHTS: Dict[str, float] = {
 
 # 부정어
 _NEGATION_WORDS = {"안", "못", "없", "아니", "않"}
+_COMPACT_NEGATION_PREFIXES = tuple(
+    sorted(_NEGATION_WORDS, key=len, reverse=True)
+)
 
 # 키워드별 컨텍스트 윈도우 크기 (±N 토큰)
 _CONTEXT_WINDOW: int = 3
@@ -80,7 +84,7 @@ _CONTEXT_WINDOW: int = 3
 _CATEGORY_KEYWORDS: Dict[CategoryType, List[str]] = {
     CategoryType.USABILITY: [
         "사용", "편리", "편의", "인터페이스", "UI", "UX", "메뉴",
-        "기능", "조작", "접근", "쉽", "어렵", "복잡", "간편",
+        "기능", "조작", "접근", "쉽", "어렵", "복잡", "간편", "편하",
     ],
     CategoryType.STABILITY: [
         "오류", "버그", "에러", "강제종료", "팅김", "먹통", "충돌",
@@ -138,18 +142,18 @@ class GoldABSAAnalyzer:
 
             preprocessed = session.get(ReviewPreprocessed, review_id)
             if preprocessed is None:
-                self.logger.warning(f"[{review_id}] No preprocessed record — skip")
-                return True
+                self.logger.warning(f"[{review_id}] No preprocessed record")
+                return False
             if not preprocessed.refined_text:
-                self.logger.warning(f"[{review_id}] No refined_text — skip")
-                rmi = session.get(ReviewMasterIndex, review_id)
-                if rmi is not None:
-                    rmi.processing_status = ProcessingStatusType.ANALYZED
-                return True
+                self.logger.warning(f"[{review_id}] No refined_text")
+                return False
 
             try:
                 with session.begin_nested():
                     aspects = self._analyze(session, review_id, preprocessed.refined_text)
+                    if not aspects:
+                        self.logger.warning(f"[{review_id}] No ABSA aspects extracted")
+                        return False
                     session.add_all(aspects)
                     rmi = session.get(ReviewMasterIndex, review_id)
                     if rmi is not None:
@@ -219,7 +223,7 @@ class GoldABSAAnalyzer:
         aspects: List[ReviewAspect] = []
         for keyword, kw_start, kw_end in keywords_with_spans:
             context = self._local_context(text, kw_start)
-            has_negation = self._has_negation(context)
+            has_negation = self._has_negation(context, keyword=keyword)
             adv_weight = self._get_adv_weight(context)
 
             s_base = _SENTIMENT_DICT.get(keyword, 0.5)
@@ -258,10 +262,16 @@ class GoldABSAAnalyzer:
                     idx = text.find(noun)
                     if idx != -1:
                         result.append((noun, idx, idx + len(noun)))
-                return result
+                if result:
+                    return result
+                self.logger.debug("Okt returned no usable keywords — fallback to dict match")
             except Exception as e:
                 self.logger.warning(f"Okt.nouns failed: {e} — fallback to dict match")
 
+        return self._dict_match_keywords_with_spans(text)
+
+    def _dict_match_keywords_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
+        """사전 기반으로 키워드와 문자 span을 추출한다."""
         # Fallback: longest-first non-overlapping span matching
         # (prevents short stems like "안정" from matching inside "불안정한")
         candidates = sorted(
@@ -308,10 +318,18 @@ class GoldABSAAnalyzer:
         w_end = min(len(tokens), kw_token_idx + _CONTEXT_WINDOW + 1)
         return " ".join(tokens[w_start:w_end])
 
-    def _has_negation(self, text: str) -> bool:
+    def _has_negation(self, text: str, keyword: Optional[str] = None) -> bool:
         """텍스트에 부정어 포함 여부."""
         tokens = text.split()
-        return any(token in _NEGATION_WORDS for token in tokens)
+        for token in tokens:
+            if token in _NEGATION_WORDS:
+                return True
+            if keyword and any(
+                token.startswith(f"{prefix}{keyword}")
+                for prefix in _COMPACT_NEGATION_PREFIXES
+            ):
+                return True
+        return False
 
     def _get_adv_weight(self, text: str) -> float:
         """텍스트에서 가장 강한 부사 가중치 반환. 없으면 1.0."""
