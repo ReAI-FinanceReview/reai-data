@@ -4,7 +4,7 @@ Coverage:
 - Sentiment score calculation (S_final = S_base × W_adv, negation inversion)
 - Keyword extraction (dict-match fallback, KoNLPy unavailable)
 - Category mapping (rule-based 1st, vector similarity 2nd)
-- process(): single-record happy path, skip-if-already-analyzed, skip-if-no-text
+- process(): single-record happy path, skip-if-already-analyzed, required-row failures
 - process_batch(): standalone batch with DB
 """
 
@@ -210,6 +210,28 @@ class TestKeywordExtraction:
         assert "편리" in keywords
         assert "빠르" in keywords
 
+    def test_okt_empty_result_falls_back_to_dict(self):
+        """KoNLPy가 짧은 활용형을 놓쳐도 사전 매칭으로 보완한다."""
+        okt_mock = MagicMock()
+        okt_mock.nouns.return_value = []
+        analyzer = _make_analyzer(okt_mock=okt_mock)
+        keywords = analyzer._extract_keywords("앱 좋아요")
+        assert "좋" in keywords
+
+    @pytest.mark.parametrize(
+        ("text", "expected_keyword"),
+        [
+            ("굿", "굿"),
+            ("편하게", "편하"),
+            ("감사합니다", "감사"),
+            ("만족스럽습니다", "만족"),
+        ],
+    )
+    def test_common_short_feedback_extracts_keyword(self, text, expected_keyword):
+        """짧은 실사용 리뷰도 aspect row 생성에 필요한 키워드를 추출한다."""
+        keywords = _make_analyzer()._extract_keywords(text)
+        assert expected_keyword in keywords
+
 
 # ─────────────────────────────────────────────
 # D. Negation & adverb detection
@@ -224,6 +246,9 @@ class TestNegationAdverb:
 
     def test_has_negation_못(self):
         assert self.analyzer._has_negation("못 써요") is True
+
+    def test_has_compact_negation_안좋음(self):
+        assert self.analyzer._has_negation("안좋음", keyword="좋") is True
 
     def test_no_negation(self):
         assert self.analyzer._has_negation("잘 돼요") is False
@@ -244,6 +269,15 @@ class TestNegationAdverb:
     def test_no_false_positive_negation_in_안정(self):
         """'안정적' 텍스트에서 '안'을 부정어로 오탐하지 않아야 함."""
         assert self.analyzer._has_negation("앱이 안정적이고 빠릅니다") is False
+
+    def test_no_false_positive_negation_in_안녕하세요(self):
+        """인사말의 '안'을 가까운 감성 키워드의 부정어로 오탐하지 않아야 함."""
+        assert self.analyzer._has_negation("안녕하세요 좋은 앱입니다", keyword="좋") is False
+
+    def test_compact_negation_inverts_sentiment(self):
+        aspects = self.analyzer._analyze(MagicMock(), uuid7(), "안좋음")
+        kw_aspects = {a.keyword: a for a in aspects}
+        assert kw_aspects["좋"].sentiment_score == pytest.approx(0.20, abs=1e-4)
 
 
 # ─────────────────────────────────────────────
@@ -301,37 +335,31 @@ class TestProcess:
         assert result is True
         session.add_all.assert_not_called()
 
-    def test_skip_if_no_preprocessed_record(self):
+    def test_fails_if_no_preprocessed_record(self):
         session = _make_session(already_analyzed=False)
         session.get.return_value = None
         result = self.analyzer.process(session, self.review_id)
-        assert result is True
+        assert result is False
         session.add_all.assert_not_called()
-        # No RMI status update when preprocessed record is absent (not a terminal state)
         assert session.get.call_count == 1
 
-    def test_skip_if_empty_refined_text(self):
+    def test_fails_if_empty_refined_text(self):
         session = _make_session(already_analyzed=False)
         preprocessed = MagicMock()
         preprocessed.refined_text = ""
-        rmi_mock = MagicMock()
-        # First get(ReviewPreprocessed) → preprocessed, second get(ReviewMasterIndex) → rmi_mock
-        session.get.side_effect = [preprocessed, rmi_mock]
+        session.get.return_value = preprocessed
         result = self.analyzer.process(session, self.review_id)
-        assert result is True
+        assert result is False
         session.add_all.assert_not_called()
-        assert rmi_mock.processing_status == ProcessingStatusType.ANALYZED
 
-    def test_skip_if_no_keywords_found(self):
+    def test_fails_if_no_keywords_found(self):
         session = _make_session(already_analyzed=False)
         preprocessed = MagicMock()
         preprocessed.refined_text = "안녕하세요 반갑습니다"  # no matching keywords
         session.get.return_value = preprocessed
         result = self.analyzer.process(session, self.review_id)
-        assert result is True
-        # add_all([]) may be called — verify no aspects were inserted
-        for call in session.add_all.call_args_list:
-            assert call[0][0] == []
+        assert result is False
+        session.add_all.assert_not_called()
 
     def test_happy_path_adds_aspects(self):
         session = _make_session(already_analyzed=False)

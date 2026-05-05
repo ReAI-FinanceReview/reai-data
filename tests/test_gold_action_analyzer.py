@@ -3,7 +3,7 @@
 Coverage:
 - _calc_attention(): Case A / Case B / no mismatch
 - _apply_lfs(): 각 LF 독립 동작, 다중 LF, zero votes
-- _build_record(): 정상 경로, 데이터 없음 skip
+- _build_record(): 정상 경로, 데이터 없음 failure
 - process(): 이미 분석됨 skip, 정상 적재, LLM 실패 시에도 저장
 - _generate_summary(): LLM 성공, 실패(max retry), client=None
 """
@@ -237,13 +237,13 @@ class TestProcess:
         assert result is True
         session.merge.assert_not_called()
 
-    def test_skip_if_no_rmi(self):
+    def test_fails_if_no_rmi(self):
         session = _make_session(already_analyzed=False)
         # session.get returns None for any model (no ReviewMasterIndex found)
         session.get.side_effect = None
         session.get.return_value = None
         result = self.analyzer.process(session, self.review_id)
-        assert result is True
+        assert result is False
         session.merge.assert_not_called()
 
     def test_happy_path_merges_record(self):
