@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -9,7 +10,7 @@ def test_airflow_dag_wires_post_aggregate_validation_after_gold_aggregate():
 
     assert 'task_id="post_aggregate_validate"' in dag_source
     assert "--steps post_aggregate_validate --target-date {{ ds }}" in dag_source
-    assert "gold_aggregate\n    >> post_aggregate_validate" in dag_source
+    assert re.search(r"gold_aggregate\s*>>\s*post_aggregate_validate", dag_source)
     assert dag_source.index('task_id="gold_aggregate"') < dag_source.index(
         'task_id="post_aggregate_validate"'
     )

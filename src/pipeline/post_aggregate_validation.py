@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Literal
 
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 
 from src.utils.db_connector import DatabaseConnector
 
@@ -20,8 +20,6 @@ MART_TABLES = (
     "fact_category_radar_scores",
     "srv_daily_review_list",
 )
-STUCK_BATCH_STATUSES = ("PENDING", "FAILED", "RETRYING", "DEAD_LETTER")
-STUCK_REVIEW_STATUSES = ("RAW", "CLEANED")
 
 
 @dataclass(frozen=True)
@@ -87,6 +85,13 @@ class PostAggregateValidator:
             checks=checks,
         )
 
+    @staticmethod
+    def _date_window_params(target_date: date) -> dict[str, date]:
+        return {
+            "target_date": target_date,
+            "target_date_end": target_date + timedelta(days=1),
+        }
+
     def _check_fresh_ingestion(self, session, target_date: date) -> ValidationCheck:
         row = session.execute(
             text(
@@ -94,10 +99,11 @@ class PostAggregateValidator:
                 SELECT COUNT(*) AS batch_count,
                        COALESCE(SUM(record_count), 0) AS record_count
                 FROM ingestion_batch
-                WHERE DATE_TRUNC('day', created_at)::date = :target_date
+                WHERE created_at >= :target_date
+                  AND created_at < :target_date_end
                 """
             ),
-            {"target_date": target_date},
+            self._date_window_params(target_date),
         ).one()
         metrics = {
             "batch_count": int(row.batch_count or 0),
@@ -115,15 +121,16 @@ class PostAggregateValidator:
         rows = session.execute(
             text(
                 """
-                SELECT status::text AS status, COUNT(*) AS count
+                SELECT status AS status, COUNT(*) AS count
                 FROM ingestion_batch
-                WHERE DATE_TRUNC('day', created_at)::date = :target_date
-                  AND status::text IN :stuck_statuses
+                WHERE created_at >= :target_date
+                  AND created_at < :target_date_end
+                  AND status IN ('PENDING', 'FAILED', 'RETRYING', 'DEAD_LETTER')
                 GROUP BY status
                 ORDER BY status
                 """
-            ).bindparams(bindparam("stuck_statuses", expanding=True)),
-            {"target_date": target_date, "stuck_statuses": STUCK_BATCH_STATUSES},
+            ),
+            self._date_window_params(target_date),
         ).all()
         by_status = {row.status: int(row.count) for row in rows}
         stuck_count = sum(by_status.values())
@@ -139,28 +146,30 @@ class PostAggregateValidator:
         stuck_rows = session.execute(
             text(
                 """
-                SELECT processing_status::text AS status, COUNT(*) AS count
+                SELECT processing_status AS status, COUNT(*) AS count
                 FROM review_master_index
-                WHERE DATE_TRUNC('day', review_created_at)::date = :target_date
-                  AND processing_status::text IN :stuck_statuses
+                WHERE review_created_at >= :target_date
+                  AND review_created_at < :target_date_end
+                  AND processing_status IN ('RAW', 'CLEANED')
                 GROUP BY processing_status
                 ORDER BY processing_status
                 """
-            ).bindparams(bindparam("stuck_statuses", expanding=True)),
-            {"target_date": target_date, "stuck_statuses": STUCK_REVIEW_STATUSES},
+            ),
+            self._date_window_params(target_date),
         ).all()
         failed_exhausted = session.execute(
             text(
                 """
                 SELECT COUNT(*) AS count
                 FROM review_master_index
-                WHERE DATE_TRUNC('day', review_created_at)::date = :target_date
-                  AND processing_status::text = 'FAILED'
+                WHERE review_created_at >= :target_date
+                  AND review_created_at < :target_date_end
+                  AND processing_status = 'FAILED'
                   AND COALESCE(retry_count, 0) >= :retry_exhausted_threshold
                 """
             ),
             {
-                "target_date": target_date,
+                **self._date_window_params(target_date),
                 "retry_exhausted_threshold": RETRY_EXHAUSTED_THRESHOLD,
             },
         ).scalar_one()
@@ -194,11 +203,12 @@ class PostAggregateValidator:
                  AND am.is_active IS TRUE
                  AND (am.valid_from IS NULL OR am.valid_from <= :target_date)
                  AND (am.valid_to IS NULL OR am.valid_to >= :target_date)
-                WHERE DATE_TRUNC('day', rmi.review_created_at)::date = :target_date
-                  AND rmi.processing_status::text = 'ANALYZED'
+                WHERE rmi.review_created_at >= :target_date
+                  AND rmi.review_created_at < :target_date_end
+                  AND rmi.processing_status = 'ANALYZED'
                 """
             ),
-            {"target_date": target_date},
+            self._date_window_params(target_date),
         ).one()
         missing_service_id = int(row.missing_service_id or 0)
         missing_active_mapping = int(row.missing_active_mapping or 0)
@@ -221,8 +231,9 @@ class PostAggregateValidator:
                 WITH target AS (
                     SELECT rmi.review_id, rmi.platform_review_id
                     FROM review_master_index rmi
-                    WHERE DATE_TRUNC('day', rmi.review_created_at)::date = :target_date
-                      AND rmi.processing_status::text = 'ANALYZED'
+                    WHERE rmi.review_created_at >= :target_date
+                      AND rmi.review_created_at < :target_date_end
+                      AND rmi.processing_status = 'ANALYZED'
                 )
                 SELECT
                     COUNT(*) FILTER (WHERE raa.review_id IS NULL) AS missing_action_analysis,
@@ -237,14 +248,16 @@ class PostAggregateValidator:
                 LEFT JOIN reviews_preprocessed rp
                   ON rp.review_id = t.review_id
                 LEFT JOIN (
-                    SELECT review_id, COUNT(*) AS aspect_count
-                    FROM review_aspects
-                    GROUP BY review_id
+                    SELECT ra.review_id, COUNT(*) AS aspect_count
+                    FROM review_aspects ra
+                    JOIN target t_aspect
+                      ON t_aspect.review_id = ra.review_id
+                    GROUP BY ra.review_id
                 ) aspect_counts
                   ON aspect_counts.review_id = t.review_id
                 """
             ),
-            {"target_date": target_date},
+            self._date_window_params(target_date),
         ).one()
         metrics = {
             "missing_action_analysis": int(row.missing_action_analysis or 0),
@@ -289,13 +302,14 @@ class PostAggregateValidator:
                 FROM review_master_index rmi
                 JOIN app_reviews ar
                   ON ar.platform_review_id = rmi.platform_review_id
-                WHERE DATE_TRUNC('day', rmi.review_created_at)::date = :target_date
-                  AND rmi.processing_status::text = 'ANALYZED'
+                WHERE rmi.review_created_at >= :target_date
+                  AND rmi.review_created_at < :target_date_end
+                  AND rmi.processing_status = 'ANALYZED'
                   AND rmi.service_id IS NOT NULL
                   AND ar.platform_type IS NOT NULL
                 """
             ),
-            {"target_date": target_date},
+            self._date_window_params(target_date),
         ).scalar_one()
         fact_total = session.execute(
             text(
@@ -413,11 +427,12 @@ class PostAggregateValidator:
                     """
                     SELECT COUNT(*) AS count
                     FROM review_master_index
-                    WHERE DATE_TRUNC('day', review_created_at)::date = :target_date
-                      AND processing_status::text = 'ANALYZED'
+                    WHERE review_created_at >= :target_date
+                      AND review_created_at < :target_date_end
+                      AND processing_status = 'ANALYZED'
                     """
                 ),
-                {"target_date": target_date},
+                self._date_window_params(target_date),
             ).scalar_one()
             or 0
         )

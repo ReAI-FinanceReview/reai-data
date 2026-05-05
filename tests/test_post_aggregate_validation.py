@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 
 import pytest
@@ -59,9 +60,11 @@ def test_post_aggregate_validation_passes_for_valid_target_date_marts(
         result = run_post_aggregate_validation(target_date=SUCCESS_TARGET_DATE.isoformat())
 
         assert result.status == "success", result.message
-        assert result.validations["warnings"] == []
-        _assert_check(result.validations, "mart_freshness", passed=True)
-        _assert_check(result.validations, "mart_count_consistency", passed=True)
+        validations = result.validations
+        assert validations is not None
+        assert validations["warnings"] == []
+        _assert_check(validations, "mart_freshness", passed=True)
+        _assert_check(validations, "mart_count_consistency", passed=True)
     finally:
         _cleanup_probe(
             test_db_engine,
@@ -84,8 +87,10 @@ def test_post_aggregate_validation_treats_zero_fresh_ingestion_as_warning_only(
     result = run_post_aggregate_validation(target_date=WARNING_ONLY_TARGET_DATE.isoformat())
 
     assert result.status == "success", result.message
-    assert result.validations["warnings"] == ["fresh_ingestion"]
-    _assert_check(result.validations, "fresh_ingestion", passed=False)
+    validations = result.validations
+    assert validations is not None
+    assert validations["warnings"] == ["fresh_ingestion"]
+    _assert_check(validations, "fresh_ingestion", passed=False)
 
 
 @pytest.mark.requires_db
@@ -756,23 +761,42 @@ def _cleanup_probe(
     platform_review_id: str,
 ) -> None:
     partition_name = f"srv_daily_review_list_{target_date.strftime('%Y_%m_%d')}"
+    if not re.fullmatch(r"srv_daily_review_list_\d{4}_\d{2}_\d{2}", partition_name):
+        raise ValueError(f"Unexpected partition name: {partition_name}")
+
+    mart_params = {"service_id": service_id, "target_date": target_date}
     with test_db_engine.begin() as connection:
-        connection.execute(text(f"DROP TABLE IF EXISTS public.{partition_name}"))
-        for table_name in (
-            "fact_service_review_daily",
-            "fact_service_aspect_daily",
-            "fact_category_radar_scores",
-        ):
-            connection.execute(
-                text(
-                    f"""
-                    DELETE FROM {table_name}
-                    WHERE service_id = :service_id
-                      AND date = :target_date
-                    """
-                ),
-                {"service_id": service_id, "target_date": target_date},
-            )
+        connection.execute(text(f'DROP TABLE IF EXISTS public."{partition_name}"'))
+        connection.execute(
+            text(
+                """
+                DELETE FROM fact_service_review_daily
+                WHERE service_id = :service_id
+                  AND date = :target_date
+                """
+            ),
+            mart_params,
+        )
+        connection.execute(
+            text(
+                """
+                DELETE FROM fact_service_aspect_daily
+                WHERE service_id = :service_id
+                  AND date = :target_date
+                """
+            ),
+            mart_params,
+        )
+        connection.execute(
+            text(
+                """
+                DELETE FROM fact_category_radar_scores
+                WHERE service_id = :service_id
+                  AND date = :target_date
+                """
+            ),
+            mart_params,
+        )
         connection.execute(
             text("DELETE FROM reviews_assigned WHERE review_id = :review_id"),
             {"review_id": review_id},

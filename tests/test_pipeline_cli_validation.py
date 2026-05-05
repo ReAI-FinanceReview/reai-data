@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -44,7 +45,9 @@ def test_pipeline_cli_post_aggregate_validate_exits_non_zero_for_required_failur
     test_db_schema,
     monkeypatch,
 ):
-    storage_path = "s3://reai-data/bronze/post-aggregate/cli-failure.parquet"
+    storage_path = (
+        f"s3://reai-data/bronze/post-aggregate/cli-failure-{uuid4()}.parquet"
+    )
     monkeypatch.setenv("DATABASE_URL", test_db_url)
     try:
         with test_db_engine.begin() as connection:
