@@ -8,10 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from alembic import command
+from alembic.config import Config
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, Engine, make_url
 
+
+ALEMBIC_BASELINE_REVISION = "20260430_0001"
 
 SQL_FILE_ORDER = (
     "schema_v4.sql",
@@ -121,6 +125,29 @@ def run_verifications(engine: Engine, verifications: Iterable[BootstrapVerificat
                 )
 
 
+def build_alembic_config(root: Path, database_url: str) -> Config:
+    alembic_config = Config(str(root / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(root / "alembic"))
+    alembic_config.set_main_option("sqlalchemy.url", database_url)
+    alembic_config.attributes["database_url"] = database_url
+    return alembic_config
+
+
+def run_alembic_baseline_and_migrations(
+    root: Path,
+    database_url: str,
+    *,
+    stdout=print,
+) -> None:
+    alembic_config = build_alembic_config(root, database_url)
+
+    stdout(f"- stamping Alembic baseline {ALEMBIC_BASELINE_REVISION}")
+    command.stamp(alembic_config, ALEMBIC_BASELINE_REVISION)
+
+    stdout("- applying Alembic migrations to head")
+    command.upgrade(alembic_config, "head")
+
+
 def bootstrap_database(database_url: str | None = None, *, stdout=print) -> None:
     root = get_project_root()
     resolved_url = load_database_url(root, database_url)
@@ -137,7 +164,13 @@ def bootstrap_database(database_url: str | None = None, *, stdout=print) -> None
         stdout("- resetting public schema")
         reset_public_schema(engine)
 
-        for sql_path in sql_paths:
+        schema_path, *seed_paths = sql_paths
+        stdout(f"- applying {schema_path.name}")
+        execute_sql_file(engine, schema_path)
+
+        run_alembic_baseline_and_migrations(root, resolved_url, stdout=stdout)
+
+        for sql_path in seed_paths:
             stdout(f"- applying {sql_path.name}")
             execute_sql_file(engine, sql_path)
 

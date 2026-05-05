@@ -64,3 +64,4 @@ def test_local_docs_explain_compose_startup():
     assert "docker compose up -d" in content
     assert ".env.local.example" in content
     assert "Airflow" in content
+    assert "docs/schema-management.md" in content

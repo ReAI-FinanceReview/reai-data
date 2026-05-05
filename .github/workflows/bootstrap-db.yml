@@ -53,8 +53,38 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      - name: Check Alembic migration graph
+        run: |
+          heads="$(PYTHONPATH=. uv run alembic heads)"
+          printf '%s\n' "$heads"
+          test "$(printf '%s\n' "$heads" | sed '/^$/d' | wc -l | tr -d ' ')" = "1"
+
+      - name: Verify empty database Alembic path
+        run: |
+          PYTHONPATH=. uv run python - <<'PY'
+          import os
+
+          from sqlalchemy import create_engine
+
+          engine = create_engine(os.environ["DATABASE_URL"])
+          raw_connection = engine.raw_connection()
+          try:
+              cursor = raw_connection.cursor()
+              cursor.execute("DROP SCHEMA IF EXISTS public CASCADE;")
+              cursor.execute("CREATE SCHEMA public;")
+              raw_connection.commit()
+          finally:
+              raw_connection.close()
+              engine.dispose()
+          PY
+          PYTHONPATH=. uv run alembic upgrade head
+          PYTHONPATH=. uv run alembic current --check-heads
+
       - name: Bootstrap local database
         run: PYTHONPATH=. uv run python scripts/bootstrap_db.py --database-url postgresql+psycopg2://reai:reai@localhost:5432/reai
 
+      - name: Verify Alembic revision is at head after bootstrap
+        run: PYTHONPATH=. uv run alembic current --check-heads
+
       - name: Run focused bootstrap tests
-        run: PYTHONPATH=. uv run pytest tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py
+        run: PYTHONPATH=. uv run pytest tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py tests/test_alembic_config.py

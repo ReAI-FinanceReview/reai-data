@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.18.4",
     "boto3>=1.42.73",
     "datasets>=4.8.4",
     "emoji>=2.15.0",

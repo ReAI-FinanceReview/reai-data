@@ -59,3 +59,12 @@ def test_ci_bootstrap_workflow_documents_reproducible_commands():
         "PYTHONPATH=. uv run pytest "
         "tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py"
     ) in run_commands
+    assert "PYTHONPATH=. uv run alembic heads" in run_commands
+    assert "wc -l" in run_commands
+    assert "PYTHONPATH=. uv run alembic upgrade head" in run_commands
+    assert "PYTHONPATH=. uv run alembic current --check-heads" in run_commands
+    assert (
+        "PYTHONPATH=. uv run pytest "
+        "tests/test_ci_workflows.py tests/test_bootstrap_db.py "
+        "tests/test_local_dev_setup.py tests/test_alembic_config.py"
+    ) in run_commands
