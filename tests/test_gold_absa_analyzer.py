@@ -8,7 +8,6 @@ Coverage:
 - process_batch(): standalone batch with DB
 """
 
-import math
 import pytest
 from unittest.mock import MagicMock, patch
 from uuid6 import uuid7
@@ -18,6 +17,8 @@ from src.gold.absa_analyzer import (
     _cosine_similarity,
     _SENTIMENT_DICT,
     _CATEGORY_KEYWORDS,
+    _COMPACT_NEGATION_PREFIXES,
+    _NEGATION_WORDS,
 )
 from src.models.enums import CategoryType, ProcessingStatusType
 from src.models.review_aspects import ReviewAspect
@@ -217,6 +218,10 @@ class TestKeywordExtraction:
         analyzer = _make_analyzer(okt_mock=okt_mock)
         keywords = analyzer._extract_keywords("앱 좋아요")
         assert "좋" in keywords
+        analyzer.logger.debug.assert_called_once_with(
+            "Okt returned no usable keywords — fallback to dict match"
+        )
+        analyzer.logger.info.assert_not_called()
 
     @pytest.mark.parametrize(
         ("text", "expected_keyword"),
@@ -240,6 +245,9 @@ class TestKeywordExtraction:
 class TestNegationAdverb:
     def setup_method(self):
         self.analyzer = _make_analyzer()
+
+    def test_compact_negation_prefixes_derive_from_negation_words(self):
+        assert set(_COMPACT_NEGATION_PREFIXES) == _NEGATION_WORDS
 
     def test_has_negation_안(self):
         assert self.analyzer._has_negation("안 돼요") is True

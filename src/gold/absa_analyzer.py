@@ -71,7 +71,9 @@ _ADV_WEIGHTS: Dict[str, float] = {
 
 # 부정어
 _NEGATION_WORDS = {"안", "못", "없", "아니", "않"}
-_COMPACT_NEGATION_PREFIXES = ("안", "못", "없", "아니", "않")
+_COMPACT_NEGATION_PREFIXES = tuple(
+    sorted(_NEGATION_WORDS, key=len, reverse=True)
+)
 
 # 키워드별 컨텍스트 윈도우 크기 (±N 토큰)
 _CONTEXT_WINDOW: int = 3
@@ -262,7 +264,7 @@ class GoldABSAAnalyzer:
                         result.append((noun, idx, idx + len(noun)))
                 if result:
                     return result
-                self.logger.info("Okt returned no usable keywords — fallback to dict match")
+                self.logger.debug("Okt returned no usable keywords — fallback to dict match")
             except Exception as e:
                 self.logger.warning(f"Okt.nouns failed: {e} — fallback to dict match")
 
