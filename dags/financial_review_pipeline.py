@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# pyright: reportMissingImports=false
 """
 Financial Review ETL Pipeline DAG
 
@@ -11,6 +12,7 @@ Financial Review ETL Pipeline DAG
   3. cleanse_reviews — Bronze Parquet → Silver(reviews_preprocessed), ReviewMasterIndex(CLEANED)
   4. gold_analyze    — GoldOrchestrator: embedding → ABSA → action, ReviewMasterIndex(ANALYZED)
   5. gold_aggregate  — 팩트 테이블 UPSERT (fact_service_review_daily 등 4개)
+  6. post_aggregate_validate — target date DB 검증 및 DAG 성공/실패 판정
 """
 import os
 from datetime import datetime, timedelta
@@ -99,4 +101,23 @@ gold_aggregate = BashOperator(
     execution_timeout=timedelta(hours=1),
 )
 
-crawl_reviews >> load_reviews >> cleanse_reviews >> gold_analyze >> gold_aggregate
+# Step 6: 집계 후 DB 검증
+# 신규 유입 0건은 warning/report로 남기되, 상태 전이·서빙 mart·무결성 실패는 DAG 실패로 전파한다.
+post_aggregate_validate = BashOperator(
+    task_id="post_aggregate_validate",
+    bash_command=(
+        f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} -m src.pipeline.cli "
+        "--steps post_aggregate_validate --target-date {{ ds }}"
+    ),
+    dag=dag,
+    execution_timeout=timedelta(minutes=15),
+)
+
+(
+    crawl_reviews
+    >> load_reviews
+    >> cleanse_reviews
+    >> gold_analyze
+    >> gold_aggregate
+    >> post_aggregate_validate
+)
