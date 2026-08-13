@@ -215,6 +215,7 @@ $RECYCLE.BIN/
 # Markdown files
 *.md
 !README.md
+!AGENTS.md
 
 # SQL
 *.sql
