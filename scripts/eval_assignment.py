@@ -20,16 +20,15 @@ sys.path.insert(0, str(ROOT))
 from sqlalchemy import text  # noqa: E402
 
 from src.gold.dept_assigner import UNCLASSIFIED, fetch_assignments  # noqa: E402
-from src.gold.dept_eval import (  # noqa: E402
-    DEFAULT_LABELS_PATH,
-    evaluate,
-    format_report,
-    load_labels,
-)
+from src.gold.dept_eval import evaluate, format_report, load_labels  # noqa: E402
 from src.utils.db_connector import DatabaseConnector  # noqa: E402
 
 DEFAULT_CONFIG_PATH = "config/crawler_config.yml"
 LABELS_PATH_ENV = "DEPT_LABELS_PATH"
+
+# 라벨 CSV 기본 위치. 실제 리뷰 원문이 담기므로 저장소가 아니라 git 이 무시하는
+# data/ 아래에 둔다 (.gitignore). --labels 나 DEPT_LABELS_PATH 로 덮어쓴다.
+DEFAULT_LABELS_PATH = Path("data/labels/dept_labels.csv")
 
 _COVERAGE_SQL = text(
     """
@@ -39,6 +38,7 @@ _COVERAGE_SQL = text(
         COUNT(*) FILTER (WHERE NOT is_failed
                            AND assigned_dept = ARRAY[:unclassified])    AS unclassified
     FROM reviews_assigned
+    WHERE (CAST(:assigner AS text) IS NULL OR assigner = :assigner)
     """
 )
 
@@ -73,6 +73,10 @@ def main(argv=None) -> int:
     parser.add_argument("--labels", help=f"라벨 CSV 경로 (기본 {DEFAULT_LABELS_PATH})")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="DB 설정 파일 경로")
     parser.add_argument("--json", dest="json_path", help="집계 결과를 JSON 으로 저장할 경로")
+    parser.add_argument(
+        "--assigner",
+        help="이 배정기의 결과만 평가한다 (rule, llm). 생략하면 전체",
+    )
     args = parser.parse_args(argv)
 
     labels_path = resolve_labels_path(args.labels)
@@ -81,15 +85,23 @@ def main(argv=None) -> int:
         print("라벨링을 마친 뒤 해당 경로에 두거나 --labels 로 지정하라.", file=sys.stderr)
         return 1
 
-    labels = load_labels(labels_path)
+    try:
+        labels = load_labels(labels_path)
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"라벨 CSV 를 읽을 수 없다: {exc}", file=sys.stderr)
+        return 1
     if not labels:
         print(f"라벨이 비어 있다 (assigned_dept 열이 모두 공란): {labels_path}", file=sys.stderr)
         return 1
 
     session = DatabaseConnector(args.config).get_session()
     try:
-        assignments = fetch_assignments(session, [label.review_id for label in labels])
-        coverage = session.execute(_COVERAGE_SQL, {"unclassified": UNCLASSIFIED}).one()
+        assignments = fetch_assignments(
+            session, [label.review_id for label in labels], assigner=args.assigner
+        )
+        coverage = session.execute(
+            _COVERAGE_SQL, {"unclassified": UNCLASSIFIED, "assigner": args.assigner}
+        ).one()
     finally:
         session.close()
 
