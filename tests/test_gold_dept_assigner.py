@@ -18,6 +18,7 @@ from sqlalchemy import text
 from uuid6 import uuid7
 
 from src.gold.dept_assigner import (
+    ASSIGNER_RULE,
     DEFAULT_TOP_K,
     UNCLASSIFIED,
     Assignment,
@@ -434,22 +435,12 @@ class TestEvaluate:
 
 @pytest.fixture
 def reviews_assigned_unique(test_db_session):
-    """리비전 20260813_0002 를 테스트 스키마에 적용한다.
+    """리비전 20260813_0002 가 적용된 세션.
 
-    conftest 는 sql/schema_v4.sql(= Alembic 베이스라인 스냅샷)로 스키마를 만들고,
-    UNIQUE 제약은 그 다음 리비전이 건다. 여기서 DDL 을 다시 쓰면 마이그레이션과
-    드리프트가 생기므로 리비전 모듈의 upgrade() 를 그대로 실행한다.
+    적용은 conftest 의 스키마 fixture 가 `alembic upgrade head` 로 수행한다
+    (schema_v4.sql 은 베이스라인 스냅샷이라 이후 리비전의 컬럼/제약이 없다).
+    이 fixture 는 그 사실을 이름으로 드러내기 위해 남긴다.
     """
-    from alembic.operations import Operations
-    from alembic.runtime.migration import MigrationContext
-
-    connection = test_db_session.connection()
-    migration_context = MigrationContext.configure(connection)
-    revision = _load_revision_module()
-
-    with Operations.context(migration_context):
-        revision.upgrade()
-
     return test_db_session
 
 
@@ -758,3 +749,114 @@ class TestDuplicateLabels:
 
         with pytest.raises(ValueError, match="중복"):
             load_labels(path)
+
+
+# ─────────────────────────────────────────────
+# H. 2차 리뷰 대응 — 배정기 식별자와 실패 재시도
+# ─────────────────────────────────────────────
+
+class TestAssignerIdentityIsPinned:
+    """ASSIGNER 값이 마이그레이션 server_default 와 어긋나면 조용히 과거 전량이
+    재처리된다. 내부 일관성만으로는 드리프트가 드러나지 않으므로 값을 고정한다."""
+
+    def test_rule_assigner_matches_migration_default(self):
+        revision = _load_revision_module()
+
+        assert RuleBasedAssigner.ASSIGNER == ASSIGNER_RULE
+        assert revision.DEFAULT_ASSIGNER == ASSIGNER_RULE
+
+    def test_migration_server_default_matches_orm_model(self):
+        from src.models.review_assigned import ReviewAssigned
+
+        column_default = ReviewAssigned.__table__.c.assigner.server_default.arg
+        assert str(column_default).strip("'") == ASSIGNER_RULE
+
+    def test_assignment_carries_the_assigner_of_its_producer(self):
+        rid = uuid7()
+        assigner, session = _make_rule_assigner(
+            TestOrgCandidateRetriever.ORGS, {str(rid): ["로그인"]}
+        )
+
+        assert assigner.assign(session, rid).assigner == ASSIGNER_RULE
+
+
+class TestFetchAssignmentsMixing:
+    def test_unfiltered_fetch_refuses_to_pick_between_assigners(self):
+        """review_id 로 키잉된 dict 는 배정기별 행을 담을 수 없다. 조용히 하나를
+        버리면 비교 리포트가 비결정적이 된다."""
+        session = MagicMock()
+        session.execute.return_value.fetchall.return_value = [
+            (uuid7(), ["1"], "규칙", 0.4, False, 1, "rule"),
+        ]
+        rows = session.execute.return_value.fetchall.return_value
+        rid = rows[0][0]
+        session.execute.return_value.fetchall.return_value = [
+            (rid, ["1"], "규칙", 0.4, False, 1, "rule"),
+            (rid, ["1", "1-1"], "LLM", 0.9, False, 1, "llm"),
+        ]
+
+        with pytest.raises(ValueError, match="배정기가 둘 이상"):
+            fetch_assignments(session)
+
+    def test_empty_id_list_does_not_touch_the_database(self):
+        """가드의 의도는 반환값이 아니라 DB 왕복 회피다."""
+        session = MagicMock()
+
+        assert fetch_assignments(session, []) == {}
+        session.execute.assert_not_called()
+
+
+@pytest.mark.requires_db
+@pytest.mark.integration
+class TestFailedRowsAreRetried:
+    def _seed(self, session, count=1):
+        now = datetime.now(timezone.utc)
+        app = App(app_id=uuid7(), platform_app_id=f"retry-{uuid7()}",
+                  platform_type=PlatformType.PLAYSTORE, name="Retry App")
+        session.add(app)
+        rs = [ReviewMasterIndex(
+            review_id=uuid7(), app_id=app.app_id,
+            platform_review_id=f"retry-review-{uuid7()}",
+            platform_type=PlatformType.PLAYSTORE, review_created_at=now,
+            ingested_at=now, processing_status=ProcessingStatusType.ANALYZED,
+            is_active=True, is_reply=False) for _ in range(count)]
+        session.add_all(rs)
+        session.flush()
+        return [r.review_id for r in rs]
+
+    def _assigner(self, session):
+        a = RuleBasedAssigner.__new__(RuleBasedAssigner)
+        a.logger = MagicMock()
+        a.db_connector = MagicMock()
+        a.db_connector.get_session.return_value = session
+        a.retriever = OrgCandidateRetriever()
+        return a
+
+    def test_failed_review_is_picked_up_again(self, reviews_assigned_unique):
+        session = reviews_assigned_unique
+        review_id = self._seed(session)[0]
+
+        save_assignment(session, unclassified(review_id, "DB 오류", failed=True))
+        session.flush()
+
+        # 실패 행을 '배정됨'으로 세면 이 리뷰는 영구히 사라진다.
+        assert self._assigner(session).assign_batch()["total"] == 1
+
+    def test_retry_stops_at_max_tries(self, reviews_assigned_unique):
+        session = reviews_assigned_unique
+        review_id = self._seed(session)[0]
+        assigner = self._assigner(session)
+
+        session.execute(
+            text(
+                "INSERT INTO reviews_assigned "
+                "(review_id, assigner, assigned_dept, assignment_reason, "
+                " confidence, is_failed, try_number) "
+                "VALUES (:rid, :a, ARRAY['미분류'], '반복 실패', 0.0, true, :n)"
+            ),
+            {"rid": str(review_id), "a": assigner.ASSIGNER, "n": assigner.MAX_TRIES},
+        )
+        session.flush()
+
+        # 상한에 닿으면 무한 재시도를 멈춘다.
+        assert assigner.assign_batch()["total"] == 0

@@ -33,6 +33,12 @@ from src.utils.logger import get_logger
 
 UNCLASSIFIED = "미분류"
 
+# 배정기 식별자. 마이그레이션 20260813_0002 의 server_default 와 반드시 같아야
+# 한다 — 어긋나면 리비전 이전에 적재된 행이 anti-join 에서 빠져 과거 전량이
+# 조용히 재처리된다. tests 가 그 일치를 단언한다.
+ASSIGNER_RULE = "rule"
+ASSIGNER_LLM = "llm"
+
 # DB 접속 설정 파일. 다른 gold 모듈과 같은 기본값이다.
 DEFAULT_CONFIG_PATH = "config/crawler_config.yml"
 
@@ -71,9 +77,9 @@ class Assignment:
     confidence: float
     is_failed: bool = False
     try_number: int = 1
-    # 어느 배정기가 만든 행인지. 이 값이 없으면 규칙/LLM 결과가 서로를 덮어써서
-    # dept_eval 이 비교할 대상이 남지 않는다 (리비전 20260813_0002).
-    assigner: str = "rule"
+    # 어느 배정기가 만든 행인지. 기본값을 두지 않는다 — 빠뜨린 호출이 'rule' 행을
+    # 만들면 ON CONFLICT (review_id, assigner) 가 규칙 베이스라인을 덮어쓴다.
+    assigner: str = field(default=ASSIGNER_RULE, kw_only=True)
 
     def as_dict(self) -> dict:
         return {
@@ -256,7 +262,7 @@ def save_assignment(session, assignment: Assignment) -> None:
 
 
 def unclassified(
-    review_id: UUID, reason: str, *, failed: bool = False, assigner: str = "rule"
+    review_id: UUID, reason: str, *, failed: bool = False, assigner: str = ASSIGNER_RULE
 ) -> Assignment:
     """미분류 결과를 만든다. 연동 스펙상 confidence 는 0.0 이다."""
     return Assignment(
@@ -281,7 +287,9 @@ class RuleBasedAssigner:
     차이는 판정 방식에서만 나온다.
     """
 
-    ASSIGNER = "rule"
+    ASSIGNER = ASSIGNER_RULE
+    # 실패 행을 몇 번까지 다시 시도할지. 넘으면 기본 경로에서 제외된다.
+    MAX_TRIES = 3
 
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH, top_k: int = DEFAULT_TOP_K):
         self.logger = get_logger(__name__)
@@ -341,11 +349,17 @@ class RuleBasedAssigner:
         params: dict = {}
 
         if not reassign:
+            # 실패 행(is_failed)은 '배정됨'으로 세지 않는다. 세면 일시적 DB 오류
+            # 한 번이 그 리뷰를 기본 경로에서 영구히 떨어뜨리고, 복구 수단이
+            # 전량 재처리뿐이라 LLM 배정기에서는 과거 전량 재과금이 된다.
+            # 무한 재시도는 try_number 상한으로 막는다.
             clauses.append(
                 "NOT EXISTS (SELECT 1 FROM reviews_assigned ra "
-                "WHERE ra.review_id = rmi.review_id AND ra.assigner = :assigner)"
+                "WHERE ra.review_id = rmi.review_id AND ra.assigner = :assigner "
+                "AND (NOT ra.is_failed OR ra.try_number >= :max_tries))"
             )
             params["assigner"] = self.ASSIGNER
+            params["max_tries"] = self.MAX_TRIES
 
         if target_date is not None:
             clauses.append("DATE_TRUNC('day', rmi.review_created_at)::date = :target_date")
@@ -450,8 +464,10 @@ def fetch_assignments(
     ``review_ids`` 가 None 이면 전량, 빈 시퀀스면 빈 결과다. 둘을 같이 취급하면
     "이 목록의 배정을 다오"가 조용히 전체 스캔으로 넓어진다.
 
-    ``assigner`` 를 주면 그 배정기의 행만 본다. 같은 리뷰에 배정기별 1행이
-    존재하므로, 평가에서 두 결과를 섞지 않으려면 필요하다.
+    ``assigner`` 를 주면 그 배정기의 행만 본다. 반환이 review_id 로 키잉된 dict
+    이므로 배정기별 행을 동시에 담을 수 없다 — 필터 없이 호출하면 같은 리뷰의
+    규칙/LLM 행 중 하나가 스캔 순서대로 버려진다. 그래서 필터를 생략한 호출이
+    여러 배정기의 행을 만나면 예외를 던진다. 조용히 하나를 고르지 않는다.
     """
     if review_ids is not None and len(review_ids) == 0:
         return {}
@@ -473,6 +489,17 @@ def fetch_assignments(
         sql += " WHERE " + " AND ".join(clauses)
 
     rows = session.execute(text(sql), params).fetchall()
+    if assigner is None:
+        seen = {}
+        for row in rows:
+            key = str(row[0])
+            if key in seen and seen[key] != row[6]:
+                raise ValueError(
+                    f"리뷰 {key} 에 배정기가 둘 이상 있다({seen[key]}, {row[6]}). "
+                    "assigner 를 지정해 어느 결과를 볼지 정하라."
+                )
+            seen[key] = row[6]
+
     return {
         str(row[0]): Assignment(
             review_id=row[0],

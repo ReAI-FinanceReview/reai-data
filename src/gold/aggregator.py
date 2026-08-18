@@ -23,6 +23,11 @@ from sqlalchemy import text
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
 
+# 서빙 마트에 노출할 배정기. reviews_assigned 는 리뷰당 배정기별 1행을 담으므로
+# (리비전 20260813_0002) 필터가 없으면 나중에 INSERT 된 쪽이 마트를 결정하고,
+# 실패 행이 정상 배정을 가린다.
+PRODUCTION_ASSIGNER = "rule"
+
 
 class GoldAggregator:
     """Gold Layer 집계기.
@@ -404,7 +409,9 @@ class GoldAggregator:
             LEFT JOIN reviews_preprocessed rp ON rp.review_id = rmi.review_id
             LEFT JOIN (
                 SELECT DISTINCT ON (review_id) review_id, assigned_dept, confidence
-                FROM reviews_assigned ORDER BY review_id, created_at DESC
+                FROM reviews_assigned
+                WHERE NOT is_failed AND assigner = :production_assigner
+                ORDER BY review_id, created_at DESC
             ) rvs ON rvs.review_id = rmi.review_id
             WHERE rmi.processing_status = 'ANALYZED'
               AND DATE_TRUNC('day', rmi.review_created_at)::date = :target_date
@@ -418,5 +425,8 @@ class GoldAggregator:
                 keyword               = EXCLUDED.keyword,
                 confidence            = EXCLUDED.confidence
         """)
-        session.execute(sql, {"target_date": target_date})
+        session.execute(
+            sql,
+            {"target_date": target_date, "production_assigner": PRODUCTION_ASSIGNER},
+        )
         self.logger.debug(f"srv_daily_review_list UPSERT 완료: {target_date}")
