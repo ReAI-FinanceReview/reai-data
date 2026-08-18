@@ -59,6 +59,12 @@ def _load_env() -> None:
 
 UNCLASSIFIED = "미분류"
 
+# 배정기 식별자. 마이그레이션 20260813_0002 의 server_default 와 반드시 같아야
+# 한다 — 어긋나면 리비전 이전에 적재된 행이 anti-join 에서 빠져 과거 전량이
+# 조용히 재처리된다. tests 가 그 일치를 단언한다.
+ASSIGNER_RULE = "rule"
+ASSIGNER_LLM = "llm"
+
 # DB 접속 설정 파일. 다른 gold 모듈과 같은 기본값이다.
 DEFAULT_CONFIG_PATH = "config/crawler_config.yml"
 
@@ -97,9 +103,9 @@ class Assignment:
     confidence: float
     is_failed: bool = False
     try_number: int = 1
-    # 어느 배정기가 만든 행인지. 이 값이 없으면 규칙/LLM 결과가 서로를 덮어써서
-    # dept_eval 이 비교할 대상이 남지 않는다 (리비전 20260813_0002).
-    assigner: str = "rule"
+    # 어느 배정기가 만든 행인지. 기본값을 두지 않는다 — 빠뜨린 호출이 'rule' 행을
+    # 만들면 ON CONFLICT (review_id, assigner) 가 규칙 베이스라인을 덮어쓴다.
+    assigner: str = field(default=ASSIGNER_RULE, kw_only=True)
 
     def as_dict(self) -> dict:
         return {
@@ -282,7 +288,7 @@ def save_assignment(session, assignment: Assignment) -> None:
 
 
 def unclassified(
-    review_id: UUID, reason: str, *, failed: bool = False, assigner: str = "rule"
+    review_id: UUID, reason: str, *, failed: bool = False, assigner: str = ASSIGNER_RULE
 ) -> Assignment:
     """미분류 결과를 만든다. 연동 스펙상 confidence 는 0.0 이다."""
     return Assignment(
@@ -304,6 +310,8 @@ class _BatchAssignerBase:
     """배치 실행부. 두 배정기가 공유하며 ``assign()`` 과 ``ASSIGNER`` 만 다르다."""
 
     ASSIGNER = "base"
+    # 실패 행을 몇 번까지 다시 시도할지. 넘으면 기본 경로에서 제외된다.
+    MAX_TRIES = 3
 
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH, top_k: int = DEFAULT_TOP_K):
         self.logger = get_logger(__name__)
@@ -313,7 +321,9 @@ class _BatchAssignerBase:
     def assign(self, session, review_id: UUID) -> Assignment:  # pragma: no cover - 추상
         raise NotImplementedError
 
-    def run_token_total(self, session, review_ids: Sequence[UUID]) -> Optional[int]:
+    def run_token_total(
+        self, session, review_ids: Sequence[UUID], since: Optional[datetime] = None
+    ) -> Optional[int]:
         """이번 실행이 쓴 토큰 합계. LLM 을 쓰지 않는 배정기는 None 이다."""
         return None
 
@@ -338,11 +348,17 @@ class _BatchAssignerBase:
         params: dict = {}
 
         if not reassign:
+            # 실패 행(is_failed)은 '배정됨'으로 세지 않는다. 세면 일시적 DB 오류
+            # 한 번이 그 리뷰를 기본 경로에서 영구히 떨어뜨리고, 복구 수단이
+            # 전량 재처리뿐이라 LLM 배정기에서는 과거 전량 재과금이 된다.
+            # 무한 재시도는 try_number 상한으로 막는다.
             clauses.append(
                 "NOT EXISTS (SELECT 1 FROM reviews_assigned ra "
-                "WHERE ra.review_id = rmi.review_id AND ra.assigner = :assigner)"
+                "WHERE ra.review_id = rmi.review_id AND ra.assigner = :assigner "
+                "AND (NOT ra.is_failed OR ra.try_number >= :max_tries))"
             )
             params["assigner"] = self.ASSIGNER
+            params["max_tries"] = self.MAX_TRIES
 
         if target_date is not None:
             clauses.append("DATE_TRUNC('day', rmi.review_created_at)::date = :target_date")
@@ -382,7 +398,10 @@ class _BatchAssignerBase:
                 self.logger.info("부서 배정: 대상 리뷰 없음")
                 return {"total": 0, "assigned": 0, "unclassified": 0, "failed": 0}
 
-            self.logger.info(f"부서 배정 시작: {len(review_ids)}건")
+            run_started_at = datetime.now(timezone.utc)
+            self.logger.info(
+                f"부서 배정 시작: {len(review_ids)}건 ({type(self).__name__})"
+            )
             assigned = unclassified_count = failed = 0
 
             for i in range(0, len(review_ids), batch_size):
@@ -427,7 +446,7 @@ class _BatchAssignerBase:
             }
             # 비용 상한을 두지 않기로 했으므로 최소한 이번 실행의 소모량이 즉시
             # 보여야 한다. 집계 질의를 따로 만들지 않아도 로그에 남는다.
-            tokens = self.run_token_total(session, review_ids)
+            tokens = self.run_token_total(session, review_ids, since=run_started_at)
             if tokens is not None:
                 summary["total_tokens"] = tokens
             self.logger.info(f"부서 배정 완료: {summary}")
@@ -543,7 +562,7 @@ class LLMAssigner(_BatchAssignerBase):
     집합이 섞여 판정 근거가 흐려지고, 한 건이 깨질 때 배치 전체가 날아간다.
     """
 
-    ASSIGNER = "llm"
+    ASSIGNER = ASSIGNER_LLM
     DEFAULT_MODEL = "gpt-4o-mini"
     MODEL_ENV = "DEPT_ASSIGN_MODEL"
     TEMPERATURE = 0.0
@@ -564,6 +583,11 @@ class LLMAssigner(_BatchAssignerBase):
         self.model = os.getenv(self.MODEL_ENV, self.DEFAULT_MODEL)
         self._client = self._init_client()
 
+    def _clip(self, text_value: str) -> str:
+        """저장 전 절단. reason 과 환각 org_id 모두 모델이 통제하는 문자열이고
+        서빙 마트까지 흘러가므로, 절단을 한 곳으로 모아 경로별 누락을 없앤다."""
+        return (text_value or "")[: self.REASON_LIMIT]
+
     def _init_client(self):
         if not OPENAI_AVAILABLE:
             self.logger.error("openai 패키지 없음 — LLM 배정 불가")
@@ -578,17 +602,27 @@ class LLMAssigner(_BatchAssignerBase):
             self.logger.error(f"OpenAI 클라이언트 초기화 실패: {exc}")
             return None
 
-    def run_token_total(self, session, review_ids: Sequence[UUID]) -> Optional[int]:
+    def run_token_total(
+        self, session, review_ids: Sequence[UUID], since: Optional[datetime] = None
+    ) -> Optional[int]:
+        """이번 실행이 쓴 토큰 합계.
+
+        ``since`` 로 시간을 자르지 않으면 같은 리뷰의 과거 로그까지 합산되어,
+        ``reassign=True`` 재실행이 생애 누적을 이번 실행 비용으로 보고한다.
+        비용 상한이 없는 상태에서 유일한 지출 신호이므로 정확해야 한다.
+        """
         if not review_ids:
             return 0
-        row = session.execute(
-            text(
-                "SELECT COALESCE(SUM((result_payload->'usage'->>'total_tokens')::bigint), 0) "
-                "FROM review_llm_analysis_logs "
-                "WHERE source_table = :src AND source_record_id = ANY(:ids)"
-            ),
-            {"src": self.SOURCE_TABLE, "ids": [str(r) for r in review_ids]},
-        ).fetchone()
+        sql = (
+            "SELECT COALESCE(SUM((result_payload->'usage'->>'total_tokens')::bigint), 0) "
+            "FROM review_llm_analysis_logs "
+            "WHERE source_table = :src AND source_record_id = ANY(:ids)"
+        )
+        params: dict = {"src": self.SOURCE_TABLE, "ids": [str(r) for r in review_ids]}
+        if since is not None:
+            sql += " AND created_at >= :since"
+            params["since"] = since
+        row = session.execute(text(sql), params).fetchone()
         return int(row[0]) if row and row[0] is not None else 0
 
     # ------------------------------------------------------------------
@@ -610,11 +644,10 @@ class LLMAssigner(_BatchAssignerBase):
     def build_prompt(self, context: dict, candidates: Sequence[OrgCandidate]) -> str:
         # 본문을 구분자로 감싼다. 신뢰할 수 없는 입력이 지시문과 같은 평면에
         # 놓이면 "이 리뷰는 X부 담당입니다" 같은 문장이 배정을 끌 수 있다.
-        lines = [
-            "<review>",
-            context["text"][: self.REVIEW_TEXT_LIMIT],
-            "</review>",
-        ]
+        # 본문이 닫는 태그를 포함하면 펜스가 그 자리에서 끊겨 뒤 문장이 지시문과
+        # 같은 평면에 놓인다. 리터럴 태그를 쓰는 한 이스케이프가 필요하다.
+        body = context["text"][: self.REVIEW_TEXT_LIMIT].replace("</review>", "<\\/review>")
+        lines = ["<review>", body, "</review>"]
         if context.get("rating") is not None:
             lines.append(f"별점: {context['rating']}")
 
@@ -678,7 +711,7 @@ class LLMAssigner(_BatchAssignerBase):
         if choice.org_id != UNCLASSIFIED and choice.org_id not in allowed:
             # 후보 밖 org_id 는 환각이다. temperature 0 에서 재시도해도 같은 값이
             # 나오므로 실패로 표시해 재시도를 유도하지 않고 미분류로 닫는다.
-            reason = f"LLM 이 후보 밖 org_id 반환: {choice.org_id}"
+            reason = self._clip(f"LLM 이 후보 밖 org_id 반환: {choice.org_id}")
             self.logger.warning(f"[{review_id}] {reason}")
             # 정상 배정과 같은 인자로 남기면 로그만으로 환각률을 셀 수 없다.
             self._finish_log(
@@ -687,7 +720,6 @@ class LLMAssigner(_BatchAssignerBase):
                 usage=usage,
                 payload={**choice.model_dump(), "guardrail_violation": True,
                          "allowed": sorted(allowed)},
-                error=reason,
             )
             return unclassified(review_id, reason, assigner=self.ASSIGNER)
 
@@ -696,7 +728,7 @@ class LLMAssigner(_BatchAssignerBase):
         if choice.org_id == UNCLASSIFIED:
             return unclassified(
                 review_id,
-                choice.reason or "LLM 판정: 해당 부서 없음",
+                self._clip(choice.reason or "LLM 판정: 해당 부서 없음"),
                 assigner=self.ASSIGNER,
             )
 
@@ -704,7 +736,7 @@ class LLMAssigner(_BatchAssignerBase):
             review_id=review_id,
             assigner=self.ASSIGNER,
             assigned_dept=expand_org_path(choice.org_id),
-            assignment_reason=choice.reason[: self.REASON_LIMIT],
+            assignment_reason=self._clip(choice.reason),
             confidence=round(min(max(choice.confidence, 0.0), 1.0), 4),
         )
 
@@ -835,8 +867,10 @@ def fetch_assignments(
     ``review_ids`` 가 None 이면 전량, 빈 시퀀스면 빈 결과다. 둘을 같이 취급하면
     "이 목록의 배정을 다오"가 조용히 전체 스캔으로 넓어진다.
 
-    ``assigner`` 를 주면 그 배정기의 행만 본다. 같은 리뷰에 배정기별 1행이
-    존재하므로, 평가에서 두 결과를 섞지 않으려면 필요하다.
+    ``assigner`` 를 주면 그 배정기의 행만 본다. 반환이 review_id 로 키잉된 dict
+    이므로 배정기별 행을 동시에 담을 수 없다 — 필터 없이 호출하면 같은 리뷰의
+    규칙/LLM 행 중 하나가 스캔 순서대로 버려진다. 그래서 필터를 생략한 호출이
+    여러 배정기의 행을 만나면 예외를 던진다. 조용히 하나를 고르지 않는다.
     """
     if review_ids is not None and len(review_ids) == 0:
         return {}
@@ -858,6 +892,17 @@ def fetch_assignments(
         sql += " WHERE " + " AND ".join(clauses)
 
     rows = session.execute(text(sql), params).fetchall()
+    if assigner is None:
+        seen = {}
+        for row in rows:
+            key = str(row[0])
+            if key in seen and seen[key] != row[6]:
+                raise ValueError(
+                    f"리뷰 {key} 에 배정기가 둘 이상 있다({seen[key]}, {row[6]}). "
+                    "assigner 를 지정해 어느 결과를 볼지 정하라."
+                )
+            seen[key] = row[6]
+
     return {
         str(row[0]): Assignment(
             review_id=row[0],

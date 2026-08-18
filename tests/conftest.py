@@ -79,8 +79,25 @@ def test_db_engine(test_db_url: str):
     engine.dispose()
 
 
+def _apply_migrations(database_url: str) -> None:
+    """베이스라인 이후 리비전을 테스트 스키마에도 적용한다.
+
+    schema_v4.sql 은 Alembic 베이스라인 스냅샷이므로 그 이후 리비전이 추가한
+    컬럼/제약은 여기에 없다. 프로덕션과 CI(.github/workflows/bootstrap-db.yml)는
+    `alembic upgrade head` 를 돌리므로, 테스트 DB 만 베이스라인에 머물면 마이그레이션이
+    추가한 컬럼을 쓰는 코드가 테스트에서만 깨진다.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    config = Config(str(Path(__file__).parent.parent / "alembic.ini"))
+    config.attributes["database_url"] = database_url
+    command.stamp(config, "20260430_0001", purge=True)
+    command.upgrade(config, "head")
+
+
 @pytest.fixture(scope="session")
-def test_db_schema(test_db_engine):
+def test_db_schema(test_db_engine, test_db_url):
     """Initialize test database schema from sql/schema_v4.sql.
 
     This fixture:
@@ -124,6 +141,8 @@ def test_db_schema(test_db_engine):
         raw_conn.commit()
     finally:
         raw_conn.close()
+
+    _apply_migrations(test_db_url)
 
     yield
 

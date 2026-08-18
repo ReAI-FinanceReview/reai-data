@@ -19,7 +19,11 @@ sys.path.insert(0, str(ROOT))
 
 from sqlalchemy import text  # noqa: E402
 
-from src.gold.dept_assigner import UNCLASSIFIED, fetch_assignments  # noqa: E402
+from src.gold.dept_assigner import (  # noqa: E402
+    ASSIGNER_RULE,
+    UNCLASSIFIED,
+    fetch_assignments,
+)
 from src.gold.dept_eval import evaluate, format_report, load_labels  # noqa: E402
 from src.utils.db_connector import DatabaseConnector  # noqa: E402
 
@@ -73,9 +77,13 @@ def main(argv=None) -> int:
     parser.add_argument("--labels", help=f"라벨 CSV 경로 (기본 {DEFAULT_LABELS_PATH})")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="DB 설정 파일 경로")
     parser.add_argument("--json", dest="json_path", help="집계 결과를 JSON 으로 저장할 경로")
+    # 기본값을 두는 이유: fetch_assignments 는 review_id 로 키잉된 dict 를 돌려주므로
+    # '전체'를 표현할 수 없다. 필터가 없으면 규칙/LLM 두 행 중 하나가 스캔 순서대로
+    # 조용히 버려져 비교 리포트가 비결정적이 된다.
     parser.add_argument(
         "--assigner",
-        help="이 배정기의 결과만 평가한다 (rule, llm). 생략하면 전체",
+        default=ASSIGNER_RULE,
+        help=f"이 배정기의 결과만 평가한다 (rule, llm). 기본 {ASSIGNER_RULE}",
     )
     args = parser.parse_args(argv)
 
