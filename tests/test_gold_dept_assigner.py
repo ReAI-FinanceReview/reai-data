@@ -21,6 +21,8 @@ from src.gold.dept_assigner import (
     DEFAULT_TOP_K,
     UNCLASSIFIED,
     Assignment,
+    DeptChoice,
+    LLMAssigner,
     OrgCandidate,
     OrgCandidateRetriever,
     RuleBasedAssigner,
@@ -55,6 +57,9 @@ class _FakeResult:
 
     def fetchall(self):
         return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
 
 
 class _FakeSession:
@@ -171,20 +176,28 @@ class TestOrgCandidateRetriever:
 
         assert len(retriever.retrieve(session, rid)) == 1
 
-    def test_falls_back_to_top_level_when_no_intersection(self):
+    def test_falls_back_to_every_org_when_no_intersection(self):
         rid = uuid7()
         retriever, session = _make_retriever(self.ORGS, {str(rid): ["환율"]})
 
         candidates = retriever.retrieve(session, rid)
 
-        assert [c.org_id for c in candidates] == ["1", "2"]
+        # 최상위만 남기면 LLM 이 본부 아래로 내려갈 방법이 사라진다.
+        assert [c.org_id for c in candidates] == ["1", "1-1", "1-1-2", "2"]
         assert all(c.matched == [] for c in candidates)
+
+    def test_fallback_ignores_top_k(self):
+        rid = uuid7()
+        retriever, session = _make_retriever(self.ORGS, {str(rid): ["환율"]}, top_k=1)
+
+        # 순위를 매길 신호가 없으므로 자르지 않는다.
+        assert len(retriever.retrieve(session, rid)) == len(self.ORGS)
 
     def test_review_without_keywords_falls_back(self):
         rid = uuid7()
         retriever, session = _make_retriever(self.ORGS, {})
 
-        assert [c.org_id for c in retriever.retrieve(session, rid)] == ["1", "2"]
+        assert [c.org_id for c in retriever.retrieve(session, rid)] == ["1", "1-1", "1-1-2", "2"]
 
     def test_empty_organizations_returns_no_candidates(self):
         rid = uuid7()
@@ -560,3 +573,209 @@ class TestSaveAssignment:
         ).fetchone()
 
         assert constraint is not None
+
+
+# ─────────────────────────────────────────────
+# F. LLM 배정
+# ─────────────────────────────────────────────
+
+class _FakeUsage:
+    input_tokens = 1200
+    output_tokens = 40
+    total_tokens = 1240
+
+
+class _FakeRefusalContent:
+    type = "refusal"
+    refusal = "정책상 응답할 수 없습니다"
+
+
+class _FakeOutputItem:
+    def __init__(self, content):
+        self.content = content
+
+
+class _FakeResponse:
+    def __init__(self, parsed=None, output=None):
+        self.output_parsed = parsed
+        self.output = output or []
+        self.usage = _FakeUsage()
+
+
+class _FakeResponses:
+    def __init__(self, response):
+        self._response = response
+        self.calls = []
+
+    def parse(self, **kwargs):
+        self.calls.append(kwargs)
+        if isinstance(self._response, Exception):
+            raise self._response
+        return self._response
+
+
+class _FakeOpenAI:
+    def __init__(self, response):
+        self.responses = _FakeResponses(response)
+
+
+def _make_llm_assigner(orgs, keywords_by_review, response=None):
+    """실제 OpenAI 호출 없이 LLMAssigner 를 만든다.
+
+    행복 경로는 실제 API 로 검증했다(PR 설명 참조). 여기서 대역을 쓰는 것은
+    후보 밖 org_id·거부·예외처럼 실제 API 에 요청해서 만들어낼 수 없는
+    분기를 재현하기 위해서다.
+    """
+    assigner = LLMAssigner.__new__(LLMAssigner)
+    assigner.logger = MagicMock()
+    assigner.db_connector = MagicMock()
+    assigner.retriever = OrgCandidateRetriever(top_k=DEFAULT_TOP_K)
+    assigner._client = _FakeOpenAI(response) if response is not None else None
+    return assigner, _FakeSession(orgs, keywords_by_review)
+
+
+class _LLMFakeSession(_FakeSession):
+    """리뷰 본문 질의와 LLM 로그 add/flush 까지 받는 세션 대역."""
+
+    def __init__(self, orgs, keywords_by_review, text_by_review=None, rating=3):
+        super().__init__(orgs, keywords_by_review)
+        self.text_by_review = text_by_review or {}
+        self.rating = rating
+        self.added = []
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        if "reviews_preprocessed" in sql:
+            self.queries.append(sql)
+            rid = (params or {})["rid"]
+            return _FakeResult([(self.text_by_review.get(rid), self.rating)])
+        if "sentiment_score" in sql:
+            self.queries.append(sql)
+            rid = (params or {})["rid"]
+            return _FakeResult([(kw, 0.2, "APP") for kw in self.keywords_by_review.get(rid, [])])
+        return super().execute(statement, params)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    def flush(self):
+        pass
+
+
+def _make_llm_session(orgs, keywords, text_by_review):
+    return _LLMFakeSession(orgs, keywords, text_by_review)
+
+
+class TestLLMAssigner:
+    ORGS = TestOrgCandidateRetriever.ORGS
+
+    def _setup(self, response, keywords, review_text="로그인이 안 됩니다"):
+        rid = uuid7()
+        assigner, _ = _make_llm_assigner(self.ORGS, {}, response=response)
+        session = _make_llm_session(self.ORGS, {str(rid): keywords}, {str(rid): review_text})
+        return assigner, session, rid
+
+    def test_assigns_choice_with_ancestor_path(self):
+        response = _FakeResponse(parsed=DeptChoice(org_id="1-1-2", reason="로그인 장애", confidence=0.9))
+        assigner, session, rid = self._setup(response, ["로그인"])
+
+        result = assigner.assign(session, rid)
+
+        assert result.assigned_dept == ["1", "1-1", "1-1-2"]
+        assert result.confidence == pytest.approx(0.9)
+        assert result.assignment_reason == "로그인 장애"
+        assert result.is_failed is False
+
+    def test_uses_zero_temperature(self):
+        response = _FakeResponse(parsed=DeptChoice(org_id="1-1-2", reason="r", confidence=0.5))
+        assigner, session, rid = self._setup(response, ["로그인"])
+
+        assigner.assign(session, rid)
+
+        assert assigner._client.responses.calls[0]["temperature"] == 0.0
+        assert assigner._client.responses.calls[0]["text_format"] is DeptChoice
+
+    def test_org_id_outside_candidates_is_rejected(self):
+        response = _FakeResponse(parsed=DeptChoice(org_id="99-9", reason="지어냄", confidence=0.99))
+        assigner, session, rid = self._setup(response, ["로그인"])
+
+        result = assigner.assign(session, rid)
+
+        assert result.assigned_dept == [UNCLASSIFIED]
+        assert "99-9" in result.assignment_reason
+        # temperature 0 에서 재시도해도 같은 값이 나오므로 실패로 표시하지 않는다.
+        assert result.is_failed is False
+
+    def test_model_may_decline_to_choose(self):
+        response = _FakeResponse(parsed=DeptChoice(org_id=UNCLASSIFIED, reason="근거 부족", confidence=0.0))
+        assigner, session, rid = self._setup(response, ["로그인"])
+
+        result = assigner.assign(session, rid)
+
+        assert result.assigned_dept == [UNCLASSIFIED]
+        assert result.assignment_reason == "근거 부족"
+        assert result.is_failed is False
+
+    def test_confidence_is_clamped(self):
+        response = _FakeResponse(parsed=DeptChoice(org_id="1-1-2", reason="r", confidence=1.7))
+        assigner, session, rid = self._setup(response, ["로그인"])
+
+        assert assigner.assign(session, rid).confidence == 1.0
+
+    def test_refusal_is_a_failure(self):
+        response = _FakeResponse(output=[_FakeOutputItem([_FakeRefusalContent()])])
+        assigner, session, rid = self._setup(response, ["로그인"])
+
+        result = assigner.assign(session, rid)
+
+        assert result.is_failed is True
+        assert "거부" in result.assignment_reason
+
+    def test_missing_client_fails_without_calling(self):
+        rid = uuid7()
+        assigner, _ = _make_llm_assigner(self.ORGS, {})
+        session = _make_llm_session(self.ORGS, {str(rid): ["로그인"]}, {str(rid): "본문"})
+
+        result = assigner.assign(session, rid)
+
+        assert result.is_failed is True
+        assert result.assigned_dept == [UNCLASSIFIED]
+
+    def test_missing_refined_text_is_unclassified(self):
+        response = _FakeResponse(parsed=DeptChoice(org_id="1-1-2", reason="r", confidence=0.5))
+        assigner, session, rid = self._setup(response, ["로그인"], review_text=None)
+
+        result = assigner.assign(session, rid)
+
+        assert result.assigned_dept == [UNCLASSIFIED]
+        assert "본문 없음" in result.assignment_reason
+
+    def test_usage_is_logged(self):
+        response = _FakeResponse(parsed=DeptChoice(org_id="1-1-2", reason="r", confidence=0.5))
+        assigner, session, rid = self._setup(response, ["로그인"])
+
+        assigner.assign(session, rid)
+
+        log = session.added[0]
+        assert log.result_payload["usage"]["total_tokens"] == 1240
+        assert log.result_payload["choice"]["org_id"] == "1-1-2"
+
+    def test_prompt_lists_candidates_with_matches(self):
+        assigner, _ = _make_llm_assigner(self.ORGS, {})
+        candidates = [
+            OrgCandidate(
+                org_id="1-1-2",
+                org_name="앱운영팀",
+                role_responsibility="앱 운영",
+                matched=["로그인"],
+            )
+        ]
+
+        prompt = assigner.build_prompt(
+            {"text": "로그인이 안 됨", "rating": 1, "aspects": [{"keyword": "로그인", "sentiment": 0.1, "category": "APP"}]},
+            candidates,
+        )
+
+        assert "1-1-2 | 앱운영팀" in prompt
+        assert "키워드 일치: 로그인" in prompt
+        assert "별점: 1" in prompt
