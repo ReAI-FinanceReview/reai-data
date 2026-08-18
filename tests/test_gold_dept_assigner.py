@@ -136,9 +136,12 @@ class TestOrgPath:
 # ─────────────────────────────────────────────
 
 class TestOrgCandidateRetriever:
+    # 동점 후보(1, 1-1)를 깊이 **역순**으로 배치한다. 얕은 것이 먼저 오면
+    # 파이썬의 stable sort 만으로 기대 순서가 재현되어, 정렬 키의 깊이 tiebreak 를
+    # 통째로 지워도 테스트가 통과한다(실제로 그런 상태였다).
     ORGS = [
-        _org("1", "디지털본부", ["디지털", "모바일"]),
         _org("1-1", "채널부", ["모바일", "앱"]),
+        _org("1", "디지털본부", ["디지털", "모바일"]),
         _org("1-1-2", "앱운영팀", ["앱", "로그인", "인증"]),
         _org("2", "여신본부", ["대출", "심사"]),
     ]
@@ -182,8 +185,8 @@ class TestOrgCandidateRetriever:
 
         candidates = retriever.retrieve(session, rid)
 
-        # 최상위만 남기면 LLM 이 본부 아래로 내려갈 방법이 사라진다.
-        assert [c.org_id for c in candidates] == ["1", "1-1", "1-1-2", "2"]
+        # 최상위만 남기면 본부 아래로 내려갈 방법이 사라진다 (교집합 0 인 리뷰가 86%).
+        assert [c.org_id for c in candidates] == ["1-1", "1", "1-1-2", "2"]
         assert all(c.matched == [] for c in candidates)
 
     def test_fallback_ignores_top_k(self):
@@ -197,7 +200,7 @@ class TestOrgCandidateRetriever:
         rid = uuid7()
         retriever, session = _make_retriever(self.ORGS, {})
 
-        assert [c.org_id for c in retriever.retrieve(session, rid)] == ["1", "1-1", "1-1-2", "2"]
+        assert [c.org_id for c in retriever.retrieve(session, rid)] == ["1-1", "1", "1-1-2", "2"]
 
     def test_empty_organizations_returns_no_candidates(self):
         rid = uuid7()
@@ -251,14 +254,16 @@ class TestRuleBasedAssigner:
         # 4개 중 2개('앱','로그인')가 1-1-2 와 겹친다.
         assert result.confidence == pytest.approx(0.5)
 
-    def test_confidence_never_exceeds_one(self):
-        rid = uuid7()
-        # 중복 키워드가 있으면 교집합(집합)보다 총 키워드 수가 커지므로 1.0 을 넘지 않는다.
-        assigner, session = _make_rule_assigner(self.ORGS, {str(rid): ["앱", "앱", "로그인"]})
+    def test_duplicate_keywords_do_not_deflate_confidence(self):
+        """분모도 중복 제거된 집합이라야 같은 매칭이 같은 확신도를 낸다."""
+        rid_dup, rid_uniq = uuid7(), uuid7()
+        dup, _ = _make_rule_assigner(self.ORGS, {str(rid_dup): ["앱", "앱", "로그인"]})
+        dup_session = _FakeSession(self.ORGS, {str(rid_dup): ["앱", "앱", "로그인"]})
+        uniq, uniq_session = _make_rule_assigner(self.ORGS, {str(rid_uniq): ["앱", "로그인"]})
 
-        result = assigner.assign(session, rid)
-
-        assert 0.0 < result.confidence <= 1.0
+        assert dup.assign(dup_session, rid_dup).confidence == pytest.approx(
+            uniq.assign(uniq_session, rid_uniq).confidence
+        )
 
     def test_no_intersection_is_unclassified(self):
         rid = uuid7()
@@ -568,11 +573,196 @@ class TestSaveAssignment:
             text(
                 "SELECT conname FROM pg_constraint "
                 "WHERE conrelid = 'reviews_assigned'::regclass AND contype = 'u' "
-                "AND conname = 'uq_reviews_assigned_review_id'"
+                "AND conname = 'uq_reviews_assigned_review_id_assigner'"
             )
         ).fetchone()
 
         assert constraint is not None
+
+
+# ─────────────────────────────────────────────
+# G. 배치 실행 (실제 PostgreSQL)
+# ─────────────────────────────────────────────
+
+class _ExplodingAssigner(RuleBasedAssigner):
+    """지정한 review_id 에서만 DB 오류를 일으키는 배정기.
+
+    assign() 이 하는 일은 사실상 DB 질의뿐이라 현실적인 실패 모드가 DB 오류다.
+    세션을 실제로 실패 상태로 만들어야 복구 경로를 검증할 수 있다.
+    """
+
+    def __init__(self, boom_id):
+        self.logger = MagicMock()
+        self.db_connector = MagicMock()
+        self.retriever = OrgCandidateRetriever()
+        self._boom_id = boom_id
+
+    def assign(self, session, review_id):
+        if review_id == self._boom_id:
+            session.execute(text("SELECT 1 FROM table_that_does_not_exist"))
+        return super().assign(session, review_id)
+
+
+@pytest.mark.requires_db
+@pytest.mark.integration
+class TestAssignBatch:
+    def _seed(self, session, count=3, day=None):
+        now = datetime.now(timezone.utc) if day is None else day
+        app = App(
+            app_id=uuid7(),
+            platform_app_id=f"batch-{uuid7()}",
+            platform_type=PlatformType.PLAYSTORE,
+            name="Batch Test App",
+        )
+        session.add(app)
+        reviews = []
+        for i in range(count):
+            r = ReviewMasterIndex(
+                review_id=uuid7(),
+                app_id=app.app_id,
+                platform_review_id=f"batch-review-{uuid7()}",
+                platform_type=PlatformType.PLAYSTORE,
+                review_created_at=now,
+                ingested_at=now,
+                processing_status=ProcessingStatusType.ANALYZED,
+                is_active=True,
+                is_reply=False,
+            )
+            reviews.append(r)
+        session.add_all(reviews)
+        session.flush()
+        return [r.review_id for r in reviews]
+
+    def _assigner(self, session):
+        assigner = RuleBasedAssigner.__new__(RuleBasedAssigner)
+        assigner.logger = MagicMock()
+        assigner.db_connector = MagicMock()
+        assigner.db_connector.get_session.return_value = session
+        assigner.retriever = OrgCandidateRetriever()
+        return assigner
+
+    def test_batch_assigns_and_counts(self, reviews_assigned_unique):
+        session = reviews_assigned_unique
+        ids = self._seed(session, 3)
+
+        result = self._assigner(session).assign_batch(batch_size=2)
+
+        assert result["total"] == 3
+        assert result["failed"] == 0
+        assert result["assigned"] + result["unclassified"] == 3
+        assert len(fetch_assignments(session, ids)) == 3
+
+    def test_already_assigned_reviews_are_skipped(self, reviews_assigned_unique):
+        session = reviews_assigned_unique
+        self._seed(session, 3)
+        assigner = self._assigner(session)
+
+        assigner.assign_batch()
+        second = assigner.assign_batch()
+
+        # 재실행이 과거 전량을 다시 훑으면 DAG 에서 매일 전량 재처리가 된다.
+        assert second["total"] == 0
+
+    def test_reassign_flag_reprocesses(self, reviews_assigned_unique):
+        session = reviews_assigned_unique
+        self._seed(session, 2)
+        assigner = self._assigner(session)
+
+        assigner.assign_batch()
+
+        assert assigner.assign_batch(reassign=True)["total"] == 2
+
+    def test_target_date_scopes_the_batch(self, reviews_assigned_unique):
+        session = reviews_assigned_unique
+        old = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        self._seed(session, 2, day=old)
+        self._seed(session, 3)
+
+        result = self._assigner(session).assign_batch(target_date=old.date())
+
+        assert result["total"] == 2
+
+    def test_db_error_on_one_review_is_recorded_and_batch_continues(
+        self, reviews_assigned_unique
+    ):
+        session = reviews_assigned_unique
+        ids = self._seed(session, 3)
+        assigner = _ExplodingAssigner(ids[1])
+        assigner.db_connector.get_session.return_value = session
+
+        result = assigner.assign_batch()
+
+        assert result["total"] == 3
+        assert result["failed"] == 1
+        stored = fetch_assignments(session, ids)
+        # 실패 행이 실제로 남아야 한다. 세션이 오염되면 이 행이 사라지고
+        # 나머지 리뷰도 처리되지 않는다.
+        assert stored[str(ids[1])].is_failed is True
+        assert len(stored) == 3
+
+
+@pytest.mark.requires_db
+@pytest.mark.integration
+class TestAssignerDiscriminator:
+    def test_two_assigners_coexist_for_one_review(
+        self, reviews_assigned_unique, assigned_review_id
+    ):
+        session = reviews_assigned_unique
+        review_id = assigned_review_id
+
+        save_assignment(session, Assignment(
+            review_id=review_id, assigned_dept=["1"], assignment_reason="규칙",
+            confidence=0.4, assigner="rule"))
+        save_assignment(session, Assignment(
+            review_id=review_id, assigned_dept=["1", "1-1"], assignment_reason="LLM",
+            confidence=0.9, assigner="llm"))
+        session.flush()
+
+        # 판별 컬럼이 없으면 두 번째가 첫 번째를 덮어써 비교 대상이 사라진다.
+        assert fetch_assignments(session, [review_id], assigner="rule")[
+            str(review_id)].assigned_dept == ["1"]
+        assert fetch_assignments(session, [review_id], assigner="llm")[
+            str(review_id)].assigned_dept == ["1", "1-1"]
+
+    def test_empty_id_list_returns_nothing(self, reviews_assigned_unique, assigned_review_id):
+        session = reviews_assigned_unique
+        save_assignment(session, Assignment(
+            review_id=assigned_review_id, assigned_dept=["1"],
+            assignment_reason="r", confidence=0.5))
+        session.flush()
+
+        # 빈 목록을 '필터 없음'으로 취급하면 전체 스캔으로 조용히 넓어진다.
+        assert fetch_assignments(session, []) == {}
+        assert len(fetch_assignments(session, None)) >= 1
+
+
+class TestEvalFailedKind:
+    def test_failed_assignment_is_not_counted_as_abstention(self):
+        labels = [Label(review_id="a", org_id="1-1")]
+        assignments = {"a": Assignment(
+            review_id="a", assigned_dept=[UNCLASSIFIED],
+            assignment_reason="RuntimeError: boom", confidence=0.0, is_failed=True)}
+
+        result = evaluate(labels, assignments)
+
+        assert result.counts == {"failed": 1}
+        assert result.failed_rate == pytest.approx(1.0)
+        assert result.unclassified_rate == 0.0
+
+
+class TestDuplicateLabels:
+    def test_duplicate_review_id_raises(self, tmp_path):
+        path = tmp_path / "dup.csv"
+        path.write_text(
+            "no,review_id,service,platform,rating,review_text,assigned_dept,"
+            "stopped_at_parent,ambiguous,memo\n"
+            "1,rid-a,신한,PLAYSTORE,1,본문,1-1,,,\n"
+            "2,rid-a,신한,PLAYSTORE,1,본문,1-2,,,\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="중복"):
+            load_labels(path)
 
 
 # ─────────────────────────────────────────────

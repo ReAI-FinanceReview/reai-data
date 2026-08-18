@@ -1,0 +1,4 @@
+no,review_id,service,platform,rating,review_text,assigned_dept,stopped_at_parent,ambiguous,memo
+1,00000000-0000-7000-8000-000000000001,샘플뱅크,PLAYSTORE,1,로그인이 계속 안 됩니다,1-1-2,,,합성 예시
+2,00000000-0000-7000-8000-000000000002,샘플뱅크,APPSTORE,3,이체 수수료 안내가 헷갈려요,3,Y,1,본부에서 멈춘 예시
+3,00000000-0000-7000-8000-000000000003,샘플뱅크,PLAYSTORE,5,좋아요,,,,미라벨 예시 (건너뜀)

@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Dict, List, Optional, Protocol, Sequence
 from uuid import UUID
 
@@ -85,10 +85,14 @@ class Assignment:
     confidence: float
     is_failed: bool = False
     try_number: int = 1
+    # 어느 배정기가 만든 행인지. 이 값이 없으면 규칙/LLM 결과가 서로를 덮어써서
+    # dept_eval 이 비교할 대상이 남지 않는다 (리비전 20260813_0002).
+    assigner: str = "rule"
 
     def as_dict(self) -> dict:
         return {
             "review_id": str(self.review_id),
+            "assigner": self.assigner,
             "assigned_dept": self.assigned_dept,
             "assignment_reason": self.assignment_reason,
             "confidence": self.confidence,
@@ -102,7 +106,13 @@ class Assigner(Protocol):
 
     def assign(self, session, review_id: UUID) -> Assignment: ...
 
-    def assign_batch(self, batch_size: int = 100, limit: Optional[int] = None) -> dict: ...
+    def assign_batch(
+        self,
+        batch_size: int = 100,
+        limit: Optional[int] = None,
+        target_date: Optional[date] = None,
+        reassign: bool = False,
+    ) -> dict: ...
 
 
 # ----------------------------------------------------------------------
@@ -184,7 +194,8 @@ class OrgCandidateRetriever:
         """키워드 교집합 점수 상위 top_k 후보를 반환한다.
 
         교집합이 하나도 없으면 조직 전량을 폴백 후보로 내려보낸다. 후보가 비면
-        LLM 이 고를 대상 자체가 사라지기 때문이다.
+        고를 대상 자체가 사라지고, 최상위 본부로만 좁히면 교집합 0인 리뷰
+        (621건 중 533건)가 구조적으로 본부보다 아래로 배정될 수 없다.
         """
         orgs = self.load_organizations(session)
         if not orgs:
@@ -208,14 +219,9 @@ class OrgCandidateRetriever:
                 )
 
         if not scored:
-            # 교집합이 0인 리뷰가 621건 중 533건(85.8%)이다. 여기서 후보를 최상위
-            # 본부로 좁히면 그 86%는 구조적으로 본부보다 아래로 못 내려간다.
-            # 실측(같은 리뷰, 후보만 교체):
-            #   본부 13개  -> ['1']            입력 1,792 토큰
-            #   전체 114개 -> ['1', '1-1']     입력 10,843 토큰
             # 키워드 신호가 없을 땐 순위를 매길 근거도 없으므로 top_k 로 자르지
-            # 않고 전량을 넘긴다. 조직도가 지금보다 훨씬 커지면 이 경로는 의미
-            # 기반 검색으로 바꿔야 한다.
+            # 않는다. 조직도가 지금(114행)보다 훨씬 커지면 이 경로는 의미 기반
+            # 검색으로 바꿔야 한다.
             return list(orgs)
 
         # 점수 내림차순, 동점이면 상위 계층 우선. "확신 없으면 상위 조직" 정책과
@@ -231,10 +237,12 @@ class OrgCandidateRetriever:
 _UPSERT_SQL = text(
     """
     INSERT INTO reviews_assigned
-        (review_id, assigned_dept, assignment_reason, confidence, is_failed, try_number)
+        (review_id, assigner, assigned_dept, assignment_reason,
+         confidence, is_failed, try_number)
     VALUES
-        (:review_id, :assigned_dept, :assignment_reason, :confidence, :is_failed, :try_number)
-    ON CONFLICT (review_id) DO UPDATE SET
+        (:review_id, :assigner, :assigned_dept, :assignment_reason,
+         :confidence, :is_failed, :try_number)
+    ON CONFLICT (review_id, assigner) DO UPDATE SET
         assigned_dept     = EXCLUDED.assigned_dept,
         assignment_reason = EXCLUDED.assignment_reason,
         confidence        = EXCLUDED.confidence,
@@ -251,6 +259,7 @@ def save_assignment(session, assignment: Assignment) -> None:
         _UPSERT_SQL,
         {
             "review_id": str(assignment.review_id),
+            "assigner": assignment.assigner,
             "assigned_dept": assignment.assigned_dept,
             "assignment_reason": assignment.assignment_reason,
             "confidence": assignment.confidence,
@@ -260,7 +269,9 @@ def save_assignment(session, assignment: Assignment) -> None:
     )
 
 
-def unclassified(review_id: UUID, reason: str, *, failed: bool = False) -> Assignment:
+def unclassified(
+    review_id: UUID, reason: str, *, failed: bool = False, assigner: str = "rule"
+) -> Assignment:
     """미분류 결과를 만든다. 연동 스펙상 confidence 는 0.0 이다."""
     return Assignment(
         review_id=review_id,
@@ -268,6 +279,7 @@ def unclassified(review_id: UUID, reason: str, *, failed: bool = False) -> Assig
         assignment_reason=reason,
         confidence=0.0,
         is_failed=failed,
+        assigner=assigner,
     )
 
 
@@ -277,7 +289,9 @@ def unclassified(review_id: UUID, reason: str, *, failed: bool = False) -> Assig
 
 
 class _BatchAssignerBase:
-    """배치 실행부. 두 배정기가 공유하며 ``assign()`` 만 다르다."""
+    """배치 실행부. 두 배정기가 공유하며 ``assign()`` 과 ``ASSIGNER`` 만 다르다."""
+
+    ASSIGNER = "base"
 
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH, top_k: int = DEFAULT_TOP_K):
         self.logger = get_logger(__name__)
@@ -287,41 +301,95 @@ class _BatchAssignerBase:
     def assign(self, session, review_id: UUID) -> Assignment:  # pragma: no cover - 추상
         raise NotImplementedError
 
-    def _fetch_target_ids(self, session, limit: Optional[int]) -> List[UUID]:
-        query = text(
-            "SELECT review_id FROM review_master_index "
-            "WHERE processing_status = 'ANALYZED' "
-            "ORDER BY review_created_at NULLS LAST, review_id"
-            + (" LIMIT :limit" if limit is not None else "")
-        )
-        params = {"limit": limit} if limit is not None else {}
-        return [row[0] for row in session.execute(query, params).fetchall()]
+    def _fetch_target_ids(
+        self,
+        session,
+        limit: Optional[int],
+        target_date: Optional[date] = None,
+        reassign: bool = False,
+    ) -> List[UUID]:
+        """배정 대상 review_id 를 고른다.
 
-    def assign_batch(self, batch_size: int = 100, limit: Optional[int] = None) -> dict:
+        이미 배정된 건은 기본적으로 제외한다. DAG 의 다른 Gold 스텝은 모두
+        ``target_date`` 로 파티션되므로(dags/financial_review_pipeline.py), 날짜
+        범위 없이 ANALYZED 전량을 훑으면 매일 과거 전량이 재처리된다. LLM
+        배정기에서는 그것이 과거 리뷰 1건당 매일 유료 호출 1회를 뜻한다.
+
+        제외 기준은 결과 테이블에 대한 NOT EXISTS 이며, 같은 방식이
+        ``src.gold.action_analyzer._fetch_pending_ids`` 에 이미 쓰이고 있다.
+        """
+        clauses = ["rmi.processing_status = 'ANALYZED'"]
+        params: dict = {}
+
+        if not reassign:
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM reviews_assigned ra "
+                "WHERE ra.review_id = rmi.review_id AND ra.assigner = :assigner)"
+            )
+            params["assigner"] = self.ASSIGNER
+
+        if target_date is not None:
+            clauses.append("DATE_TRUNC('day', rmi.review_created_at)::date = :target_date")
+            params["target_date"] = target_date
+
+        sql = (
+            "SELECT rmi.review_id FROM review_master_index rmi WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY rmi.review_created_at NULLS LAST, rmi.review_id"
+        )
+        if limit is not None:
+            sql += " LIMIT :limit"
+            params["limit"] = limit
+
+        return [row[0] for row in session.execute(text(sql), params).fetchall()]
+
+    def assign_batch(
+        self,
+        batch_size: int = 100,
+        limit: Optional[int] = None,
+        target_date: Optional[date] = None,
+        reassign: bool = False,
+    ) -> dict:
         """ANALYZED 리뷰를 배치로 배정한다.
+
+        Args:
+            target_date: 지정하면 그 날짜의 리뷰만 처리한다 (DAG 규약).
+            reassign: True 면 이미 배정된 건도 다시 처리한다.
 
         Returns:
             {"total": int, "assigned": int, "unclassified": int, "failed": int}
         """
         session = self.db_connector.get_session()
         try:
-            review_ids = self._fetch_target_ids(session, limit)
+            review_ids = self._fetch_target_ids(session, limit, target_date, reassign)
             if not review_ids:
                 self.logger.info("부서 배정: 대상 리뷰 없음")
                 return {"total": 0, "assigned": 0, "unclassified": 0, "failed": 0}
 
-            self.logger.info(f"부서 배정 시작: {len(review_ids)}건 ({type(self).__name__})")
+            self.logger.info(f"부서 배정 시작: {len(review_ids)}건")
             assigned = unclassified_count = failed = 0
 
             for i in range(0, len(review_ids), batch_size):
                 for review_id in review_ids[i : i + batch_size]:
+                    # 리뷰 단위 SAVEPOINT. assign() 이 하는 일은 사실상 DB 질의뿐이라
+                    # 현실적인 실패 모드가 DB 오류인데, 세션이 실패 상태가 되면 뒤이은
+                    # save_assignment 도 같이 죽는다. 중첩 트랜잭션으로 격리해야
+                    # is_failed 행이 실제로 기록되고 남은 리뷰가 계속 처리된다.
                     try:
-                        result = self.assign(session, review_id)
+                        with session.begin_nested():
+                            result = self.assign(session, review_id)
+                            save_assignment(session, result)
                     except Exception as exc:  # noqa: BLE001
                         self.logger.warning(f"[{review_id}] 배정 실패: {exc}")
-                        result = unclassified(review_id, f"{type(exc).__name__}: {exc}", failed=True)
+                        result = unclassified(
+                            review_id,
+                            f"{type(exc).__name__}: {exc}",
+                            failed=True,
+                            assigner=self.ASSIGNER,
+                        )
+                        with session.begin_nested():
+                            save_assignment(session, result)
 
-                    save_assignment(session, result)
                     if result.is_failed:
                         failed += 1
                     elif result.assigned_dept == [UNCLASSIFIED]:
@@ -358,28 +426,34 @@ class RuleBasedAssigner(_BatchAssignerBase):
 
     이슈 #40 의 원 스펙이다. LLM 배정과 같은 후보 집합을 쓰므로, 두 결과의
     차이는 판정 방식에서만 나온다.
-
-    실측 성능은 낮다. ANALYZED 621건 중 88건(14.2%)만 배정하고 나머지는
-    교집합이 0이라 기권한다. organizations 키워드 651개 중 리뷰 키워드와
-    겹치는 것이 23개뿐이기 때문이다. 자세한 근거는 ``src.gold.dept_eval``.
     """
+
+    ASSIGNER = "rule"
 
     def assign(self, session, review_id: UUID) -> Assignment:
         candidates = self.retriever.retrieve(session, review_id)
         if not candidates:
-            return unclassified(review_id, "후보 부서 없음 (organizations 미적재 또는 조회 실패)")
+            return unclassified(
+                review_id,
+                "후보 부서 없음 (organizations 미적재 또는 조회 실패)",
+                assigner=self.ASSIGNER,
+            )
 
         best = candidates[0]
         if not best.matched:
             # 폴백 후보만 있는 경우. 규칙만으로는 고를 근거가 없다.
-            return unclassified(review_id, "키워드 교집합 없음")
+            return unclassified(review_id, "키워드 교집합 없음", assigner=self.ASSIGNER)
 
+        # 분자(matched)는 중복 제거된 집합의 교집합이므로 분모도 같은 의미여야
+        # 한다. 원본 리스트 길이를 쓰면 같은 키워드가 여러 aspect 에 걸린 리뷰의
+        # 확신도만 낮아진다.
         matched_count = best.score
-        total_keywords = len(self.retriever.fetch_review_keywords(session, review_id)) or 1
-        confidence = min(matched_count / total_keywords, 1.0)
+        total_keywords = len(set(self.retriever.fetch_review_keywords(session, review_id))) or 1
+        confidence = matched_count / total_keywords
 
         return Assignment(
             review_id=review_id,
+            assigner=self.ASSIGNER,
             assigned_dept=expand_org_path(best.org_id),
             assignment_reason=(
                 f"키워드 교집합 {matched_count}건: {', '.join(best.matched)} "
@@ -441,6 +515,7 @@ class LLMAssigner(_BatchAssignerBase):
     집합이 섞여 판정 근거가 흐려지고, 한 건이 깨질 때 배치 전체가 날아간다.
     """
 
+    ASSIGNER = "llm"
     MODEL = os.getenv("DEPT_ASSIGN_MODEL", "gpt-4o-mini")
     TEMPERATURE = 0.0
     MAX_RETRIES = 3
@@ -511,15 +586,23 @@ class LLMAssigner(_BatchAssignerBase):
 
     def assign(self, session, review_id: UUID) -> Assignment:
         if self._client is None:
-            return unclassified(review_id, "LLM 클라이언트 없음", failed=True)
+            return unclassified(review_id, "LLM 클라이언트 없음", failed=True, assigner=self.ASSIGNER)
 
         candidates = self.retriever.retrieve(session, review_id)
         if not candidates:
-            return unclassified(review_id, "후보 부서 없음 (organizations 미적재 또는 조회 실패)")
+            return unclassified(
+                review_id,
+                "후보 부서 없음 (organizations 미적재 또는 조회 실패)",
+                assigner=self.ASSIGNER,
+            )
 
         context = self.fetch_review_context(session, review_id)
         if not context["text"]:
-            return unclassified(review_id, "전처리 본문 없음 (reviews_preprocessed 확인 필요)")
+            return unclassified(
+                review_id,
+                "전처리 본문 없음 (reviews_preprocessed 확인 필요)",
+                assigner=self.ASSIGNER,
+            )
 
         prompt = self.build_prompt(context, candidates)
         log = self._start_log(session, review_id, len(candidates))
@@ -527,7 +610,9 @@ class LLMAssigner(_BatchAssignerBase):
         choice, usage, error = self._call_llm(prompt, review_id)
         if choice is None:
             self._finish_log(log, AnalysisStatusType.FAILED, usage=usage, error=error)
-            return unclassified(review_id, error or "LLM 호출 실패", failed=True)
+            return unclassified(
+                review_id, error or "LLM 호출 실패", failed=True, assigner=self.ASSIGNER
+            )
 
         allowed = {c.org_id for c in candidates}
         if choice.org_id != UNCLASSIFIED and choice.org_id not in allowed:
@@ -536,15 +621,20 @@ class LLMAssigner(_BatchAssignerBase):
             reason = f"LLM 이 후보 밖 org_id 반환: {choice.org_id}"
             self.logger.warning(f"[{review_id}] {reason}")
             self._finish_log(log, AnalysisStatusType.SUCCESS, usage=usage, payload=choice.model_dump())
-            return unclassified(review_id, reason)
+            return unclassified(review_id, reason, assigner=self.ASSIGNER)
 
         self._finish_log(log, AnalysisStatusType.SUCCESS, usage=usage, payload=choice.model_dump())
 
         if choice.org_id == UNCLASSIFIED:
-            return unclassified(review_id, choice.reason or "LLM 판정: 해당 부서 없음")
+            return unclassified(
+                review_id,
+                choice.reason or "LLM 판정: 해당 부서 없음",
+                assigner=self.ASSIGNER,
+            )
 
         return Assignment(
             review_id=review_id,
+            assigner=self.ASSIGNER,
             assigned_dept=expand_org_path(choice.org_id),
             assignment_reason=choice.reason,
             confidence=round(min(max(choice.confidence, 0.0), 1.0), 4),
@@ -652,17 +742,37 @@ def _first_refusal(response) -> Optional[str]:
     return None
 
 
-def fetch_assignments(session, review_ids: Optional[Sequence[UUID]] = None) -> Dict[str, Assignment]:
-    """저장된 배정 결과를 review_id 문자열 키로 조회한다 (평가용)."""
+def fetch_assignments(
+    session,
+    review_ids: Optional[Sequence[UUID]] = None,
+    assigner: Optional[str] = None,
+) -> Dict[str, Assignment]:
+    """저장된 배정 결과를 review_id 문자열 키로 조회한다 (평가용).
+
+    ``review_ids`` 가 None 이면 전량, 빈 시퀀스면 빈 결과다. 둘을 같이 취급하면
+    "이 목록의 배정을 다오"가 조용히 전체 스캔으로 넓어진다.
+
+    ``assigner`` 를 주면 그 배정기의 행만 본다. 같은 리뷰에 배정기별 1행이
+    존재하므로, 평가에서 두 결과를 섞지 않으려면 필요하다.
+    """
+    if review_ids is not None and len(review_ids) == 0:
+        return {}
+
     sql = (
-        "SELECT review_id, assigned_dept, assignment_reason, confidence, is_failed, try_number "
-        "FROM reviews_assigned"
+        "SELECT review_id, assigned_dept, assignment_reason, confidence, "
+        "is_failed, try_number, assigner FROM reviews_assigned"
     )
+    clauses: List[str] = []
     params: dict = {}
-    if review_ids:
+    if review_ids is not None:
         # 바인딩된 리스트는 text[] 로 넘어가므로 uuid[] 로 캐스팅해야 비교가 성립한다.
-        sql += " WHERE review_id = ANY(CAST(:ids AS uuid[]))"
+        clauses.append("review_id = ANY(CAST(:ids AS uuid[]))")
         params["ids"] = [str(r) for r in review_ids]
+    if assigner is not None:
+        clauses.append("assigner = :assigner")
+        params["assigner"] = assigner
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
 
     rows = session.execute(text(sql), params).fetchall()
     return {
@@ -673,6 +783,7 @@ def fetch_assignments(session, review_ids: Optional[Sequence[UUID]] = None) -> D
             confidence=row[3] if row[3] is not None else 0.0,
             is_failed=bool(row[4]),
             try_number=row[5] or 1,
+            assigner=row[6],
         )
         for row in rows
     }

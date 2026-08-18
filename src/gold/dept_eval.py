@@ -25,7 +25,16 @@
 | ``top_level`` | 최상위 본부만 같음 |
 | ``miss`` | 다른 줄기 |
 | ``unclassified`` | 미분류 (기권) |
+| ``failed`` | 배정이 오류로 실패 (기권이 아님) |
 | ``missing`` | 배정 결과 자체가 없음 |
+
+``failed`` 를 ``unclassified`` 와 섞지 않는 이유: 기권은 "근거가 부족하다"는
+판정이고 실패는 인프라 오류다. 하나로 합치면 망가진 실행과 보수적인 실행이 같은
+숫자를 내서, 지표가 배정 품질이 아니라 인프라 상태를 반영하게 된다.
+
+라벨 파일의 기본 경로는 여기 두지 않는다. ``src`` 는 배포 단위라 테스트 트리나
+개발자 로컬 경로를 가리키면 패키징에서 조용히 끊긴다. 경로 해소는 호출부
+(``scripts/eval_assignment.py``)의 책임이다.
 """
 
 from __future__ import annotations
@@ -36,9 +45,6 @@ from pathlib import Path
 from typing import Dict, List, Mapping, Sequence
 
 from src.gold.dept_assigner import UNCLASSIFIED, Assignment, expand_org_path
-
-# 라벨 CSV 기본 위치. --labels 인자나 DEPT_LABELS_PATH 환경변수로 덮어쓴다.
-DEFAULT_LABELS_PATH = Path("tests/fixtures/dept_labels.csv")
 
 # 라벨 CSV 열 이름. 라벨링 시트와 같은 헤더를 쓴다.
 COL_REVIEW_ID = "review_id"
@@ -80,11 +86,18 @@ def load_labels(path: Path | str) -> List[Label]:
         if reader.fieldnames is None or COL_LABEL not in reader.fieldnames:
             raise ValueError(f"라벨 CSV 에 '{COL_LABEL}' 열이 없다: {path}")
 
+        seen: set = set()
         for row in reader:
             org_id = (row.get(COL_LABEL) or "").strip()
             review_id = (row.get(COL_REVIEW_ID) or "").strip()
             if not org_id or not review_id:
                 continue
+            # 같은 리뷰가 두 번 라벨되면 counts 의 분모는 2 증가하지만 per_review
+            # 에는 하나만 남아 두 출력이 서로 맞지 않는다. 조용히 덮어쓰지 말고
+            # 시트를 고치게 한다.
+            if review_id in seen:
+                raise ValueError(f"라벨 CSV 에 review_id 가 중복된다: {review_id} ({path})")
+            seen.add(review_id)
             labels.append(
                 Label(
                     review_id=review_id,
@@ -97,10 +110,14 @@ def load_labels(path: Path | str) -> List[Label]:
     return labels
 
 
-def match_kind(predicted: Sequence[str] | None, label: str) -> str:
+def match_kind(
+    predicted: Sequence[str] | None, label: str, *, is_failed: bool = False
+) -> str:
     """예측 경로와 정답 org_id 의 계층 관계를 판정한다."""
     if not predicted:
         return "missing"
+    if is_failed:
+        return "failed"
     if list(predicted) == [UNCLASSIFIED]:
         return "unclassified"
 
@@ -151,6 +168,11 @@ class EvalResult:
     def unclassified_rate(self) -> float:
         return self._rate(("unclassified",))
 
+    @property
+    def failed_rate(self) -> float:
+        """인프라 실패 비율. 이 값이 크면 나머지 지표를 신뢰할 수 없다."""
+        return self._rate(("failed",))
+
     def as_dict(self) -> dict:
         return {
             "total": self.total,
@@ -159,6 +181,7 @@ class EvalResult:
             "hierarchy_rate": self.hierarchy_rate,
             "top_level_rate": self.top_level_rate,
             "unclassified_rate": self.unclassified_rate,
+            "failed_rate": self.failed_rate,
             "ambiguous": len(self.ambiguous_ids),
         }
 
@@ -175,7 +198,11 @@ def evaluate(labels: Sequence[Label], assignments: Mapping[str, Assignment]) -> 
 
     for label in labels:
         assignment = assignments.get(label.review_id)
-        kind = match_kind(assignment.assigned_dept if assignment else None, label.org_id)
+        kind = match_kind(
+            assignment.assigned_dept if assignment else None,
+            label.org_id,
+            is_failed=assignment.is_failed if assignment else False,
+        )
         counts[kind] = counts.get(kind, 0) + 1
         per_review[label.review_id] = kind
         if label.ambiguous:
@@ -186,7 +213,10 @@ def evaluate(labels: Sequence[Label], assignments: Mapping[str, Assignment]) -> 
 
 def format_report(result: EvalResult, *, title: str = "부서 배정 평가") -> str:
     """사람이 읽는 표. 비율만 내면 검산할 수 없으므로 건수를 함께 낸다."""
-    order = ["exact", "ancestor", "descendant", "top_level", "miss", "unclassified", "missing"]
+    order = [
+        "exact", "ancestor", "descendant", "top_level",
+        "miss", "unclassified", "failed", "missing",
+    ]
     lines = [
         f"{title}",
         f"라벨 {result.total}건 (ambiguous {len(result.ambiguous_ids)}건 포함)",
@@ -205,5 +235,6 @@ def format_report(result: EvalResult, *, title: str = "부서 배정 평가") ->
         f"{'hierarchy':<14}{'':>7}{result.hierarchy_rate:>9.1%}   같은 줄기 (주 지표)",
         f"{'top_level':<14}{'':>7}{result.top_level_rate:>9.1%}   본부까지 일치",
         f"{'unclassified':<14}{'':>7}{result.unclassified_rate:>9.1%}   기권",
+        f"{'failed':<14}{'':>7}{result.failed_rate:>9.1%}   오류 (기권 아님)",
     ]
     return "\n".join(lines)
