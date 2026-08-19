@@ -466,7 +466,7 @@ class RuleBasedAssigner(_BatchAssignerBase):
     차이는 판정 방식에서만 나온다.
     """
 
-    ASSIGNER = "rule"
+    ASSIGNER = ASSIGNER_RULE
 
     def assign(self, session, review_id: UUID) -> Assignment:
         candidates = self.retriever.retrieve(session, review_id)
