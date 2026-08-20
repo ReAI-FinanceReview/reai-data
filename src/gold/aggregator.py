@@ -15,18 +15,43 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
 from typing import List, Optional
 
 from sqlalchemy import text
 
+from src.gold.dept_assigner import ASSIGNER_LLM, ASSIGNER_RULE
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
 
 # 서빙 마트에 노출할 배정기. reviews_assigned 는 리뷰당 배정기별 1행을 담으므로
 # (리비전 20260813_0002) 필터가 없으면 나중에 INSERT 된 쪽이 마트를 결정하고,
 # 실패 행이 정상 배정을 가린다.
-PRODUCTION_ASSIGNER = "rule"
+#
+# 규칙 베이스라인이 기본이고, LLM 배정으로 노출을 바꾸는 것은 재배포가 아니라
+# 환경변수 전환이어야 한다 — 되돌리기가 값 하나 되돌리기여야 하기 때문이다.
+PRODUCTION_ASSIGNER_ENV = "DEPT_PRODUCTION_ASSIGNER"
+KNOWN_ASSIGNERS = (ASSIGNER_RULE, ASSIGNER_LLM)
+
+
+def _resolve_production_assigner() -> str:
+    """환경변수에서 노출 배정기를 읽는다. 오타는 조용히 지나가면 안 된다.
+
+    마트 질의는 LEFT JOIN 이라 알 수 없는 값이 들어와도 행이 사라지지 않고
+    배정 컬럼만 전부 NULL 이 된다 — 실패가 아니라 '배정이 하나도 없는 하루'처럼
+    보인다. 그래서 여기서 즉시 막는다.
+    """
+    value = os.getenv(PRODUCTION_ASSIGNER_ENV, ASSIGNER_RULE).strip()
+    if value not in KNOWN_ASSIGNERS:
+        raise ValueError(
+            f"{PRODUCTION_ASSIGNER_ENV}={value!r} 는 알 수 없는 배정기다. "
+            f"허용: {', '.join(KNOWN_ASSIGNERS)}"
+        )
+    return value
+
+
+PRODUCTION_ASSIGNER = _resolve_production_assigner()
 
 
 class GoldAggregator:

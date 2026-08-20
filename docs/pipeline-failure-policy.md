@@ -9,6 +9,7 @@ This document defines where pipeline failures are tracked in schema v4.
 | `crawl` / `load` | Parquet batch load failure | `ingestion_batch` |
 | `cleanse` | Review-level cleanse failure | `review_master_index` |
 | `gold_analyze` | Review-level downstream analysis failure | `review_master_index` |
+| `dept_assign` | Review-level department assignment failure | `reviews_assigned` (`is_failed`, `try_number`) |
 | LLM calls | API call audit and model response failure | `review_llm_analysis_logs` |
 | `gold_aggregate` | Date/job-level aggregation failure | Logs and `RunResult` |
 

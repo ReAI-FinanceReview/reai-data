@@ -1,9 +1,12 @@
 """Unit tests for GoldAggregator."""
 
+import importlib
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from src.gold.dept_assigner import ASSIGNER_LLM, ASSIGNER_RULE
 
 
 # ---------------------------------------------------------------------------
@@ -392,3 +395,56 @@ class TestDropOldPartitions:
 
         agg._drop_old_partitions.assert_called_once_with(mock_session, 7)
         assert result["dropped_partitions"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 서빙 마트에 노출할 배정기 (이슈 #40)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def reload_aggregator(monkeypatch):
+    """PRODUCTION_ASSIGNER 는 import 시점에 결정되므로 재로드로 확인한다.
+
+    teardown 에서 환경변수를 지우고 한 번 더 재로드해, 뒤따르는 테스트가
+    바뀐 전역을 물려받지 않게 한다.
+    """
+    import src.gold.aggregator as aggregator_module
+
+    yield lambda: importlib.reload(aggregator_module)
+
+    monkeypatch.delenv(aggregator_module.PRODUCTION_ASSIGNER_ENV, raising=False)
+    importlib.reload(aggregator_module)
+
+
+class TestProductionAssigner:
+    def test_defaults_to_the_rule_baseline(self, reload_aggregator, monkeypatch):
+        """기본값이 규칙 베이스라인에서 조용히 옮겨가면 마트 내용이 통째로 바뀐다."""
+        monkeypatch.delenv("DEPT_PRODUCTION_ASSIGNER", raising=False)
+
+        module = reload_aggregator()
+
+        assert module.PRODUCTION_ASSIGNER == ASSIGNER_RULE
+
+    def test_environment_variable_switches_exposed_assigner(self, reload_aggregator, monkeypatch):
+        monkeypatch.setenv("DEPT_PRODUCTION_ASSIGNER", ASSIGNER_LLM)
+
+        module = reload_aggregator()
+
+        assert module.PRODUCTION_ASSIGNER == ASSIGNER_LLM
+
+    def test_unknown_value_fails_loudly(self, reload_aggregator, monkeypatch):
+        """마트 질의가 LEFT JOIN 이라 오타는 실패가 아니라 '배정 0건'으로 보인다."""
+        monkeypatch.setenv("DEPT_PRODUCTION_ASSIGNER", "gpt")
+
+        with pytest.raises(ValueError, match="알 수 없는 배정기"):
+            reload_aggregator()
+
+    def test_serving_mart_binds_the_configured_assigner(self, reload_aggregator, monkeypatch, mock_session):
+        monkeypatch.setenv("DEPT_PRODUCTION_ASSIGNER", ASSIGNER_LLM)
+        reload_aggregator()
+
+        agg = _make_aggregator(mock_session)
+        agg._upsert_srv_daily_review_list(mock_session, date(2025, 1, 15))
+
+        params = mock_session.execute.call_args[0][1]
+        assert params["production_assigner"] == ASSIGNER_LLM

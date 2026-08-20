@@ -47,7 +47,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated steps to run "
             "(options: crawl, load, preprocess, features, action, embed, gold, "
-            "aggregate, post_aggregate_validate, validate)"
+            "dept_assign, aggregate, post_aggregate_validate, validate)"
         ),
     )
     parser.add_argument("--batch-size", type=int, default=100, help="Batch size for processing steps.")

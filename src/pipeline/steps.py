@@ -115,6 +115,80 @@ def run_gold(
     return _handle_step("gold", _run)
 
 
+def run_dept_assign(
+    batch_size: int = 100,
+    limit: int | None = None,
+    target_date: str | None = None,
+    config_path: str | None = None,
+    reassign: bool = False,
+    assigners: list[str] | None = None,
+) -> RunResult:
+    """Run department assignment step (Gold Layer).
+
+    두 배정기를 한 스텝에서 순차 실행한다 (기본: rule → llm). 규칙 배정은 DB 질의만
+    하므로 빠르고, LLM 배정은 하루치가 수십 건이라 둘의 합이 DAG 태스크의
+    execution_timeout 안에 들어온다.
+
+    Args:
+        target_date: 지정하면 그 날짜의 ANALYZED 리뷰만 처리한다 (DAG 규약).
+            생략하면 ANALYZED 전량이 대상이 되므로 백필 경로가 된다.
+        reassign: True 면 이미 배정된 건도 다시 처리한다.
+        assigners: 실행할 배정기 목록. None 이면 둘 다.
+    """
+    from src.gold.dept_assigner import (
+        ASSIGNER_LLM,
+        ASSIGNER_RULE,
+        LLMAssigner,
+        RuleBasedAssigner,
+    )
+
+    assigner_classes = {ASSIGNER_RULE: RuleBasedAssigner, ASSIGNER_LLM: LLMAssigner}
+    selected = list(assigners) if assigners is not None else [ASSIGNER_RULE, ASSIGNER_LLM]
+
+    unknown = [name for name in selected if name not in assigner_classes]
+    if unknown:
+        return RunResult(
+            step="dept_assign",
+            status="failed",
+            message=f"unknown assigner(s): {', '.join(unknown)}",
+        )
+
+    if target_date is not None:
+        try:
+            parsed_date = _parse_date_arg("target_date", target_date)
+        except ValueError as exc:
+            return RunResult(step="dept_assign", status="failed", message=str(exc))
+    else:
+        parsed_date = None
+
+    summaries: dict[str, Any] = {}
+
+    def _run():
+        for name in selected:
+            assigner_cls = assigner_classes[name]
+            assigner = assigner_cls(config_path) if config_path is not None else assigner_cls()
+            summary = assigner.assign_batch(
+                batch_size=batch_size,
+                limit=limit,
+                target_date=parsed_date,
+                reassign=reassign,
+            )
+            summaries[name] = summary
+            # 미분류는 근거 부족이라는 판정이지 실패가 아니다 (규칙 배정기는 대부분을
+            # 미분류로 남긴다). 전량이 오류로 떨어졌을 때만 스텝 실패로 본다.
+            if summary["total"] > 0 and summary["failed"] == summary["total"]:
+                raise RuntimeError(
+                    f"dept_assign({name}): {summary['failed']}/{summary['total']} failed"
+                )
+
+    result = _handle_step("dept_assign", _run)
+    if summaries:
+        result.validations = summaries
+        result.input_count = sum(summary["total"] for summary in summaries.values())
+        result.output_count = sum(summary["assigned"] for summary in summaries.values())
+    return result
+
+
 def run_aggregate(
     target_date: str | None = None,
     start_date: str | None = None,
@@ -229,6 +303,12 @@ def run_steps(
         "action": lambda: run_action_analysis(batch_size=batch_size, limit=limit, config_path=config_path),
         "embed": lambda: run_generate_embeddings(batch_size=batch_size, limit=limit, model_name=model_name, config_path=config_path),
         "gold": lambda: run_gold(
+            batch_size=batch_size,
+            limit=limit,
+            config_path=config_path,
+            target_date=target_date,
+        ),
+        "dept_assign": lambda: run_dept_assign(
             batch_size=batch_size,
             limit=limit,
             config_path=config_path,
