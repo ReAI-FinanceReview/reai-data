@@ -185,7 +185,10 @@ def run_dept_assign(
             # 전부 못 돌게 된다. 배정과 무관한 산출물을 배정 장애로 지우는 셈이다.
             # 예컨대 워커에 OPENAI_API_KEY 가 없으면 llm 은 전량 실패하지만
             # 기본 설정에서 마트는 rule 행만 읽는다.
-            if name != production:
+            # 단, 관용은 production 배정기가 함께 도는 실행에서만이다. 그 배정기를
+            # 콕 집어 실행했는데 전량 실패했다면 그건 이 실행 자체의 실패다 —
+            # 넘어가면 수동 백필(--assigner llm)이 전부 실패하고도 exit 0 을 낸다.
+            if name != production and production in selected:
                 logger.warning("%s — 마트 노출 배정기(%s)가 아니므로 스텝은 계속한다", detail, production)
                 continue
             raise RuntimeError(detail)

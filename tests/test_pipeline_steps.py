@@ -212,6 +212,23 @@ def test_run_dept_assign_tolerates_total_failure_of_a_non_production_assigner(mo
 
 @patch("src.gold.dept_assigner.LLMAssigner")
 @patch("src.gold.dept_assigner.RuleBasedAssigner")
+def test_run_dept_assign_fails_when_an_explicitly_selected_assigner_dies(mock_rule, mock_llm):
+    """콕 집어 실행한 배정기의 전량 실패는 그 실행 자체의 실패다.
+
+    마트가 안 읽는다는 이유로 넘어가면 수동 백필(--assigner llm)이 전부 실패하고도
+    exit 0 을 내서, 운영자가 백필이 끝났다고 믿게 된다.
+    """
+    mock_llm.return_value.assign_batch.return_value = _summary(total=8, assigned=0, failed=8)
+
+    result = run_dept_assign(target_date="2025-01-15", assigners=[ASSIGNER_LLM])
+
+    assert result.status == "failed"
+    assert "8/8 failed" in result.message
+    mock_rule.assert_not_called()
+
+
+@patch("src.gold.dept_assigner.LLMAssigner")
+@patch("src.gold.dept_assigner.RuleBasedAssigner")
 def test_run_dept_assign_continues_past_partial_failure(mock_rule, mock_llm):
     """일부만 실패한 것은 실패가 아니다 — 실패 행은 is_failed 로 남고 재시도 대상이 된다.
 
