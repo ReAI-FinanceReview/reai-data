@@ -135,17 +135,13 @@ def run_dept_assign(
         reassign: True 면 이미 배정된 건도 다시 처리한다.
         assigners: 실행할 배정기 목록. None 이면 둘 다.
     """
-    from src.gold.dept_assigner import (
-        ASSIGNER_LLM,
-        ASSIGNER_RULE,
-        LLMAssigner,
-        RuleBasedAssigner,
-    )
+    from src.gold import dept_assigner
+    from src.gold.aggregator import resolve_production_assigner
+    from src.gold.assigner_ids import KNOWN_ASSIGNERS
 
-    assigner_classes = {ASSIGNER_RULE: RuleBasedAssigner, ASSIGNER_LLM: LLMAssigner}
-    selected = list(assigners) if assigners is not None else [ASSIGNER_RULE, ASSIGNER_LLM]
+    selected = list(assigners) if assigners is not None else list(KNOWN_ASSIGNERS)
 
-    unknown = [name for name in selected if name not in assigner_classes]
+    unknown = [name for name in selected if name not in dept_assigner.ASSIGNERS]
     if unknown:
         return RunResult(
             step="dept_assign",
@@ -161,11 +157,15 @@ def run_dept_assign(
     else:
         parsed_date = None
 
+    # 마트가 실제로 소비하는 배정기. 이것만 스텝의 성패를 좌우한다.
+    production = resolve_production_assigner()
     summaries: dict[str, Any] = {}
 
     def _run():
         for name in selected:
-            assigner_cls = assigner_classes[name]
+            # 모듈에서 호출 시점에 꺼낸다 — 레지스트리가 클래스 객체를 붙들면
+            # 테스트의 패치가 닿지 않아 실제 유료 호출로 새어나간다.
+            assigner_cls = getattr(dept_assigner, dept_assigner.ASSIGNERS[name])
             assigner = assigner_cls(config_path) if config_path is not None else assigner_cls()
             summary = assigner.assign_batch(
                 batch_size=batch_size,
@@ -175,17 +175,30 @@ def run_dept_assign(
             )
             summaries[name] = summary
             # 미분류는 근거 부족이라는 판정이지 실패가 아니다 (규칙 배정기는 대부분을
-            # 미분류로 남긴다). 전량이 오류로 떨어졌을 때만 스텝 실패로 본다.
-            if summary["total"] > 0 and summary["failed"] == summary["total"]:
-                raise RuntimeError(
-                    f"dept_assign({name}): {summary['failed']}/{summary['total']} failed"
-                )
+            # 미분류로 남긴다). 전량이 오류로 떨어졌을 때만 실패로 본다.
+            if summary["total"] == 0 or summary["failed"] != summary["total"]:
+                continue
+
+            detail = f"dept_assign({name}): {summary['failed']}/{summary['total']} failed"
+            # 마트가 읽지 않는 배정기가 죽었다고 스텝을 실패시키면 dept_assign 이
+            # gold_aggregate 의 상류라서 그날 팩트 테이블 4개와 집계 후 검증까지
+            # 전부 못 돌게 된다. 배정과 무관한 산출물을 배정 장애로 지우는 셈이다.
+            # 예컨대 워커에 OPENAI_API_KEY 가 없으면 llm 은 전량 실패하지만
+            # 기본 설정에서 마트는 rule 행만 읽는다.
+            if name != production:
+                logger.warning("%s — 마트 노출 배정기(%s)가 아니므로 스텝은 계속한다", detail, production)
+                continue
+            raise RuntimeError(detail)
 
     result = _handle_step("dept_assign", _run)
     if summaries:
         result.validations = summaries
-        result.input_count = sum(summary["total"] for summary in summaries.values())
-        result.output_count = sum(summary["assigned"] for summary in summaries.values())
+        # 두 배정기는 같은 리뷰를 각각 처리하므로 합산하면 같은 건을 두 번 센다.
+        # 대표값은 마트가 소비하는 배정기의 숫자로 낸다. 배정기별 숫자는
+        # validations 에 그대로 남는다.
+        counted = summaries.get(production) or next(iter(summaries.values()))
+        result.input_count = counted["total"]
+        result.output_count = counted["assigned"]
     return result
 
 
@@ -308,11 +321,14 @@ def run_steps(
             config_path=config_path,
             target_date=target_date,
         ),
+        # 날짜를 요구한다. 생략을 허용하면 --target-date 를 빠뜨린 CLI 한 줄이
+        # ANALYZED 전량에 대한 유료 LLM 스윕이 된다. 전량 처리는 의도를 명시해야
+        # 도달하도록 scripts/assign_dept.py --backfill 로만 남긴다.
         "dept_assign": lambda: run_dept_assign(
             batch_size=batch_size,
             limit=limit,
             config_path=config_path,
-            target_date=target_date,
+            target_date=target_date or "",
         ),
         "aggregate": lambda: run_aggregate(config_path=config_path, target_date=target_date),
         "post_aggregate_validate": lambda: run_post_aggregate_validation(

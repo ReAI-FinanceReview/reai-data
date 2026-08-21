@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import os
 from datetime import date, timedelta
+from pathlib import Path
 from typing import List, Optional
 
 from sqlalchemy import text
 
-from src.gold.dept_assigner import ASSIGNER_LLM, ASSIGNER_RULE
+from src.gold.assigner_ids import ASSIGNER_RULE, KNOWN_ASSIGNERS
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
 
@@ -32,16 +33,31 @@ from src.utils.logger import get_logger
 # 규칙 베이스라인이 기본이고, LLM 배정으로 노출을 바꾸는 것은 재배포가 아니라
 # 환경변수 전환이어야 한다 — 되돌리기가 값 하나 되돌리기여야 하기 때문이다.
 PRODUCTION_ASSIGNER_ENV = "DEPT_PRODUCTION_ASSIGNER"
-KNOWN_ASSIGNERS = (ASSIGNER_RULE, ASSIGNER_LLM)
 
 
-def _resolve_production_assigner() -> str:
-    """환경변수에서 노출 배정기를 읽는다. 오타는 조용히 지나가면 안 된다.
+def _load_env() -> None:
+    """저장소 루트 .env 를 로드한다 (dept_assigner / action_analyzer 와 동일)."""
+    try:
+        from dotenv import load_dotenv
 
-    마트 질의는 LEFT JOIN 이라 알 수 없는 값이 들어와도 행이 사라지지 않고
-    배정 컬럼만 전부 NULL 이 된다 — 실패가 아니라 '배정이 하나도 없는 하루'처럼
-    보인다. 그래서 여기서 즉시 막는다.
+        load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+    except ImportError:  # pragma: no cover - dotenv 미설치 환경
+        pass
+
+
+def resolve_production_assigner() -> str:
+    """노출 배정기를 읽는다. 인스턴스 생성 시점이지 모듈 import 시점이 아니다.
+
+    import 시점에 읽으면 .env 로드보다 먼저 평가되어 환경변수가 조용히 무시된다.
+    DAG 의 gold_aggregate 태스크는 ``python -c`` 로 실행되어 dotenv 를 전혀
+    로드하지 않으므로, 정작 이 값을 쓰는 경로에서 전환이 먹지 않는다. 그래서
+    형제 모듈(LLMAssigner.__init__)처럼 .env 를 명시적으로 로드하고 여기서 읽는다.
+
+    오타는 조용히 지나가면 안 된다. 마트 질의가 LEFT JOIN 이라 알 수 없는 값이
+    들어와도 행이 사라지지 않고 배정 컬럼만 전부 NULL 이 된다 — 실패가 아니라
+    '배정이 하나도 없는 하루'처럼 보인다.
     """
+    _load_env()
     value = os.getenv(PRODUCTION_ASSIGNER_ENV, ASSIGNER_RULE).strip()
     if value not in KNOWN_ASSIGNERS:
         raise ValueError(
@@ -49,9 +65,6 @@ def _resolve_production_assigner() -> str:
             f"허용: {', '.join(KNOWN_ASSIGNERS)}"
         )
     return value
-
-
-PRODUCTION_ASSIGNER = _resolve_production_assigner()
 
 
 class GoldAggregator:
@@ -63,6 +76,7 @@ class GoldAggregator:
     def __init__(self, config_path: str = "config/crawler_config.yml"):
         self.logger = get_logger(__name__)
         self.db_connector = DatabaseConnector(config_path)
+        self.production_assigner = resolve_production_assigner()
 
     # ------------------------------------------------------------------
     # Public API
@@ -452,6 +466,6 @@ class GoldAggregator:
         """)
         session.execute(
             sql,
-            {"target_date": target_date, "production_assigner": PRODUCTION_ASSIGNER},
+            {"target_date": target_date, "production_assigner": self.production_assigner},
         )
         self.logger.debug(f"srv_daily_review_list UPSERT 완료: {target_date}")

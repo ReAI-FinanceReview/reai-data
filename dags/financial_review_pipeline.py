@@ -94,13 +94,22 @@ gold_analyze = BashOperator(
 #
 # 과거 누적분(LLM 미배정 잔량)은 이 DAG 가 아니라 scripts/assign_dept.py 를
 # 날짜 없이 한 번 수동 실행해 채운다 — anti-join 이 중복 배정을 막는다.
+#
+# retries 와 batch_size 는 기본값을 쓰면 안 된다.
+#   - default_args 의 retries=3 은 배정기의 MAX_TRIES=3 과 같은 숫자다. Airflow 가
+#     3번 재시도하면 try_number 가 상한에 닿아 4번째 실행은 대상 0건을 보고 성공으로
+#     끝난다 — 지속적인 실패가 초록불이 된다. 그래서 이 태스크만 retries=1 이다.
+#   - assign_batch 는 batch_size 마다 커밋한다. 기본 100 이면 하루치가 한 청크라
+#     타임아웃 kill 시 그 시간에 지불한 LLM 호출이 통째로 사라진다. 작게 잘라
+#     중단되어도 직전 청크까지는 남게 한다.
 dept_assign = BashOperator(
     task_id="dept_assign",
     bash_command=(
         f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} "
-        "scripts/assign_dept.py --date {{ ds }}"
+        "scripts/assign_dept.py --date {{ ds }} --batch-size 10"
     ),
     dag=dag,
+    retries=1,
     execution_timeout=timedelta(hours=1),
 )
 

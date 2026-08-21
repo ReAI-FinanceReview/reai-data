@@ -31,6 +31,11 @@ from uuid import UUID
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from src.gold.assigner_ids import (  # noqa: F401  (기존 import 경로 유지용 재수출)
+    ASSIGNER_LLM,
+    ASSIGNER_RULE,
+    KNOWN_ASSIGNERS,
+)
 from src.models.enums import AnalysisStatusType
 from src.models.llm_analysis_log import LLMAnalysisLog
 from src.utils.db_connector import DatabaseConnector
@@ -58,12 +63,6 @@ def _load_env() -> None:
 
 
 UNCLASSIFIED = "미분류"
-
-# 배정기 식별자. 마이그레이션 20260813_0002 의 server_default 와 반드시 같아야
-# 한다 — 어긋나면 리비전 이전에 적재된 행이 anti-join 에서 빠져 과거 전량이
-# 조용히 재처리된다. tests 가 그 일치를 단언한다.
-ASSIGNER_RULE = "rule"
-ASSIGNER_LLM = "llm"
 
 # DB 접속 설정 파일. 다른 gold 모듈과 같은 기본값이다.
 DEFAULT_CONFIG_PATH = "config/crawler_config.yml"
@@ -824,6 +823,19 @@ class LLMAssigner(_BatchAssignerBase):
         log.result_payload = {"choice": payload, "usage": usage}
         log.error_message = error
         log.processed_at = datetime.now(timezone.utc)
+
+
+# 식별자 → 실행 클래스 '이름'. 호출부가 자기 목록을 따로 들지 않게 여기 한 곳에 둔다.
+# KNOWN_ASSIGNERS 와 키가 일치해야 하며 테스트가 그것을 단언한다.
+#
+# 클래스 객체를 직접 담으면 안 된다. 그러면 dict 가 import 시점의 참조를 붙들어
+# ``@patch("src.gold.dept_assigner.LLMAssigner")`` 가 레지스트리에 닿지 않고,
+# 단위 테스트가 조용히 실제 배정기를 띄워 유료 호출을 한다 — 실제로 그렇게 태웠다.
+# 이름으로 두고 호출 시점에 모듈에서 꺼내면 통상적인 패치가 그대로 먹는다.
+ASSIGNERS = {
+    ASSIGNER_RULE: RuleBasedAssigner.__name__,
+    ASSIGNER_LLM: LLMAssigner.__name__,
+}
 
 
 def _sum_usage(usages: Sequence[dict]) -> Optional[dict]:

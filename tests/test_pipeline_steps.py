@@ -138,8 +138,10 @@ def test_run_dept_assign_runs_both_assigners_by_default(mock_rule, mock_llm):
         ASSIGNER_RULE: _summary(total=3, assigned=1, unclassified=2),
         ASSIGNER_LLM: _summary(total=3, assigned=3),
     }
-    assert result.input_count == 6
-    assert result.output_count == 4
+    # 두 배정기가 같은 리뷰 3건을 각각 처리하므로 합산은 같은 건을 두 번 센다.
+    # 대표값은 마트가 소비하는 배정기(기본 rule)의 숫자다.
+    assert result.input_count == 3
+    assert result.output_count == 1
 
 
 @patch("src.gold.dept_assigner.LLMAssigner")
@@ -179,6 +181,7 @@ def test_run_dept_assign_treats_unclassified_as_success(mock_rule, mock_llm):
 @patch("src.gold.dept_assigner.LLMAssigner")
 @patch("src.gold.dept_assigner.RuleBasedAssigner")
 def test_run_dept_assign_fails_when_every_review_errored(mock_rule, mock_llm):
+    """마트가 소비하는 배정기(기본 rule)가 전량 실패하면 스텝이 실패한다."""
     mock_rule.return_value.assign_batch.return_value = _summary(total=5, assigned=0, failed=5)
 
     result = run_dept_assign(target_date="2025-01-15")
@@ -187,6 +190,59 @@ def test_run_dept_assign_fails_when_every_review_errored(mock_rule, mock_llm):
     assert "5/5 failed" in result.message
     # 규칙 배정에서 이미 실패했으므로 LLM 유료 호출로 넘어가지 않는다.
     mock_llm.return_value.assign_batch.assert_not_called()
+
+
+@patch("src.gold.dept_assigner.LLMAssigner")
+@patch("src.gold.dept_assigner.RuleBasedAssigner")
+def test_run_dept_assign_tolerates_total_failure_of_a_non_production_assigner(mock_rule, mock_llm):
+    """마트가 읽지 않는 배정기의 장애로 그날 집계를 통째로 막으면 안 된다.
+
+    dept_assign 은 gold_aggregate 의 상류다. 워커에 OPENAI_API_KEY 가 없기만 해도
+    llm 은 전량 실패하는데, 기본 설정에서 마트는 rule 행만 읽는다. 이때 스텝을
+    실패시키면 배정과 무관한 팩트 테이블 4개와 집계 후 검증까지 못 돌게 된다.
+    """
+    mock_rule.return_value.assign_batch.return_value = _summary(total=5, assigned=5)
+    mock_llm.return_value.assign_batch.return_value = _summary(total=5, assigned=0, failed=5)
+
+    result = run_dept_assign(target_date="2025-01-15")
+
+    assert result.status == "success"
+    assert result.validations[ASSIGNER_LLM]["failed"] == 5
+
+
+@patch("src.gold.dept_assigner.LLMAssigner")
+@patch("src.gold.dept_assigner.RuleBasedAssigner")
+def test_run_dept_assign_continues_past_partial_failure(mock_rule, mock_llm):
+    """일부만 실패한 것은 실패가 아니다 — 실패 행은 is_failed 로 남고 재시도 대상이 된다.
+
+    경계가 `==` 라 `>=` 로 바뀌거나 배정기 간 failed 를 합산하면 여기서 깨진다.
+    """
+    mock_rule.return_value.assign_batch.return_value = _summary(
+        total=10, assigned=5, unclassified=2, failed=3
+    )
+    mock_llm.return_value.assign_batch.return_value = _summary(total=10, assigned=10)
+
+    result = run_dept_assign(target_date="2025-01-15")
+
+    assert result.status == "success"
+    # 전량 실패가 아니므로 다음 배정기로 넘어간다.
+    mock_llm.return_value.assign_batch.assert_called_once()
+    assert result.input_count == 10
+    assert result.output_count == 5
+
+
+@patch("src.gold.dept_assigner.LLMAssigner")
+@patch("src.gold.dept_assigner.RuleBasedAssigner")
+def test_run_dept_assign_succeeds_when_there_is_nothing_to_assign(mock_rule, mock_llm):
+    """대상 0건(0/0)이 공허하게 '전량 실패' 로 읽히면 한가한 날마다 DAG 가 실패한다."""
+    empty = _summary(total=0, assigned=0)
+    mock_rule.return_value.assign_batch.return_value = empty
+    mock_llm.return_value.assign_batch.return_value = empty
+
+    result = run_dept_assign(target_date="2025-01-15")
+
+    assert result.status == "success"
+    assert result.input_count == 0
 
 
 def test_run_dept_assign_rejects_unknown_assigner():
@@ -211,6 +267,18 @@ def test_run_steps_supports_dept_assign_step_name(mock_run_dept_assign):
 
     assert len(results) == 1
     assert mock_run_dept_assign.call_args.kwargs["target_date"] == "2025-01-15"
+
+
+def test_run_steps_requires_a_target_date_for_dept_assign():
+    """날짜를 빠뜨린 CLI 한 줄이 ANALYZED 전량에 대한 유료 LLM 스윕이 되면 안 된다.
+
+    전량 처리는 scripts/assign_dept.py --backfill 로만 도달한다.
+    """
+    results = run_steps(["dept_assign"])
+
+    assert results[0].step == "dept_assign"
+    assert results[0].status == "failed"
+    assert "YYYY-MM-DD" in results[0].message
 
 
 def test_run_steps_supports_post_aggregate_validate_step_name():
