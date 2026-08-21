@@ -116,9 +116,16 @@ The table is partitioned by `RANGE (date)`.
 | `sentiment_score` | `FLOAT` | Yes | Metric | Average sentiment score for the review | `0.32` | Sentiment display/filter |
 | `is_action_required` | `BOOLEAN` | Yes | Covered by partial action index for `true` rows | Whether the review needs action | `true` | Action queue filter |
 | `is_attention_required` | `BOOLEAN` | Yes | Filter/display field | Whether the review needs attention | `false` | Attention queue filter |
-| `assigned_dept` | `TEXT[]` | Yes | Display/filter candidate | Assigned department list | `{support,product}` | Routing display |
+| `assigned_dept` | `TEXT[]` | Yes | Display/filter candidate | Assigned department list, produced by the assigner selected via `DEPT_PRODUCTION_ASSIGNER` (default `rule`) | `{support,product}` | Routing display |
 | `keyword` | `TEXT[]` | Yes | GIN-indexed keyword array | Review keyword array | `{login,crash}` | Keyword filtering/search |
-| `confidence` | `FLOAT` | Yes | Metric | Department assignment confidence | `0.91` | Routing confidence display |
+| `confidence` | `FLOAT` | Yes | Metric | Department assignment confidence, from the same assigner as `assigned_dept` | `0.91` | Routing confidence display |
+
+Both assignment columns are populated by a LEFT JOIN against `reviews_assigned`,
+filtered to a single assigner chosen by the `DEPT_PRODUCTION_ASSIGNER` environment
+variable (default `rule`). The mart carries no assigner column, so consumers cannot
+tell which assigner produced a row — switching the variable changes the meaning of
+both columns silently, and NULL means "no assignment from the configured assigner",
+not "assignment failed".
 
 ## Backend query examples
 

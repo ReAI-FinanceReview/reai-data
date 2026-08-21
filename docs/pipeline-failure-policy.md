@@ -9,6 +9,7 @@ This document defines where pipeline failures are tracked in schema v4.
 | `crawl` / `load` | Parquet batch load failure | `ingestion_batch` |
 | `cleanse` | Review-level cleanse failure | `review_master_index` |
 | `gold_analyze` | Review-level downstream analysis failure | `review_master_index` |
+| `dept_assign` | Review-level department assignment failure | `reviews_assigned` (`is_failed`, `try_number`) |
 | LLM calls | API call audit and model response failure | `review_llm_analysis_logs` |
 | `gold_aggregate` | Date/job-level aggregation failure | Logs and `RunResult` |
 
@@ -39,6 +40,23 @@ WHERE processing_status = 'FAILED'
   AND retry_count >= 3
 ORDER BY review_created_at ASC NULLS LAST, review_id;
 ```
+
+Department assignment dead letters:
+
+```sql
+SELECT review_id, assigner, try_number, assignment_reason, updated_at
+FROM reviews_assigned
+WHERE is_failed
+  AND try_number >= 3
+ORDER BY updated_at ASC, review_id;
+```
+
+Assignment failures do not move `review_master_index.processing_status`; the review
+stays `ANALYZED` because the serving mart loads `ANALYZED` rows only. Nothing
+re-processes these rows automatically either — the DAG task is scoped to a single
+`ds`, so a failed row is never revisited on a later run. Recovery is
+`scripts/assign_dept.py --backfill --reassign`, run by hand. Treat this query as the
+manual sweep until an automated re-attempt path exists.
 
 The review-level condition is intentionally called "dead-letter-equivalent"
 because `processing_status_type` does not include a separate `DEAD_LETTER`

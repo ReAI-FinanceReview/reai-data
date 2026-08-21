@@ -31,6 +31,11 @@ from uuid import UUID
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from src.gold.assigner_ids import (  # noqa: F401  (기존 import 경로 유지용 재수출)
+    ASSIGNER_LLM,
+    ASSIGNER_RULE,
+    KNOWN_ASSIGNERS,
+)
 from src.models.enums import AnalysisStatusType
 from src.models.llm_analysis_log import LLMAnalysisLog
 from src.utils.db_connector import DatabaseConnector
@@ -58,12 +63,6 @@ def _load_env() -> None:
 
 
 UNCLASSIFIED = "미분류"
-
-# 배정기 식별자. 마이그레이션 20260813_0002 의 server_default 와 반드시 같아야
-# 한다 — 어긋나면 리비전 이전에 적재된 행이 anti-join 에서 빠져 과거 전량이
-# 조용히 재처리된다. tests 가 그 일치를 단언한다.
-ASSIGNER_RULE = "rule"
-ASSIGNER_LLM = "llm"
 
 # DB 접속 설정 파일. 다른 gold 모듈과 같은 기본값이다.
 DEFAULT_CONFIG_PATH = "config/crawler_config.yml"
@@ -398,7 +397,13 @@ class _BatchAssignerBase:
                 self.logger.info("부서 배정: 대상 리뷰 없음")
                 return {"total": 0, "assigned": 0, "unclassified": 0, "failed": 0}
 
-            run_started_at = datetime.now(timezone.utc)
+            # 기준 시각을 DB 시계로 뜬다. 로그 행의 created_at 은 server_default
+            # now() 이고 Postgres 의 now() 는 '트랜잭션 시작 시각' 이라, 위
+            # _fetch_target_ids 가 이미 연 트랜잭션의 시작 시각으로 박힌다.
+            # 파이썬 시계로 자르면 그 값이 항상 더 늦어 이번 실행이 쓴 행이 전부
+            # 잘려나가고 total_tokens 가 0 으로 보고된다 (실측: 11만 토큰 → 0).
+            # 비용 상한이 없는 상태에서 유일한 지출 신호라 조용히 0 이면 안 된다.
+            run_started_at = session.execute(text("SELECT now()")).scalar()
             self.logger.info(
                 f"부서 배정 시작: {len(review_ids)}건 ({type(self).__name__})"
             )
@@ -824,6 +829,19 @@ class LLMAssigner(_BatchAssignerBase):
         log.result_payload = {"choice": payload, "usage": usage}
         log.error_message = error
         log.processed_at = datetime.now(timezone.utc)
+
+
+# 식별자 → 실행 클래스 '이름'. 호출부가 자기 목록을 따로 들지 않게 여기 한 곳에 둔다.
+# KNOWN_ASSIGNERS 와 키가 일치해야 하며 테스트가 그것을 단언한다.
+#
+# 클래스 객체를 직접 담으면 안 된다. 그러면 dict 가 import 시점의 참조를 붙들어
+# ``@patch("src.gold.dept_assigner.LLMAssigner")`` 가 레지스트리에 닿지 않고,
+# 단위 테스트가 조용히 실제 배정기를 띄워 유료 호출을 한다 — 실제로 그렇게 태웠다.
+# 이름으로 두고 호출 시점에 모듈에서 꺼내면 통상적인 패치가 그대로 먹는다.
+ASSIGNERS = {
+    ASSIGNER_RULE: RuleBasedAssigner.__name__,
+    ASSIGNER_LLM: LLMAssigner.__name__,
+}
 
 
 def _sum_usage(usages: Sequence[dict]) -> Optional[dict]:

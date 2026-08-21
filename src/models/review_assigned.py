@@ -45,6 +45,11 @@ class ReviewAssigned(Base):
         server_default='rule',
         comment='배정기 식별자 (rule, llm) - 같은 리뷰에 배정기별 1행'
     )
+    # 배정 코드(src/gold/dept_assigner.py)는 이 컬럼을 채우지 않는다. 리뷰 1건은
+    # aspect 를 N 개 낳는데 이 컬럼은 UNIQUE 라 리뷰-aspect 를 1:1 로 강제한다 —
+    # N 개 중 하나를 골라 넣으면 근거가 임의로 정해지고, 두 aspect 를 가진 리뷰
+    # 두 건이 같은 aspect_id 를 고르면 UNIQUE 가 배정 자체를 막는다. 배정 근거는
+    # assignment_reason 텍스트로 남긴다.
     review_feature_id = Column(
         BigInteger,
         unique=True,

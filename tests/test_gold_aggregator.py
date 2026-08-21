@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.gold.dept_assigner import ASSIGNER_LLM, ASSIGNER_RULE
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -29,7 +31,7 @@ def mock_autocommit_connection():
     return manager
 
 
-def _make_aggregator(mock_session, mock_autocommit_connection=None):
+def _make_aggregator(mock_session, mock_autocommit_connection=None, production_assigner=ASSIGNER_RULE):
     with patch("src.gold.aggregator.DatabaseConnector") as MockDB:
         MockDB.return_value.get_session.return_value = mock_session
         if mock_autocommit_connection is None:
@@ -42,6 +44,8 @@ def _make_aggregator(mock_session, mock_autocommit_connection=None):
         agg = GoldAggregator.__new__(GoldAggregator)
         agg.logger = MagicMock()
         agg.db_connector = MockDB.return_value
+        # __init__ 을 우회하므로 인스턴스 속성을 여기서 채운다.
+        agg.production_assigner = production_assigner
         return agg
 
 
@@ -392,3 +396,125 @@ class TestDropOldPartitions:
 
         agg._drop_old_partitions.assert_called_once_with(mock_session, 7)
         assert result["dropped_partitions"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 서빙 마트에 노출할 배정기 (이슈 #40)
+# ---------------------------------------------------------------------------
+
+class TestProductionAssigner:
+    """읽기 시점이 이 기능의 전부다.
+
+    모듈 import 시점에 읽으면 .env 로드보다 먼저 평가되어 환경변수가 조용히
+    무시된다. DAG 의 gold_aggregate 태스크는 ``python -c`` 로 실행돼 dotenv 를
+    로드하지 않으므로, 정작 이 값을 쓰는 경로에서 전환이 먹지 않는다. 같은 패턴이
+    #101 에서 지적·수정됐다.
+    """
+
+    def test_module_import_does_not_resolve_the_value(self):
+        """모듈 상수로 되돌리면 이 단언이 깨진다."""
+        import src.gold.aggregator as module
+
+        assert not hasattr(module, "PRODUCTION_ASSIGNER"), (
+            "모듈 수준에서 값을 확정하면 .env 로드보다 먼저 평가된다"
+        )
+
+    def test_env_file_is_loaded_before_the_value_is_read(self, monkeypatch):
+        import dotenv
+
+        calls = []
+        monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: bool(calls.append(a)))
+        monkeypatch.setenv("DEPT_PRODUCTION_ASSIGNER", ASSIGNER_LLM)
+
+        from src.gold.aggregator import resolve_production_assigner
+
+        assert resolve_production_assigner() == ASSIGNER_LLM
+        assert calls, ".env 를 로드하지 않고 값을 읽었다"
+
+    def test_defaults_to_the_rule_baseline(self, monkeypatch):
+        """기본값이 규칙 베이스라인에서 조용히 옮겨가면 마트 내용이 통째로 바뀐다.
+
+        개발자 로컬 .env 가 이 키를 갖고 있으면 기본값 검증이 그 값에 좌우되므로,
+        .env 로드만 차단해 '변수가 어디에도 없을 때' 를 재현한다.
+        """
+        import src.gold.aggregator as module
+
+        monkeypatch.setattr(module, "_load_env", lambda: None)
+        monkeypatch.delenv("DEPT_PRODUCTION_ASSIGNER", raising=False)
+
+        assert module.resolve_production_assigner() == ASSIGNER_RULE
+
+    def test_environment_variable_switches_exposed_assigner(self, monkeypatch):
+        from src.gold.aggregator import resolve_production_assigner
+
+        monkeypatch.setenv("DEPT_PRODUCTION_ASSIGNER", ASSIGNER_LLM)
+
+        assert resolve_production_assigner() == ASSIGNER_LLM
+
+    def test_unknown_value_fails_loudly(self, monkeypatch):
+        """마트 질의가 LEFT JOIN 이라 오타는 실패가 아니라 '배정 0건'으로 보인다."""
+        from src.gold.aggregator import resolve_production_assigner
+
+        monkeypatch.setenv("DEPT_PRODUCTION_ASSIGNER", "gpt")
+
+        with pytest.raises(ValueError, match="알 수 없는 배정기"):
+            resolve_production_assigner()
+
+    def test_constructor_reads_the_environment(self, monkeypatch):
+        monkeypatch.setenv("DEPT_PRODUCTION_ASSIGNER", ASSIGNER_LLM)
+
+        with patch("src.gold.aggregator.DatabaseConnector"):
+            from src.gold.aggregator import GoldAggregator
+
+            agg = GoldAggregator()
+
+        assert agg.production_assigner == ASSIGNER_LLM
+
+    def test_serving_mart_binds_the_configured_assigner(self, mock_session):
+        agg = _make_aggregator(mock_session, production_assigner=ASSIGNER_LLM)
+
+        agg._upsert_srv_daily_review_list(mock_session, date(2025, 1, 15))
+
+        params = mock_session.execute.call_args[0][1]
+        assert params["production_assigner"] == ASSIGNER_LLM
+
+
+class TestAssignerRegistry:
+    """허용 배정기 집합이 세 곳에 흩어지면 빠뜨린 쪽이 운영에서 처음 드러난다."""
+
+    def test_execution_registry_matches_the_known_ids(self):
+        from src.gold.assigner_ids import KNOWN_ASSIGNERS
+        from src.gold.dept_assigner import ASSIGNERS
+
+        assert tuple(ASSIGNERS) == KNOWN_ASSIGNERS
+
+    def test_registry_holds_class_names_not_class_objects(self):
+        """클래스 객체를 담으면 모듈 속성 패치가 레지스트리에 닿지 않는다.
+
+        그러면 배정기를 대역으로 바꾼 단위 테스트가 조용히 실제 배정기를 띄워
+        유료 LLM 호출을 한다. 실제로 그렇게 태운 적이 있어 이름으로 바꿨다.
+        """
+        from src.gold import dept_assigner
+
+        for class_name in dept_assigner.ASSIGNERS.values():
+            assert isinstance(class_name, str), "레지스트리는 이름을 담아야 한다"
+            assert isinstance(getattr(dept_assigner, class_name), type)
+
+    def test_cli_choices_are_derived_from_the_known_ids(self):
+        import importlib.util
+        from pathlib import Path
+
+        from src.gold.assigner_ids import KNOWN_ASSIGNERS
+
+        script = Path(__file__).resolve().parents[1] / "scripts" / "assign_dept.py"
+        spec = importlib.util.spec_from_file_location("_assign_dept_choices", script)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        parser_action = next(
+            action
+            for action in module.build_arg_parser()._actions
+            if action.dest == "assigner"
+        )
+        assert tuple(parser_action.choices) == KNOWN_ASSIGNERS
