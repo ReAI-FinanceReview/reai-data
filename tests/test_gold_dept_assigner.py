@@ -9,6 +9,7 @@ Coverage:
 """
 
 import importlib.util
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -1388,3 +1389,62 @@ class TestReviewContextAgainstRealSchema:
         assert context["text"] == "로그인이 안 됩니다"
         # app_review_id 로 조인하면 여기가 None 이 된다 (그것이 원래 버그였다).
         assert context["rating"] == 4
+
+
+# ─────────────────────────────────────────────
+# F. 실행별 토큰 집계 (실제 PostgreSQL)
+# ─────────────────────────────────────────────
+
+@pytest.mark.requires_db
+@pytest.mark.integration
+class TestRunTokenTotal:
+    """비용 상한이 없으므로 이 숫자가 유일한 지출 신호다. 조용히 0 이면 안 된다."""
+
+    def _log(self, session, review_id, total_tokens):
+        session.execute(
+            text(
+                "INSERT INTO review_llm_analysis_logs "
+                "(source_table, source_record_id, model_name, result_payload, status) "
+                "VALUES (:src, :rid, :model, CAST(:payload AS jsonb), 'SUCCESS')"
+            ),
+            {
+                "src": LLMAssigner.SOURCE_TABLE,
+                "rid": str(review_id),
+                "model": "test-model",
+                "payload": json.dumps({"usage": {"total_tokens": total_tokens}}),
+            },
+        )
+
+    def test_counts_rows_written_in_the_already_open_transaction(self, assigned_review_id, reviews_assigned_unique):
+        """created_at 은 트랜잭션 시작 시각이라 파이썬 시계 기준으로 자르면 전부 잘린다.
+
+        assign_batch 는 대상 조회로 트랜잭션을 먼저 연 뒤 배정을 쓴다. 그래서 이번
+        실행이 쓴 로그 행의 created_at 이 datetime.now() 보다 이르고, 11만 토큰을
+        쓰고도 0 이 보고됐다. 기준 시각을 DB 시계로 떠야 비교가 성립한다.
+        """
+        session = reviews_assigned_unique
+        assigner = LLMAssigner.__new__(LLMAssigner)
+
+        run_started_at = session.execute(text("SELECT now()")).scalar()
+        self._log(session, assigned_review_id, 11284)
+        session.flush()
+
+        assert assigner.run_token_total(
+            session, [assigned_review_id], since=run_started_at
+        ) == 11284
+
+    def test_python_clock_would_miss_them(self, assigned_review_id, reviews_assigned_unique):
+        """회귀 방지: 파이썬 시계로 되돌리면 이 단언이 깨진다."""
+        session = reviews_assigned_unique
+
+        db_now = session.execute(text("SELECT now()")).scalar()
+        python_now = datetime.now(timezone.utc)
+
+        assert db_now <= python_now, (
+            "트랜잭션 시작 시각이 파이썬 시계보다 이르지 않다면 이 함정은 사라진 것이다"
+        )
+
+    def test_returns_zero_without_target_reviews(self, reviews_assigned_unique):
+        assigner = LLMAssigner.__new__(LLMAssigner)
+
+        assert assigner.run_token_total(reviews_assigned_unique, []) == 0

@@ -397,7 +397,13 @@ class _BatchAssignerBase:
                 self.logger.info("부서 배정: 대상 리뷰 없음")
                 return {"total": 0, "assigned": 0, "unclassified": 0, "failed": 0}
 
-            run_started_at = datetime.now(timezone.utc)
+            # 기준 시각을 DB 시계로 뜬다. 로그 행의 created_at 은 server_default
+            # now() 이고 Postgres 의 now() 는 '트랜잭션 시작 시각' 이라, 위
+            # _fetch_target_ids 가 이미 연 트랜잭션의 시작 시각으로 박힌다.
+            # 파이썬 시계로 자르면 그 값이 항상 더 늦어 이번 실행이 쓴 행이 전부
+            # 잘려나가고 total_tokens 가 0 으로 보고된다 (실측: 11만 토큰 → 0).
+            # 비용 상한이 없는 상태에서 유일한 지출 신호라 조용히 0 이면 안 된다.
+            run_started_at = session.execute(text("SELECT now()")).scalar()
             self.logger.info(
                 f"부서 배정 시작: {len(review_ids)}건 ({type(self).__name__})"
             )
