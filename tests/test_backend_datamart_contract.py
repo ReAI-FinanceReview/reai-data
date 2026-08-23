@@ -7,7 +7,7 @@ or a SQLite fallback.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -94,10 +94,17 @@ CONTRACT_TABLES = {
 }
 
 SERVICE_FK_TABLES = set(CONTRACT_TABLES)
-CONTRACT_TARGET_DATE = date(2026, 5, 2)
-CONTRACT_PARTITION_NAME = "srv_daily_review_list_contract_2026_05_02"
-READINESS_TARGET_DATE = date(2026, 5, 3)
-READINESS_PARTITION_NAME = "srv_daily_review_list_2026_05_03"
+# 대상 날짜는 오늘 기준 상대값이어야 한다. aggregate 스텝은 적재 직후
+# date.today() - retention_days(기본 14) 이전 파티션을 DROP 하므로, 고정 날짜는
+# 시간이 지나면 방금 쓴 파티션이 같은 실행 안에서 사라진다.
+# 오프셋 1~13 은 마트 테스트 전체가 나눠 쓴다(파일 간 날짜 충돌 방지).
+_TODAY = date.today()
+READINESS_TARGET_DATE = _TODAY - timedelta(days=2)
+CONTRACT_TARGET_DATE = _TODAY - timedelta(days=3)
+# contract_ 접두 파티션은 TTL 정규식(srv_daily_review_list_\d{4}_\d{2}_\d{2})에
+# 걸리지 않아 자동 DROP 대상이 아니다. 정리는 _cleanup_contract_probe 가 한다.
+CONTRACT_PARTITION_NAME = f"srv_daily_review_list_contract_{CONTRACT_TARGET_DATE:%Y_%m_%d}"
+READINESS_PARTITION_NAME = f"srv_daily_review_list_{READINESS_TARGET_DATE:%Y_%m_%d}"
 CONTRACT_DOC_MARKERS = {
     "## Contract boundary": "contract table list",
     "## Column contract matrices": "column contract section",
@@ -540,7 +547,8 @@ def _create_contract_partition(test_db_session) -> None:
             f"""
             CREATE TABLE IF NOT EXISTS public.{CONTRACT_PARTITION_NAME}
             PARTITION OF public.srv_daily_review_list
-            FOR VALUES FROM ('2026-05-02') TO ('2026-05-03')
+            FOR VALUES FROM ('{CONTRACT_TARGET_DATE.isoformat()}')
+                        TO ('{(CONTRACT_TARGET_DATE + timedelta(days=1)).isoformat()}')
             """
         )
     )
@@ -585,7 +593,14 @@ def _cleanup_contract_probe(test_db_session, *, service_id, review_id) -> None:
 
 
 def _insert_contract_rows(test_db_session, service_id, review_id) -> None:
-    reviewed_at = datetime(2026, 5, 2, 9, 30, tzinfo=timezone.utc)
+    reviewed_at = datetime(
+        CONTRACT_TARGET_DATE.year,
+        CONTRACT_TARGET_DATE.month,
+        CONTRACT_TARGET_DATE.day,
+        9,
+        30,
+        tzinfo=timezone.utc,
+    )
     test_db_session.execute(
         text(
             """
@@ -708,7 +723,14 @@ def _insert_readiness_upstream_rows(
     review_id,
     platform_review_id: str,
 ) -> None:
-    reviewed_at = datetime(2026, 5, 3, 9, 30, tzinfo=timezone.utc)
+    reviewed_at = datetime(
+        READINESS_TARGET_DATE.year,
+        READINESS_TARGET_DATE.month,
+        READINESS_TARGET_DATE.day,
+        9,
+        30,
+        tzinfo=timezone.utc,
+    )
     connection.execute(
         text(
             """

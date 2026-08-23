@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import text
@@ -10,14 +10,19 @@ from uuid6 import uuid7
 from src.pipeline.steps import run_aggregate, run_post_aggregate_validation
 
 
-SUCCESS_TARGET_DATE = date(2026, 5, 10)
-WARNING_ONLY_TARGET_DATE = date(2026, 5, 11)
-PENDING_BATCH_TARGET_DATE = date(2026, 5, 12)
-FAILED_REVIEW_TARGET_DATE = date(2026, 5, 13)
-MISSING_MAPPING_TARGET_DATE = date(2026, 5, 14)
-ORPHAN_TARGET_DATE = date(2026, 5, 15)
-MART_MISSING_TARGET_DATE = date(2026, 5, 16)
-COUNT_MISMATCH_TARGET_DATE = date(2026, 5, 17)
+# 대상 날짜는 오늘 기준 상대값이어야 한다. GoldAggregator 는 적재 직후
+# _drop_old_partitions() 로 date.today() - retention_days(기본 14) 이전 파티션을
+# DROP 하므로, 고정 날짜를 쓰면 시간이 지난 뒤 방금 쓴 파티션이 같은 실행 안에서
+# 사라진다. 오프셋은 마트 테스트 전체가 1~13 을 나눠 쓴다(파일 간 날짜 충돌 방지).
+_TODAY = date.today()
+SUCCESS_TARGET_DATE = _TODAY - timedelta(days=4)
+WARNING_ONLY_TARGET_DATE = _TODAY - timedelta(days=5)
+PENDING_BATCH_TARGET_DATE = _TODAY - timedelta(days=6)
+FAILED_REVIEW_TARGET_DATE = _TODAY - timedelta(days=7)
+MISSING_MAPPING_TARGET_DATE = _TODAY - timedelta(days=8)
+ORPHAN_TARGET_DATE = _TODAY - timedelta(days=9)
+MART_MISSING_TARGET_DATE = _TODAY - timedelta(days=10)
+COUNT_MISMATCH_TARGET_DATE = _TODAY - timedelta(days=11)
 
 
 @pytest.mark.requires_db
