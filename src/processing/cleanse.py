@@ -6,6 +6,7 @@ Issue #14: Implement Review Data Cleansing Pipeline (Bronze to Silver)
 from collections import defaultdict
 from datetime import date as DateType
 import json
+from pathlib import Path
 import re
 import time
 from typing import Any, Dict, List
@@ -18,6 +19,13 @@ import pyarrow as pa
 
 from src.utils.logger import get_logger
 from src.utils.minio_client import MinIOClient
+
+
+# 정제 사전 경로. 정제기를 구동하는 쪽(scripts/cleanse_reviews.py, 파이프라인
+# cleanse 단계)이 각자 경로를 들고 있으면 한쪽만 옮겼을 때 조용히 갈라진다.
+_DICTIONARY_DIR = Path(__file__).resolve().parents[2] / 'config' / 'dictionaries'
+SYNONYMS_PATH = str(_DICTIONARY_DIR / 'synonyms.json')
+PROFANITY_PATH = str(_DICTIONARY_DIR / 'profanity.json')
 
 
 # =========================================================
