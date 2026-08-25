@@ -57,7 +57,7 @@ def run_preprocess(batch_size: int = 100, limit: int | None = None, config_path:
     return RunResult(step="preprocess", status="failed", message=msg)
 
 
-def run_cleanse(target_date: str | None = None) -> RunResult:
+def run_cleanse(target_date: str | None = None, config_path: str | None = None) -> RunResult:
     """Run Bronze-to-Silver cleansing step (replaces the deprecated preprocess step).
 
     scripts/cleanse_reviews.py 와 같은 경로를 탄다. 날짜를 생략하면 그 스크립트와
@@ -82,7 +82,9 @@ def run_cleanse(target_date: str | None = None) -> RunResult:
     def _run():
         pipeline = ReviewCleaningPipeline(
             minio_client=MinIOClient(),
-            db_connector=DatabaseConnector(),
+            db_connector=(
+                DatabaseConnector(config_path) if config_path is not None else DatabaseConnector()
+            ),
             synonyms_path=SYNONYMS_PATH,
             profanity_path=PROFANITY_PATH,
         )
@@ -348,7 +350,7 @@ def run_steps(
     step_funcs: dict[str, Callable[[], RunResult]] = {
         "crawl": lambda: run_crawl(config_path),
         "load": lambda: run_load(batch_size=batch_size, config_path=config_path),
-        "cleanse": lambda: run_cleanse(target_date),
+        "cleanse": lambda: run_cleanse(target_date=target_date, config_path=config_path),
         "preprocess": lambda: run_preprocess(batch_size=batch_size, limit=limit, config_path=config_path),
         "features": lambda: run_extract_features(batch_size=batch_size, limit=limit, config_path=config_path),
         "action": lambda: run_action_analysis(batch_size=batch_size, limit=limit, config_path=config_path),

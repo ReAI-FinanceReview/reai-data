@@ -138,9 +138,10 @@ def test_help_step_options_match_registry():
 def test_run_steps_passes_target_date_to_cleanse(mock_run_cleanse):
     mock_run_cleanse.return_value = RunResult(step="cleanse", status="success")
 
-    run_steps(["cleanse"], target_date="2025-01-15")
+    run_steps(["cleanse"], target_date="2025-01-15", config_path="config/custom.yml")
 
-    assert mock_run_cleanse.call_args.args[0] == "2025-01-15"
+    assert mock_run_cleanse.call_args.kwargs["target_date"] == "2025-01-15"
+    assert mock_run_cleanse.call_args.kwargs["config_path"] == "config/custom.yml"
 
 
 @patch("src.utils.minio_client.MinIOClient")
@@ -154,6 +155,26 @@ def test_run_cleanse_defaults_to_yesterday(mock_pipeline, mock_db, mock_minio):
     assert mock_pipeline.return_value.run.call_args.kwargs["target_date"] == (
         date.today() - timedelta(days=1)
     )
+
+
+@patch("src.utils.minio_client.MinIOClient")
+@patch("src.utils.db_connector.DatabaseConnector")
+@patch("src.processing.cleanse.ReviewCleaningPipeline")
+def test_run_cleanse_forwards_config_path_to_db_connector(mock_pipeline, mock_db, mock_minio):
+    """--config 를 준 실행에서 cleanse 만 기본 설정 파일로 다른 DB 를 보면 안 된다."""
+    result = run_cleanse(target_date="2025-01-15", config_path="config/custom.yml")
+
+    assert result.status == "success", result.as_dict()
+    assert mock_db.call_args.args == ("config/custom.yml",)
+
+
+@patch("src.utils.minio_client.MinIOClient")
+@patch("src.utils.db_connector.DatabaseConnector")
+@patch("src.processing.cleanse.ReviewCleaningPipeline")
+def test_run_cleanse_without_config_path_uses_connector_default(mock_pipeline, mock_db, mock_minio):
+    run_cleanse(target_date="2025-01-15")
+
+    assert mock_db.call_args.args == ()
 
 
 def test_run_cleanse_rejects_invalid_target_date():
