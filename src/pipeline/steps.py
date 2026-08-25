@@ -1,7 +1,7 @@
 """Pipeline step wrappers used by CLI and Airflow."""
 import warnings
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from src.utils.logger import get_logger
@@ -55,6 +55,42 @@ def run_preprocess(batch_size: int = 100, limit: int | None = None, config_path:
     warnings.warn(msg, DeprecationWarning, stacklevel=2)
     logger.warning(msg)
     return RunResult(step="preprocess", status="failed", message=msg)
+
+
+def run_cleanse(target_date: str | None = None, config_path: str | None = None) -> RunResult:
+    """Run Bronze-to-Silver cleansing step (replaces the deprecated preprocess step).
+
+    scripts/cleanse_reviews.py 와 같은 경로를 탄다. 날짜를 생략하면 그 스크립트와
+    동일하게 어제를 처리한다 — 크롤이 전날치를 뒤늦게 적재하기 때문이다.
+    """
+    from src.processing.cleanse import (
+        PROFANITY_PATH,
+        SYNONYMS_PATH,
+        ReviewCleaningPipeline,
+    )
+    from src.utils.db_connector import DatabaseConnector
+    from src.utils.minio_client import MinIOClient
+
+    if target_date is not None:
+        try:
+            parsed_date = _parse_date_arg("target_date", target_date)
+        except ValueError as exc:
+            return RunResult(step="cleanse", status="failed", message=str(exc))
+    else:
+        parsed_date = date.today() - timedelta(days=1)
+
+    def _run():
+        pipeline = ReviewCleaningPipeline(
+            minio_client=MinIOClient(),
+            db_connector=(
+                DatabaseConnector(config_path) if config_path is not None else DatabaseConnector()
+            ),
+            synonyms_path=SYNONYMS_PATH,
+            profanity_path=PROFANITY_PATH,
+        )
+        pipeline.run(target_date=parsed_date)
+
+    return _handle_step("cleanse", _run)
 
 
 def run_extract_features(batch_size: int = 100, limit: int | None = None, config_path: str | None = None) -> RunResult:
@@ -314,6 +350,7 @@ def run_steps(
     step_funcs: dict[str, Callable[[], RunResult]] = {
         "crawl": lambda: run_crawl(config_path),
         "load": lambda: run_load(batch_size=batch_size, config_path=config_path),
+        "cleanse": lambda: run_cleanse(target_date=target_date, config_path=config_path),
         "preprocess": lambda: run_preprocess(batch_size=batch_size, limit=limit, config_path=config_path),
         "features": lambda: run_extract_features(batch_size=batch_size, limit=limit, config_path=config_path),
         "action": lambda: run_action_analysis(batch_size=batch_size, limit=limit, config_path=config_path),

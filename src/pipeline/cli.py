@@ -43,11 +43,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run pipeline steps sequentially.")
     parser.add_argument(
         "--steps",
-        default="crawl,preprocess,features,action,embed",
+        # DAG(dags/financial_review_pipeline.py) 순서를 따른다. gold 는
+        # embedding/ABSA/action 을 오케스트레이션하므로 그 개별 단계를 겸한다.
+        # 날짜를 요구하는 단계(dept_assign, aggregate, post_aggregate_validate)는
+        # --target-date 없이는 의미가 없어 기본값에서 뺀다.
+        default="crawl,load,cleanse,gold",
         help=(
             "Comma-separated steps to run "
-            "(options: crawl, load, preprocess, features, action, embed, gold, "
-            "dept_assign, aggregate, post_aggregate_validate, validate)"
+            "(options: crawl, load, cleanse, features, action, embed, gold, "
+            "dept_assign, aggregate, post_aggregate_validate, validate; "
+            "preprocess is deprecated and always fails - use cleanse)"
         ),
     )
     parser.add_argument("--batch-size", type=int, default=100, help="Batch size for processing steps.")
