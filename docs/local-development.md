@@ -10,11 +10,40 @@ docker compose up -d
 
 Services:
 
-- PostgreSQL: `localhost:5432`
+- PostgreSQL: `localhost:5432` (host port; see the override below)
 - MinIO API: `localhost:9000`
 - MinIO Console: `http://localhost:9001`
 
 The `minio-init` one-shot service creates the `reai-data` bucket automatically.
+
+### Publish PostgreSQL on another host port
+
+If the host already uses 5432, override the published port with `POSTGRES_PORT`.
+The container keeps listening on 5432; the published port is what moves.
+
+```bash
+POSTGRES_PORT=5434 docker compose up -d
+```
+
+Nothing else to change. `DATABASE_URL` in `.env.local.example` reads
+`localhost:${POSTGRES_PORT:-5432}`, and `python-dotenv` resolves it from the same
+variable, so the container and the host-side connection string move together.
+That matters more than convenience: `scripts/bootstrap_db.py` opens with
+`DROP SCHEMA public CASCADE`, and a `DATABASE_URL` left pointing at 5432 would
+aim it at whatever service made you move the port in the first place.
+
+The mapping publishes on all interfaces, so anyone who can reach the host can
+reach the database with the credentials this file documents. To publish on
+loopback only, give `POSTGRES_PORT` an address as well:
+
+```bash
+POSTGRES_PORT=127.0.0.1:5434 docker compose up -d
+```
+
+`docker-compose.test.yml` has its own separate override, `TEST_POSTGRES_PORT`,
+which `tests/conftest.py` also uses to build the test database URL. The app's own
+component variable is `DB_PORT` (`src/utils/db_connector.py`), used only when
+`DATABASE_URL` is absent -- three variables, three owners, no overlap.
 
 ## Configure the app
 
@@ -27,7 +56,7 @@ uv sync
 
 Key values in `.env.local.example`:
 
-- `DATABASE_URL=postgresql+psycopg2://reai:reai@localhost:5432/reai`
+- `DATABASE_URL=postgresql+psycopg2://reai:reai@localhost:${POSTGRES_PORT:-5432}/reai`
 - `MINIO_ENDPOINT=localhost:9000`
 - `MINIO_BUCKET=reai-data`
 
