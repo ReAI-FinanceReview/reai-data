@@ -6,6 +6,7 @@ Issue #14: Implement Review Data Cleansing Pipeline (Bronze to Silver)
 from collections import defaultdict
 from datetime import date as DateType
 import json
+from pathlib import Path
 import re
 import time
 from typing import Any, Dict, List
@@ -20,15 +21,34 @@ from src.utils.logger import get_logger
 from src.utils.minio_client import MinIOClient
 
 
+# 정제 사전 경로. 정제기를 구동하는 쪽(scripts/cleanse_reviews.py, 파이프라인
+# cleanse 단계)이 각자 경로를 들고 있으면 한쪽만 옮겼을 때 조용히 갈라진다.
+_DICTIONARY_DIR = Path(__file__).resolve().parents[2] / 'config' / 'dictionaries'
+SYNONYMS_PATH = str(_DICTIONARY_DIR / 'synonyms.json')
+PROFANITY_PATH = str(_DICTIONARY_DIR / 'profanity.json')
+
+
 # =========================================================
 # 순수 텍스트 정제 함수 (Pure functions)
 # =========================================================
 
+# 전각 ASCII(U+FF01~U+FF5E) -> 반각, 전각 공백 -> 일반 공백.
+# NFKC가 해주던 변환 중 필요한 것만 명시적으로 옮겨온 표다.
+_FULLWIDTH_TO_ASCII = {code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)}
+_FULLWIDTH_TO_ASCII[0x3000] = 0x20
+
+
 def normalize_unicode(text: str) -> str:
-    """NFKC 유니코드 정규화: 한글 자모 분리 방지 + 전각→반각."""
+    """전각->반각 변환 후 NFC 정규화: 한글 음절 결합 + 호환 자모 보존.
+
+    NFKC를 쓰면 호환 자모가 초성으로 바뀐다(ㅅ U+3145 -> ᄉ U+1109). 그러면 'ㅅㅂ'
+    같은 초성 욕설이 사전과 매칭되지 않고 형태소 분석도 깨진다. NFC는 그 매핑을
+    하지 않으므로 초성 표기가 원형 그대로 남는다. 다만 NFC는 전각->반각도 하지
+    않으므로, 그 변환만 _FULLWIDTH_TO_ASCII 로 따로 적용한다.
+    """
     if not text:
         return text
-    return unicodedata.normalize('NFKC', text)
+    return unicodedata.normalize('NFC', text.translate(_FULLWIDTH_TO_ASCII))
 
 
 def remove_emojis(text: str) -> str:

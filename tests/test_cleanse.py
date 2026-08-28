@@ -30,8 +30,14 @@ from src.processing.cleanse import (
 def test_normalize_unicode_fullwidth_to_ascii():
     assert normalize_unicode('１２３') == '123'
 
+def test_normalize_unicode_preserves_compatibility_jamo():
+    # 호환 자모는 원형으로 남아야 한다. NFKC 는 ㅅ(U+3145)을 초성 ᄉ(U+1109)으로
+    # 바꿔 버려 profanity 사전의 초성 표기가 구조적으로 매칭 불가가 된다 (#91).
+    assert normalize_unicode('\u3145\u3142') == '\u3145\u3142'
+    assert normalize_unicode('\u3145발') == '\u3145발'
+
 def test_normalize_unicode_hangul_composed():
-    # NFKC should compose decomposed hangul
+    # NFC 는 분해된 한글 자모를 음절로 결합해야 한다
     # 'ㄱ' + 'ㅏ' + 'ㄱ' decomposed form
     decomposed = '\u1100\u1161\u11A8'
     result = normalize_unicode(decomposed)
@@ -191,6 +197,24 @@ def test_cleaner_profanity_masking(tmp_synonyms, tmp_profanity):
     result = cleaner.clean('욕설1 진짜 별로야')
     assert '[SLANG]' in result
     assert '욕설1' not in result
+
+
+@pytest.fixture
+def tmp_profanity_chosung(tmp_path):
+    # 초성 표기 비속어. 정규화가 호환 자모를 초성으로 바꾸면 매칭되지 않는다.
+    data = {"\u3145\u3142": "[PROFANITY]"}
+    (tmp_path / "profanity_chosung.json").write_text(json.dumps(data, ensure_ascii=False))
+    return str(tmp_path / "profanity_chosung.json")
+
+
+def test_cleaner_masks_chosung_profanity(tmp_synonyms, tmp_profanity_chosung):
+    # #91 회귀 가드: 정규화가 호환 자모를 보존해야 초성 비속어가 탐지된다.
+    cleaner = ReviewCleaner(
+        synonyms_path=tmp_synonyms, profanity_path=tmp_profanity_chosung
+    )
+    result = cleaner.clean('\u3145\u3142 진짜 안됨')
+    assert '[PROFANITY]' in result
+    assert '\u3145\u3142' not in result
 
 
 def test_cleaner_full_pipeline(tmp_synonyms, tmp_profanity):

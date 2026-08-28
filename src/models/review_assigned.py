@@ -3,7 +3,10 @@
 This module defines the ReviewAssigned model for final department assignment results.
 """
 
-from sqlalchemy import Column, Text, Integer, DateTime, BigInteger, Float, Boolean, ForeignKey, ARRAY
+from sqlalchemy import (
+    ARRAY, BigInteger, Boolean, Column, DateTime, Float, ForeignKey,
+    Integer, Text, UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
@@ -18,6 +21,12 @@ class ReviewAssigned(Base):
     """
     __tablename__ = 'reviews_assigned'
 
+    # 리비전 20260813_0002. 재실행이 같은 행을 UPSERT 하도록 하고, 규칙/LLM 배정
+    # 결과가 서로를 덮어쓰지 않게 배정기까지 포함해 유일성을 건다.
+    __table_args__ = (
+        UniqueConstraint('review_id', 'assigner', name='uq_reviews_assigned_review_id_assigner'),
+    )
+
     assigned_id = Column(
         BigInteger,
         primary_key=True,
@@ -29,6 +38,22 @@ class ReviewAssigned(Base):
         ForeignKey('review_master_index.review_id'),
         nullable=False,
         comment='리뷰 ID (FK to review_master_index)'
+    )
+    assigner = Column(
+        Text,
+        nullable=False,
+        server_default='rule',
+        comment='배정기 식별자 (rule, llm) - 같은 리뷰에 배정기별 1행'
+    )
+    # 배정 코드(src/gold/dept_assigner.py)는 이 컬럼을 채우지 않는다. 리뷰 1건은
+    # aspect 를 N 개 낳는데 이 컬럼은 UNIQUE 라 리뷰-aspect 를 1:1 로 강제한다 —
+    # N 개 중 하나를 골라 넣으면 근거가 임의로 정해지고, 두 aspect 를 가진 리뷰
+    # 두 건이 같은 aspect_id 를 고르면 UNIQUE 가 배정 자체를 막는다. 배정 근거는
+    # assignment_reason 텍스트로 남긴다.
+    review_feature_id = Column(
+        BigInteger,
+        unique=True,
+        comment='특성 추출된 리뷰 ID (review_aspects.aspect_id) - 현재 배정 코드는 채우지 않음'
     )
     assigned_dept = Column(
         ARRAY(Text),
