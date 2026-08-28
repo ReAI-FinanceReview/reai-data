@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -10,6 +11,20 @@ def load_compose():
     compose_path = ROOT / "docker-compose.yml"
     assert compose_path.exists(), "docker-compose.yml must exist for local development"
     return yaml.safe_load(compose_path.read_text())
+
+
+def compose_postgres_host_port_default() -> str:
+    """Read the default host port from the compose postgres port mapping.
+
+    Returns "5432" for a ``${POSTGRES_PORT:-5432}:5432`` mapping.
+    """
+    compose = load_compose()
+    mapping = compose["services"]["postgres"]["ports"][0]
+    host_side = mapping.rsplit(":", 1)[0]
+
+    match = re.fullmatch(r"\$\{POSTGRES_PORT:-(\d+)\}", host_side)
+    assert match, f"postgres host port must stay overridable via POSTGRES_PORT: {mapping!r}"
+    return match.group(1)
 
 
 def read_env_template(path: str) -> dict[str, str]:
@@ -36,7 +51,10 @@ def test_local_dev_compose_declares_postgres_and_minio():
 def test_postgres_and_minio_ports_are_exposed_for_host_use():
     compose = load_compose()
 
-    assert compose["services"]["postgres"]["ports"] == ["5432:5432"]
+    # Overridable for hosts that already use 5432, and still expands to the
+    # original 5432 when POSTGRES_PORT is unset.
+    assert compose["services"]["postgres"]["ports"] == ["${POSTGRES_PORT:-5432}:5432"]
+    assert compose_postgres_host_port_default() == "5432"
     assert compose["services"]["minio"]["ports"] == ["9000:9000", "9001:9001"]
 
 
@@ -54,6 +72,14 @@ def test_local_env_template_uses_localhost_endpoints():
     assert env["DATABASE_URL"] == "postgresql+psycopg2://reai:reai@localhost:5432/reai"
     assert env["MINIO_ENDPOINT"] == "localhost:9000"
     assert env["MINIO_BUCKET"] == "reai-data"
+
+
+def test_local_env_template_database_port_matches_compose_default():
+    """A drift between the compose default port and the template connection
+    string leaves anyone who copies the template unable to reach the database."""
+    env = read_env_template(".env.local.example")
+
+    assert f"@localhost:{compose_postgres_host_port_default()}/" in env["DATABASE_URL"]
 
 
 def test_local_docs_explain_compose_startup():

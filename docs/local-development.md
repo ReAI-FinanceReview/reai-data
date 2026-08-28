@@ -16,6 +16,20 @@ Services:
 
 The `minio-init` one-shot service creates the `reai-data` bucket automatically.
 
+### Publish PostgreSQL on another host port
+
+If the host already uses 5432, override the published port with `POSTGRES_PORT`.
+The container keeps listening on 5432; only the host side moves.
+
+```bash
+POSTGRES_PORT=5434 docker compose up -d
+```
+
+Python entrypoints run from the host, so update the `DATABASE_URL` port in your
+`.env` to match. `docker-compose.test.yml` has its own separate override,
+`TEST_POSTGRES_PORT`, which `tests/conftest.py` also uses to build the test
+database URL.
+
 ## Configure the app
 
 Create a local env file from `.env.local.example`.
@@ -27,7 +41,7 @@ uv sync
 
 Key values in `.env.local.example`:
 
-- `DATABASE_URL=postgresql+psycopg2://reai:reai@localhost:5432/reai`
+- `DATABASE_URL=postgresql+psycopg2://reai:reai@localhost:5432/reai` (match `POSTGRES_PORT` if you changed it)
 - `MINIO_ENDPOINT=localhost:9000`
 - `MINIO_BUCKET=reai-data`
 
