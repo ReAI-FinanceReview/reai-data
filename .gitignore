@@ -215,6 +215,9 @@ $RECYCLE.BIN/
 # Markdown files
 *.md
 !README.md
+# AGENTS.md is guidance committed per directory. The negation is unanchored, so it also
+# un-ignores AGENTS.md under directories that have no rule of their own -- keep those below.
+!AGENTS.md
 
 # SQL
 *.sql
@@ -227,6 +230,9 @@ $RECYCLE.BIN/
 
 # Logs and data
 logs/
+node_modules/
+.omc/
+.gjc/
 data/
 
 # Git worktrees
