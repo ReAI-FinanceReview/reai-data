@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # src/crawlers
 
@@ -45,7 +45,7 @@ identical records; `tests/test_bronze_loading.py` covers the Parquet → DB hand
 (monkeypatched scraper) plus `sample_app_id_file` — use them instead of hitting live stores.
 
 ```bash
-TEST_DATABASE_URL="postgresql://testuser:testpass@localhost:5433/testdb" \
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
   PYTHONPATH=. uv run pytest tests/test_crawler_consistency.py tests/test_bronze_loading.py -q
 ```
 

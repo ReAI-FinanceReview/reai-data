@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # sql
 
@@ -36,8 +36,10 @@ None.
 - Seed files must stay idempotent — `scripts/bootstrap_db.py` re-applies them after a schema reset.
 - Migrations own structural change; seed SQL owns business catalog refreshes. Data movement belongs
   in a migration only when it is inseparable from a schema change.
-- `schema_v2.sql`, `schema_v3.sql`, and `organizations_data.sql` are currently unreferenced by any
-  code, config, or doc. Treat them as history; do not delete them as part of an unrelated change.
+- `schema_v2.sql`, `schema_v3.sql`, and `organizations_data.sql` are unreferenced by code and docs.
+  Two of them are still named in `.gitignore` (`!schema_v3.sql`, `!organizations_data.sql`), which is
+  what keeps them tracked against the blanket `*.sql` rule — do not prune those negations while
+  treating the files as history. Do not delete them as part of an unrelated change.
 
 ### Testing Requirements
 `tests/test_database_schema.py` asserts the objects `schema_v4.sql` creates, and
@@ -45,7 +47,7 @@ None.
 covers the seed-order and verification-count contract.
 
 ```bash
-TEST_DATABASE_URL="postgresql://testuser:testpass@localhost:5433/testdb" \
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
   PYTHONPATH=. uv run pytest tests/test_database_schema.py tests/test_bootstrap_db.py -q
 ```
 

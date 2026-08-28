@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # docs
 
@@ -34,7 +34,8 @@ decorative: several are asserted by tests (`tests/test_airflow_readiness_docs.py
 - When behavior changes, update the owning doc in the same change: schema → `schema-management.md`,
   DAG contract → `airflow-continuous-load-readiness.md`, mart columns →
   `backend-datamart-contract.md`, failure handling → `pipeline-failure-policy.md`.
-- Docs here are written in English; commands are always shown rooted at the repo with
+- Docs here are written in English, except `airflow-continuous-load-readiness.md`, which is mixed
+  Korean/English; commands are always shown rooted at the repo with
   `PYTHONPATH=. uv run …`.
 - Evidence documents record real runs. Do not fabricate or pre-fill row counts, timestamps, or
   crawl results.
@@ -42,7 +43,7 @@ decorative: several are asserted by tests (`tests/test_airflow_readiness_docs.py
 ### Testing Requirements
 ```bash
 PYTHONPATH=. uv run pytest tests/test_airflow_readiness_docs.py -q
-TEST_DATABASE_URL="postgresql://testuser:testpass@localhost:5433/testdb" \
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
   PYTHONPATH=. uv run pytest tests/test_backend_datamart_serving_readiness.py -q
 ```
 

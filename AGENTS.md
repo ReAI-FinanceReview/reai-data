@@ -1,4 +1,4 @@
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # reai-data
 
@@ -59,11 +59,11 @@ The suite tests against real PostgreSQL — SQLite substitutes and mocked databa
 
 ```bash
 docker compose -f docker-compose.test.yml up -d test-postgres
-TEST_DATABASE_URL="postgresql://testuser:testpass@localhost:5433/testdb" \
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
   PYTHONPATH=. uv run pytest
 ```
 
-Markers registered in `tests/conftest.py:619`: `slow`, `integration`, `requires_db`.
+Markers registered in `tests/conftest.py:662`: `slow`, `integration`, `requires_db`.
 CI (`.github/workflows/bootstrap-db.yml`) runs only the bootstrap-focused subset:
 `tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py tests/test_alembic_config.py`.
 
@@ -89,5 +89,18 @@ boundary is documented in `docs/backend-datamart-contract.md`.
 `sentence-transformers` + `transformers` + `torch` (embeddings/LLM), `snorkel` (weak supervision),
 `konlpy` + `nltk` + `flashtext` + `emoji` (Korean text processing),
 `google-play-scraper` + `requests` (crawling), `uuid6`, `pyyaml`, `python-dotenv`.
+
+### Keeping These Files True
+
+- `Updated:` in the header is bumped whenever a file's content changes, formatting-only
+  edits included. `Generated:` records first authorship and stays fixed.
+- `tests/test_agents_docs.py` is the guard: it asserts the `.gitignore` negation still
+  wins, the header and MANUAL block survive, parent links resolve, `path:line` citations
+  stay inside their file, named files exist, and every directory with tracked files has
+  guidance. It catches a citation whose line number ran off the end of a file; it cannot
+  tell that a still-valid line number now points at different code, so a citation edited
+  by hand still deserves a look.
+- `tests/fixtures/` is the one directory deliberately without its own file; it is data
+  only, and `DIRS_WITHOUT_GUIDANCE` in that test records the exemption.
 
 <!-- MANUAL: Notes added below this line are preserved on regeneration -->

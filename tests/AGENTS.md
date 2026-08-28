@@ -14,7 +14,7 @@ so pgvector, enums, partitions, and constraints are all exercised. Only external
 | File | Description |
 |------|-------------|
 | `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration |
-| `test_backend_datamart_contract.py` | Backend-facing mart contract for the four Gold tables (largest suite) |
+| `test_backend_datamart_contract.py` | Backend-facing mart contract for the four Gold tables |
 | `test_backend_datamart_serving_readiness.py` | Serving-readiness evidence checks for the mart |
 | `test_post_aggregate_validation.py` | `PostAggregateValidator` checks, severities, and report shape |
 | `test_cleanse.py` | Bronze → Silver cleansing rules, dictionaries, PII masking |
@@ -37,12 +37,13 @@ so pgvector, enums, partitions, and constraints are all exercised. Only external
 | `test_bootstrap_db.py` / `test_alembic_config.py` / `test_local_dev_setup.py` / `test_ci_workflows.py` | Bootstrap, migration config, compose files, and GitHub workflow contract |
 | `test_airflow_dag_validation_wiring.py` / `test_airflow_readiness_docs.py` | DAG wiring and readiness-doc contract |
 | `test_enums.py` | Central ENUM definitions |
+| `test_agents_docs.py` | Guards for this AGENTS.md tree: ignore rules, headers, parent links, citation line ranges, and per-directory coverage |
 
 ## Subdirectories
 
-| Directory | Description |
-|-----------|-------------|
-| `fixtures/` | Checked-in sample inputs — currently `dept_labels.sample.csv` for the assignment evaluator |
+| Directory | Purpose |
+|-----------|---------|
+| `fixtures/` | Checked-in sample inputs — currently `dept_labels.sample.csv` for the assignment evaluator. Data-only, so it deliberately has no `AGENTS.md` of its own |
 
 The test modules themselves stay flat: one `test_<module>.py` per source module.
 
@@ -60,12 +61,12 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
 - Do not introduce database mocks or in-memory substitutes to make a test pass — the suite's value
   is that it runs against the real schema.
 - There is no `[tool.pytest.ini_options]` section in `pyproject.toml`; markers are registered in
-  `pytest_configure` at `conftest.py:619`.
+  `pytest_configure` at `conftest.py:662`.
 
 ### Testing Requirements
 ```bash
 docker compose -f docker-compose.test.yml up -d test-postgres
-TEST_DATABASE_URL="postgresql://testuser:testpass@localhost:5433/testdb" \
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
   PYTHONPATH=. uv run pytest            # full suite
 PYTHONPATH=. uv run pytest -m "not requires_db"   # DB-free subset
 ```

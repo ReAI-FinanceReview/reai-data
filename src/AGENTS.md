@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # src
 
@@ -48,7 +48,7 @@ Each subpackage has matching tests under `tests/` (e.g. `src/gold/aggregator.py`
 `tests/test_gold_aggregator.py`). Most require a live PostgreSQL:
 
 ```bash
-TEST_DATABASE_URL="postgresql://testuser:testpass@localhost:5433/testdb" \
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
   PYTHONPATH=. uv run pytest tests/test_gold_aggregator.py -q
 ```
 

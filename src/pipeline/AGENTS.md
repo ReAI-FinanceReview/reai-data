@@ -51,7 +51,7 @@ None.
 
 ### Testing Requirements
 ```bash
-TEST_DATABASE_URL="postgresql://testuser:testpass@localhost:5433/testdb" PYTHONPATH=. uv run pytest \
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" PYTHONPATH=. uv run pytest \
   tests/test_pipeline_steps.py tests/test_cli_parsing.py tests/test_pipeline_cli_validation.py \
   tests/test_pipeline_failures.py tests/test_post_aggregate_validation.py \
   tests/test_pipeline_integration.py -q

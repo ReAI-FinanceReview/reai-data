@@ -1,13 +1,13 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # src/models
 
 ## Purpose
 SQLAlchemy ORM models mirroring `sql/schema_v4.sql`, organized by medallion layer. One declarative
-`Base` and one central ENUM module keep type definitions from drifting across files. Some models
-(`Review`, `ReviewPreprocessed`) exist mainly as structural documentation of tables whose payload
-actually lives in Parquet.
+`Base` and one central ENUM module keep type definitions from drifting across files. `Review` and
+`ReviewPreprocessed` also have a Parquet copy of their payload, but the PostgreSQL rows are real and
+queried — Gold analysis reads `ReviewPreprocessed` directly.
 
 ## Key Files
 
@@ -22,13 +22,13 @@ actually lives in Parquet.
 | `organizations.py` | `Organization` — 114-row org hierarchy. **Docstring claims `ltree`, but the DDL has none**: `org_id` is plain `TEXT` with hyphen levels (`1`, `1-1`, `10-5`). ltree was removed in issue #32 |
 | `review_master_index.py` | `ReviewMasterIndex` — central hub across Bronze → Silver → Gold; carries `processing_status`, `retry_count`, `error_message` |
 | `ingestion_batch.py` | `IngestionBatch` — Parquet batch ingestion state and batch-level DLQ |
-| `review.py` | `Review` — Bronze raw review (stored as Parquet, not queried in DB) |
-| `review_preprocessed.py` | `ReviewPreprocessed` — Silver cleansed text (stored as Parquet) |
+| `review.py` | `Review` — Bronze raw review. Also written to Parquet; the ORM path is used by `src/gold/action_analyzer.py:221` |
+| `review_preprocessed.py` | `ReviewPreprocessed` — Silver cleansed text, and the primary DB input to Gold analysis (`src/gold/absa_analyzer.py:143,405`). Also written to Parquet |
 | `review_embedding.py` | `ReviewEmbedding` — pgvector embedding column |
 | `review_aspects.py` | `ReviewAspect` — ABSA keyword/sentiment/category rows |
 | `review_action_analysis.py` | `ReviewActionAnalysis` — Snorkel actionability results and LLM summary |
 | `llm_analysis_log.py` | `LLMAnalysisLog` — LLM call audit trail with JSONB payload |
-| `review_assigned.py` | `ReviewAssigned` — final department assignment (Gold) |
+| `review_assigned.py` | `ReviewAssigned` — department assignment (Gold). Carries the `assigner` discriminator (`Text`, `server_default='rule'`) and `UniqueConstraint('review_id', 'assigner')`, so rule and LLM results coexist per review for comparison |
 | `fact_service_review_daily.py` | `FactServiceReviewDaily` — service × platform × date review counts and averages |
 | `fact_service_aspect_daily.py` | `FactServiceAspectDaily` — service × date × keyword mentions and sentiment |
 | `fact_category_radar_scores.py` | `FactCategoryRadarScores` — service × date × `CategoryType` radar scores (USABILITY / STABILITY / DESIGN / CUSTOMER_SUPPORT / SPEED) |
@@ -56,7 +56,7 @@ None.
 
 ### Testing Requirements
 ```bash
-TEST_DATABASE_URL="postgresql://testuser:testpass@localhost:5433/testdb" \
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
   PYTHONPATH=. uv run pytest tests/test_enums.py tests/test_database_schema.py -q
 ```
 Any model change must also be checked against `sql/schema_v4.sql` and the mart contract in

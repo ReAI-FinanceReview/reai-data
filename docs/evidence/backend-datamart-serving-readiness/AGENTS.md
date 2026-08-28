@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # docs/evidence/backend-datamart-serving-readiness
 
@@ -34,7 +34,7 @@ The PR-safe portion of the proof:
 
 ```bash
 docker compose -f docker-compose.test.yml up -d test-postgres
-TEST_DATABASE_URL="postgresql://testuser:testpass@localhost:5433/testdb" \
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
   PYTHONPATH=. uv run pytest tests/test_backend_datamart_contract.py tests/test_backend_datamart_serving_readiness.py -q
 ```
 The manual portion uses the real entrypoint:

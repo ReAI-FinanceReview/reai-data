@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # src/utils
 
@@ -18,7 +18,7 @@ stay domain-agnostic so stage code can depend on them without coupling.
 | `parquet_writer.py` | `ParquetWriter`: `write_batch`, `write_single`, `append_to_partition`, `list_partitions`, `get_partition_stats`, plus `read_parquet_to_schemas()` for reading back into Pydantic models |
 | `path_resolver.py` | `PathResolver` with `${VARIABLE}` substitution over `config/paths.yml`; helpers `get_resolver()`, `resolve_path()`, `get_medallion_paths()` |
 | `file_manager.py` | Local filesystem helper (`ensure_directories`, `get_output_path`, `save_reviews`, `backup_file`, `list_files`, `cleanup_old_files`) for the legacy CSV output path |
-| `data_processor.py` | Pandas-based transforms between raw review dicts and `Review` records |
+| `data_processor.py` | `DataProcessor` static methods over plain dicts and DataFrames: `flatten_entry`, `normalize_appstore_review`, `normalize_playstore_review`, `create_unified_dataframe`, `clean_text`, `extract_app_info`. It imports `Review` for typing only and never builds ORM rows |
 | `__init__.py` | Package version marker only (`1.0.0`) — import modules directly |
 
 ## Subdirectories

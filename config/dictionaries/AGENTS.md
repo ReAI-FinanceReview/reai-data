@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # config/dictionaries
 
@@ -12,9 +12,9 @@ model provides, so cleansing output quality is directly tied to their contents.
 
 | File | Description |
 |------|-------------|
-| `synonyms.json` | Flat JSON map of surface form → canonical form, mostly banking-app brand variants (`"신한 슈퍼 SOL": "신한슈퍼솔"`). Wired in as `SYNONYMS_PATH` by `scripts/cleanse_reviews.py:30` |
-| `profanity.json` | Flat JSON map of term → tag; tags are `[PROFANITY]`, `[STRONG_NEG]`, `[THREAT]`. Wired in as `PROFANITY_PATH` by `scripts/cleanse_reviews.py:31` |
-| `stopwords.txt` | 51 low-signal Korean tokens, one per line (`앱`, `어플`, `하다`, …). Currently not read by any code path |
+| `synonyms.json` | Flat JSON map of surface form → canonical form, mostly banking-app brand variants (`"신한 슈퍼 SOL": "신한슈퍼솔"`). Wired in as `SYNONYMS_PATH` by `src/processing/cleanse.py:27` |
+| `profanity.json` | Flat JSON map of term → tag; tags are `[PROFANITY]`, `[CONTEMPT]`, `[STRONG_NEG]`, `[THREAT]`. Wired in as `PROFANITY_PATH` by `src/processing/cleanse.py:28` |
+| `stopwords.txt` | 52 low-signal Korean tokens, one per line (the file has no trailing newline, so `wc -l` under-reports by one) (`앱`, `어플`, `하다`, …). Currently not read by any code path |
 
 ## Subdirectories
 None.
