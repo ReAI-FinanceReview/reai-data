@@ -22,13 +22,9 @@ load_dotenv()
 from src.utils.minio_client import MinIOClient
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
-from src.processing.cleanse import ReviewCleaningPipeline
+from src.processing.cleanse import PROFANITY_PATH, SYNONYMS_PATH, ReviewCleaningPipeline
 
 logger = get_logger(__name__)
-
-_CONFIG_DIR = _PROJECT_ROOT / 'config' / 'dictionaries'
-SYNONYMS_PATH = str(_CONFIG_DIR / 'synonyms.json')
-PROFANITY_PATH = str(_CONFIG_DIR / 'profanity.json')
 
 
 def main():

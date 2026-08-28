@@ -7,7 +7,7 @@ assert backend-facing mart rows and semantics from PostgreSQL.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -19,7 +19,10 @@ from uuid6 import uuid7
 from src.pipeline import cli as pipeline_cli
 
 
-TARGET_DATE = date(2026, 5, 3)
+# 오늘 기준 상대값. 파이프라인 CLI aggregate 는 적재 직후 파티션 TTL(기본 14일)을
+# 적용하므로, 고정 날짜는 시간이 지나면 방금 쓴 파티션이 같은 실행 안에서 DROP 된다.
+# 오프셋 1~13 은 마트 테스트 전체가 나눠 쓴다(파일 간 날짜 충돌 방지).
+TARGET_DATE = date.today() - timedelta(days=1)
 SERVICE_NAME = "Serving Readiness Bank"
 PLATFORM_REVIEW_PREFIX = "serving-readiness"
 MANUAL_PROOF_DOC = (
@@ -262,9 +265,10 @@ def _seed_analyzed_pipeline_rows(
     platform_review_ids,
 ) -> None:
     reviewed_at = [
-        datetime(2026, 5, 3, 9, 0, tzinfo=timezone.utc),
-        datetime(2026, 5, 3, 10, 0, tzinfo=timezone.utc),
-        datetime(2026, 5, 3, 11, 0, tzinfo=timezone.utc),
+        datetime(
+            TARGET_DATE.year, TARGET_DATE.month, TARGET_DATE.day, hour, 0, tzinfo=timezone.utc
+        )
+        for hour in (9, 10, 11)
     ]
     session.execute(
         text(

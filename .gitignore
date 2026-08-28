@@ -235,3 +235,5 @@ data/
 
 # Visual Studio Code
 .vscode/
+# 라벨 워크시트 (실제 리뷰 원문 포함 — 커밋 금지)
+data/labels/

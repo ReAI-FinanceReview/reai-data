@@ -6,6 +6,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 
+from tests.conftest import _apply_migrations
+
 from src import bootstrap_db as bootstrap_module
 from src.bootstrap_db import (
     BootstrapError,
@@ -49,6 +51,11 @@ def _reset_schema(test_db_engine) -> None:
         raw_conn.commit()
     finally:
         raw_conn.close()
+
+    # schema_v4.sql 은 베이스라인 스냅샷이므로 이후 리비전의 컬럼/제약이 없다.
+    # 세션 스코프 스키마를 여기서 되돌리면서 마이그레이션을 빠뜨리면, 이 파일
+    # 이후에 실행되는 테스트가 그 컬럼을 못 찾는다.
+    _apply_migrations(test_db_engine.url.render_as_string(hide_password=False))
 
 
 def _execute_sql_file(test_db_engine, sql_path: Path) -> None:

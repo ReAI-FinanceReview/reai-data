@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -9,8 +9,11 @@ from sqlalchemy import text
 from src.pipeline import cli as pipeline_cli
 
 
-CLI_WARNING_TARGET_DATE = date(2026, 5, 18)
-CLI_FAILURE_TARGET_DATE = date(2026, 5, 19)
+# 오늘 기준 상대값. 고정 날짜는 파티션 TTL(기본 14일) 밖으로 밀려나 마트 검증이
+# 시간이 지난 뒤 깨진다. 오프셋 1~13 은 마트 테스트 전체가 나눠 쓴다.
+_TODAY = date.today()
+CLI_WARNING_TARGET_DATE = _TODAY - timedelta(days=12)
+CLI_FAILURE_TARGET_DATE = _TODAY - timedelta(days=13)
 
 
 def _target_datetime(target_date: date) -> datetime:

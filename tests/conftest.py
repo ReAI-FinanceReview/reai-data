@@ -79,14 +79,55 @@ def test_db_engine(test_db_url: str):
     engine.dispose()
 
 
+def _apply_migrations(database_url: str) -> None:
+    """베이스라인 이후 리비전을 테스트 스키마에도 적용한다.
+
+    schema_v4.sql 은 Alembic 베이스라인 스냅샷이므로 그 이후 리비전이 추가한
+    컬럼/제약은 여기에 없다. 프로덕션과 CI(.github/workflows/bootstrap-db.yml)는
+    `alembic upgrade head` 를 돌리므로, 테스트 DB 만 베이스라인에 머물면 마이그레이션이
+    추가한 컬럼을 쓰는 코드가 테스트에서만 깨진다.
+
+    이미 head 인 DB 에 다시 부르면 아무것도 하지 않는다. 두 호출부가 지금은
+    DROP SCHEMA 직후에만 부르지만, 그 규율이 깨지면 리비전이 두 번 적용되어
+    ADD COLUMN 이 DuplicateColumn 으로 죽는다. 안전성을 호출부가 아니라 이
+    함수가 보장하게 한다.
+    """
+    from alembic import command
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine
+
+    config = Config(str(Path(__file__).parent.parent / "alembic.ini"))
+    config.attributes["database_url"] = database_url
+
+    head = ScriptDirectory.from_config(config).get_current_head()
+    engine = create_engine(database_url, poolclass=NullPool)
+    try:
+        with engine.connect() as connection:
+            current = MigrationContext.configure(connection).get_current_revision()
+    finally:
+        engine.dispose()
+    if current == head:
+        return
+
+    command.stamp(config, "20260430_0001", purge=True)
+    command.upgrade(config, "head")
+
+
 @pytest.fixture(scope="session")
-def test_db_schema(test_db_engine):
-    """Initialize test database schema from sql/schema_v4.sql.
+def test_db_schema(test_db_engine, test_db_url):
+    """Initialize test database schema from sql/schema_v4.sql, then migrate to head.
 
     This fixture:
     1. Drops the public schema and recreates it (clean slate)
     2. Executes schema_v4.sql to create all 19 tables, 6 ENUMs, and indexes
-    3. Runs once per test session
+    3. Applies Alembic revisions after the baseline (see _apply_migrations)
+    4. Runs once per test session
+
+    Step 3 exists because schema_v4.sql is the frozen baseline snapshot, so
+    columns and constraints added by later revisions are absent from it, while
+    production and CI both run `alembic upgrade head`.
 
     Note: Local Docker tests require a pgvector-capable PostgreSQL 17 image.
     uuid-ossp is filtered out because Python uuid7() is used for UUID generation
@@ -124,6 +165,8 @@ def test_db_schema(test_db_engine):
         raw_conn.commit()
     finally:
         raw_conn.close()
+
+    _apply_migrations(test_db_url)
 
     yield
 
