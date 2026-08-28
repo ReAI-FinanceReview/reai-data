@@ -13,17 +13,27 @@ def load_compose():
     return yaml.safe_load(compose_path.read_text())
 
 
+# Both of Compose's default forms, which are also the two spellings python-dotenv
+# resolves in the env template. Searching rather than matching the whole host side
+# keeps the bind-address form (127.0.0.1:${POSTGRES_PORT:-5432}:5432) valid.
+POSTGRES_PORT_DEFAULT = re.compile(r"\$\{POSTGRES_PORT:?-(\d+)\}")
+
+
 def compose_postgres_host_port_default() -> str:
     """Read the default host port from the compose postgres port mapping.
 
-    Returns "5432" for a ``${POSTGRES_PORT:-5432}:5432`` mapping.
+    Returns "5432" for ``${POSTGRES_PORT:-5432}:5432`` and for the
+    bind-address form ``127.0.0.1:${POSTGRES_PORT:-5432}:5432``.
     """
     compose = load_compose()
     mapping = compose["services"]["postgres"]["ports"][0]
     host_side = mapping.rsplit(":", 1)[0]
 
-    match = re.fullmatch(r"\$\{POSTGRES_PORT:-(\d+)\}", host_side)
-    assert match, f"postgres host port must stay overridable via POSTGRES_PORT: {mapping!r}"
+    match = POSTGRES_PORT_DEFAULT.search(host_side)
+    assert match, (
+        "postgres must publish through a POSTGRES_PORT default so the host port "
+        f"can be moved off 5432: {mapping!r}"
+    )
     return match.group(1)
 
 
@@ -51,9 +61,12 @@ def test_local_dev_compose_declares_postgres_and_minio():
 def test_postgres_and_minio_ports_are_exposed_for_host_use():
     compose = load_compose()
 
-    # Overridable for hosts that already use 5432, and still expands to the
-    # original 5432 when POSTGRES_PORT is unset.
-    assert compose["services"]["postgres"]["ports"] == ["${POSTGRES_PORT:-5432}:5432"]
+    # Deliberately not an exact-string match: overridability and the default are
+    # asserted by compose_postgres_host_port_default(), so a later hardening edit
+    # such as binding to 127.0.0.1 does not have to fight this line.
+    postgres_ports = compose["services"]["postgres"]["ports"]
+    assert len(postgres_ports) == 1
+    assert postgres_ports[0].endswith(":5432")
     assert compose_postgres_host_port_default() == "5432"
     assert compose["services"]["minio"]["ports"] == ["9000:9000", "9001:9001"]
 
@@ -69,17 +82,30 @@ def test_minio_images_use_pinned_official_release_tags():
 def test_local_env_template_uses_localhost_endpoints():
     env = read_env_template(".env.local.example")
 
-    assert env["DATABASE_URL"] == "postgresql+psycopg2://reai:reai@localhost:5432/reai"
+    # The port is not pinned here; test_local_env_template_derives_its_database_port
+    # owns that contract so it can fail on its own.
+    assert env["DATABASE_URL"].startswith("postgresql+psycopg2://reai:reai@localhost:")
+    assert env["DATABASE_URL"].endswith("/reai")
     assert env["MINIO_ENDPOINT"] == "localhost:9000"
     assert env["MINIO_BUCKET"] == "reai-data"
 
 
-def test_local_env_template_database_port_matches_compose_default():
-    """A drift between the compose default port and the template connection
-    string leaves anyone who copies the template unable to reach the database."""
+def test_local_env_template_derives_its_database_port():
+    """The template must take its port from POSTGRES_PORT rather than hardcode one.
+
+    A hardcoded port aims host-side tools at whatever already occupies it, and
+    bootstrap_db.py opens with DROP SCHEMA public CASCADE. python-dotenv resolves
+    the same ${VAR:-default} form Compose publishes with, so one variable moves
+    the container and the connection string together.
+    """
     env = read_env_template(".env.local.example")
 
-    assert f"@localhost:{compose_postgres_host_port_default()}/" in env["DATABASE_URL"]
+    match = POSTGRES_PORT_DEFAULT.search(env["DATABASE_URL"])
+    assert match, (
+        "DATABASE_URL must take its port from POSTGRES_PORT, not a literal: "
+        f"{env['DATABASE_URL']!r}"
+    )
+    assert match.group(1) == compose_postgres_host_port_default()
 
 
 def test_local_docs_explain_compose_startup():
