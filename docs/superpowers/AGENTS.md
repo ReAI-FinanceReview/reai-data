@@ -12,6 +12,7 @@ are already merged.
 None at this level.
 
 ## Subdirectories
+
 | Directory | Purpose |
 |-----------|---------|
 | `plans/` | Date-stamped implementation plans with checkbox task lists (see `plans/AGENTS.md`) |

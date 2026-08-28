@@ -10,6 +10,7 @@ Load stage: the bridge from Bronze Parquet to PostgreSQL. Reads `ingestion_batch
 only place where crawled objects become durable DB state.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `batch_loader.py` | `BatchLoader.load_pending_batches(limit=100)` — batch selection, Parquet read, dedup against existing reviews, `review_master_index` insert, batch status transition, retry/dead-letter handling |

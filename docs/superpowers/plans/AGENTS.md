@@ -8,6 +8,7 @@ Task-by-task implementation plans written before a change was executed. Each pla
 breaks it into checkbox steps an agent or engineer can work through in order.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `2026-04-18-aggregate-range-backfill.md` | Plan to restore single-date scheduled aggregation and add an explicit date-range backfill utility for manual repair. Implemented as `GoldAggregator.run_range()` |

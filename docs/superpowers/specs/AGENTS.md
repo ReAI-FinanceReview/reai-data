@@ -9,6 +9,7 @@ the plans in `../plans/`: a spec explains *why* the design is what it is, the pl
 steps.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `2026-04-18-aggregate-range-backfill-design.md` | Restores `gold_aggregate` to `target_date='{{ ds }}'` so scheduled runs aggregate only the logical execution date, and keeps a bounded manual backfill utility for exceptional repair |

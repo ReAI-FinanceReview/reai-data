@@ -10,6 +10,7 @@ whitespace collapsing, PII masking, profanity tagging, and synonym canonicalizat
 written as Silver Parquet and the review's `processing_status` advances `RAW → CLEANED`.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `cleanse.py` | Text primitives (`normalize_unicode`, `remove_emojis`, `reduce_repeated_chars`, `remove_special_chars`, `normalize_whitespace`, `mask_pii`), the `ReviewCleaner.clean(text)` rule engine, Parquet IO (`load_bronze_parquet`, `write_silver_parquet`), and `ReviewCleaningPipeline.run(target_date)` |

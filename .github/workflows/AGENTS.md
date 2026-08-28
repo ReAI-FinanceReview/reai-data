@@ -9,6 +9,7 @@ an empty schema through Alembic, and through the local bootstrap script — and 
 same Alembic head.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `bootstrap-db.yml` | Job `bootstrap-db` on `pull_request`, `push: main`, and `workflow_dispatch`. Runs a `pgvector/pgvector:pg17` service (SHA-pinned) on 5432, Python 3.12 + `uv sync --frozen`, then: single-head check → drop/recreate `public` + `alembic upgrade head` → `alembic current --check-heads` → `scripts/bootstrap_db.py` → head check again → focused pytest subset |

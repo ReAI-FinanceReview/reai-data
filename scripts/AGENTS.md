@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # scripts
 
@@ -10,12 +10,15 @@ Airflow `BashOperator` tasks, CI jobs, and humans share the same code paths as t
 business logic belongs here.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `run_pipeline.py` | Unified entrypoint; delegates to `src.pipeline.cli.main` (`--steps`, `--target-date`, ...) |
 | `crawl_reviews.py` | Crawl step only → Bronze Parquet in MinIO + `ingestion_batch` PENDING rows |
 | `load_reviews.py` | Load step only → pending Parquet batches into `review_master_index` (RAW) |
 | `cleanse_reviews.py` | Bronze → Silver cleansing CLI; `--date YYYY-MM-DD`, wires `config/dictionaries/{synonyms,profanity}.json` |
+| `assign_dept.py` | Department assignment step only; `--date YYYY-MM-DD` for one day, `--backfill` for the explicit full sweep, `--assigner rule\|llm`, `--limit` |
+| `eval_assignment.py` | Scores rows already in `reviews_assigned` against a human-labeled CSV; assigns nothing itself. `--labels`, `--json` |
 | `preprocess_reviews.py` | Deprecated preprocess step; `run_preprocess` now warns and returns failure |
 | `extract_features.py` | ABSA feature extraction step only (Gold) |
 | `generate_embeddings.py` | Embedding generation step only (Gold); optional model name argument |
@@ -30,8 +33,8 @@ None.
 - Always invoke with the repo root as CWD: `PYTHONPATH=. uv run python scripts/<name>.py`.
 - Scripts must stay thin. New behavior goes into `src/pipeline/steps.py` or the owning module, and
   the script only parses arguments and maps the `RunResult` status to an exit code.
-- `dags/financial_review_pipeline.py` invokes `crawl_reviews.py`, `load_reviews.py`, and
-  `cleanse_reviews.py` by path — renaming or moving a script breaks the DAG.
+- `dags/financial_review_pipeline.py` invokes `crawl_reviews.py`, `load_reviews.py`,
+  `cleanse_reviews.py`, and `assign_dept.py` by path — renaming or moving a script breaks the DAG.
 - File paths in `cleanse_reviews.py` are derived from `_PROJECT_ROOT / 'config' / 'dictionaries'`;
   keep new paths derived that way rather than hardcoded absolute strings.
 

@@ -11,6 +11,7 @@ database bootstrap and migration path on every pull request and on pushes to `ma
 None at this level.
 
 ## Subdirectories
+
 | Directory | Purpose |
 |-----------|---------|
 | `workflows/` | GitHub Actions workflow definitions (see `workflows/AGENTS.md`) |

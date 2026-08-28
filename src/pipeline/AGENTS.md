@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # src/pipeline
 
@@ -10,10 +10,11 @@ with fail-fast semantics, post-aggregate DB validation, and the operational quer
 retry-exhausted work.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
-| `steps.py` | `RunResult` dataclass and the step wrappers `run_crawl`, `run_load`, `run_preprocess` (deprecated), `run_extract_features`, `run_action_analysis`, `run_generate_embeddings`, `run_gold`, `run_aggregate`, `run_post_aggregate_validation`, plus `run_steps()` which stops at the first non-success step |
-| `cli.py` | argparse entrypoint: `--steps`, `--batch-size`, `--limit`, `--model-name`, `--config`, `--target-date`. Loads `.env` if present, logs each `RunResult`, returns 1 on the first failure |
+| `steps.py` | `RunResult` dataclass and the step wrappers `run_crawl`, `run_load`, `run_cleanse`, `run_preprocess` (deprecated), `run_extract_features`, `run_action_analysis`, `run_generate_embeddings`, `run_gold`, `run_dept_assign`, `run_aggregate`, `run_post_aggregate_validation`, plus `run_steps()` which stops at the first non-success step |
+| `cli.py` | argparse entrypoint: `--steps` (default `crawl,load,cleanse,gold`, mirroring the DAG order), `--batch-size`, `--limit`, `--model-name`, `--config`, `--target-date`. Loads `.env` if present, logs each `RunResult`, returns 1 on the first failure |
 | `post_aggregate_validation.py` | `PostAggregateValidator.validate(target_date)` → `ValidationReport` of `ValidationCheck`s with severity `failure` / `warning` / `report` |
 | `failures.py` | `fetch_review_dead_letters()` (FAILED with `retry_count >= 3`) and `fetch_batch_dead_letters()` (`ingestion_batch` `DEAD_LETTER`), plus the equivalent raw SQL constants |
 | `validation.py` | `make_count_validation(input_count, output_count)` — simple row-count delta metrics |
@@ -37,6 +38,9 @@ None.
   `--target-date` at parse time via `date.fromisoformat`.
 - `run_aggregate` rejects `target_date` combined with `start_date`/`end_date`, and requires
   `start_date`/`end_date` together. Keep those guards.
+- `run_dept_assign` requires a target date and must keep requiring one. Letting it default would
+  turn a single CLI line into a paid LLM sweep over every `ANALYZED` row; the full backfill stays
+  reachable only through an explicit `scripts/assign_dept.py --backfill`.
 - Heavy modules are imported **inside** each step function so that, for example, `run_crawl` works
   without torch installed. Do not hoist those imports to module scope.
 - `run_preprocess` is deprecated: it emits a `DeprecationWarning` and returns failure. Route

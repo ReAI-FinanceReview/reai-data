@@ -1,18 +1,21 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # alembic/versions
 
 ## Purpose
-Migration revision scripts. Currently holds only the schema v4 baseline, which replays the frozen
+Migration revision scripts. The chain starts at the schema v4 baseline, which replays the frozen
 `sql/schema_v4.sql` snapshot so an empty database can be built entirely through Alembic while
-existing databases are stamped at the same revision instead of re-running the DDL.
+existing databases are stamped at the same revision instead of re-running the DDL. Later revisions
+carry real schema changes on top of it.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `20260430_0001_schema_v4_baseline.py` | Revision `20260430_0001`, `down_revision = None`. `upgrade()` executes the sibling `.sql` file through the raw DBAPI cursor; `downgrade()` intentionally raises |
 | `20260430_0001_schema_v4_baseline.sql` | The immutable DDL snapshot matching `sql/schema_v4.sql` at the time Alembic was introduced |
+| `20260813_0002_reviews_assigned_review_id_unique.py` | Revision `20260813_0002`, `down_revision = 20260430_0001`. Adds the `assigner` discriminator column (default `'rule'` for pre-existing rows) and the `(review_id, assigner)` unique constraint that makes assignment re-runs UPSERT. It deliberately does not delete pre-existing duplicates — the constraint fails instead, leaving the choice to the data owner |
 
 ## Subdirectories
 None.

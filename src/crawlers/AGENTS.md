@@ -10,6 +10,7 @@ payload into `AppReviewSchema` records, writes them as Parquet to MinIO, and reg
 stage's job (`src/loaders/`), which keeps crawl failures isolated from DB state.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `base_crawler.py` | `BaseCrawler(ABC)`: config/app-id loading, request pacing, `collect_app_records()`, `save_crawl_batch()`, `save_daily_batch()`, `run()` template. Owns Parquet format consistency for all stores |

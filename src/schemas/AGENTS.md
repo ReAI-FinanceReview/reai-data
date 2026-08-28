@@ -9,11 +9,13 @@ MinIO/NAS. Keeping validation here (rather than in the ORM) means Bronze and Sil
 schema-checked at write time even though no database constraint protects them.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `__init__.py` | Convenience re-exports of `AppReviewSchema` and `ReviewPreprocessedSchema` |
 
 ## Subdirectories
+
 | Directory | Purpose |
 |-----------|---------|
 | `parquet/` | Bronze/Silver Parquet schemas and shared UUID/timestamp helpers (see `parquet/AGENTS.md`) |

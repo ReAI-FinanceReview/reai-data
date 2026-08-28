@@ -9,6 +9,7 @@ domain knowledge (bank/app brand variants, abusive language, low-signal tokens) 
 model provides, so cleansing output quality is directly tied to their contents.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `synonyms.json` | Flat JSON map of surface form → canonical form, mostly banking-app brand variants (`"신한 슈퍼 SOL": "신한슈퍼솔"`). Wired in as `SYNONYMS_PATH` by `scripts/cleanse_reviews.py:30` |

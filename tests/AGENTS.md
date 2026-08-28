@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # tests
 
@@ -10,6 +10,7 @@ so pgvector, enums, partitions, and constraints are all exercised. Only external
 (App Store RSS, google-play-scraper) are stubbed.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration |
@@ -22,6 +23,8 @@ so pgvector, enums, partitions, and constraints are all exercised. Only external
 | `test_gold_aggregator.py` | Fact table + serving mart UPSERT semantics |
 | `test_gold_embedding_generator.py` | Embedding generation and persistence |
 | `test_gold_orchestrator.py` | CLEANED → ANALYZED/FAILED state machine and retry policy |
+| `test_gold_dept_assigner.py` | Rule and LLM department assigners, org-path expansion, tie-breaking |
+| `test_assign_dept_cli.py` / `test_eval_assignment_cli.py` | Argument contracts for `scripts/assign_dept.py` and `scripts/eval_assignment.py` |
 | `test_batch_loader.py` | Pending/failed batch consumption into `review_master_index` |
 | `test_bronze_loading.py` | Bronze Parquet → DB load integration |
 | `test_crawler_consistency.py` | App Store vs Play Store crawler output parity |
@@ -36,7 +39,12 @@ so pgvector, enums, partitions, and constraints are all exercised. Only external
 | `test_enums.py` | Central ENUM definitions |
 
 ## Subdirectories
-None — the suite is intentionally flat, one `test_<module>.py` per source module.
+
+| Directory | Description |
+|-----------|-------------|
+| `fixtures/` | Checked-in sample inputs — currently `dept_labels.sample.csv` for the assignment evaluator |
+
+The test modules themselves stay flat: one `test_<module>.py` per source module.
 
 ## For AI Agents
 

@@ -9,6 +9,7 @@ category, plus an exclusion list. These files define the pipeline's scope: 63 ap
 stores, matching the seed catalog in `sql/apps_data.sql`.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `appstore_app_ids.txt` | Numeric App Store IDs, one per line, sectioned by bank type (`### 특수 은행 ###` etc.). Referenced by `crawler_config.yml → app_ids.appstore` |

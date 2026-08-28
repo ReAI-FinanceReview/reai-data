@@ -9,6 +9,7 @@ Parquet IO, and environment-aware path resolution. Nothing here knows about revi
 stay domain-agnostic so stage code can depend on them without coupling.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `logger.py` | Singleton `Logger` loading `config/logging_config.yml`; creates `logs/{crawler,error,debug}` and falls back to `basicConfig` if the YAML fails. Public entry: `get_logger(name)` |

@@ -10,6 +10,7 @@ SQLAlchemy ORM models mirroring `sql/schema_v4.sql`, organized by medallion laye
 actually lives in Parquet.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `base.py` | The single `declarative_base()` every model inherits |

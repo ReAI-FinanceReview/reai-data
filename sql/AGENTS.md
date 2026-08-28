@@ -10,6 +10,7 @@ services, physical apps, and their SCD Type 2 metadata) that local and CI databa
 pipeline can run. Older schema snapshots are kept for history only.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `schema_v4.sql` | Current baseline DDL (2026-03-05): Bronze → Silver → Gold → data mart, pgvector, partitioned `srv_daily_review_list`. Applied by `src/bootstrap_db.py`, mirrored by Alembic revision `20260430_0001` |

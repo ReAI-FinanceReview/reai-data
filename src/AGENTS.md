@@ -11,11 +11,13 @@ aggregation) with `pipeline/` providing the step dispatcher, CLI, and post-aggre
 `models/`, `schemas/`, and `utils/` are shared infrastructure used by every stage.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `bootstrap_db.py` | Local DB bootstrap: reset `public` schema, apply `sql/schema_v4.sql`, load seed SQL, stamp `20260430_0001`, upgrade to head, verify seed counts (39/63/63). Refuses non-local hosts |
 
 ## Subdirectories
+
 | Directory | Purpose |
 |-----------|---------|
 | `crawlers/` | App Store / Play Store crawling → Bronze Parquet + `ingestion_batch` PENDING (see `crawlers/AGENTS.md`) |

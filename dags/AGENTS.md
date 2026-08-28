@@ -1,14 +1,15 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # dags
 
 ## Purpose
-Airflow DAG definitions. Holds the single daily production DAG that chains the six pipeline stages
+Airflow DAG definitions. Holds the single daily production DAG that chains the seven pipeline stages
 by shelling out to the repository's own scripts and step functions, so the DAG contains scheduling
 and timeout policy only — never analytics logic.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `financial_review_pipeline.py` | DAG `financial_review_etl_pipeline`: `@daily`, `catchup=False`, 3 retries / 5 min, tags `finance, etl, reviews, nlp` |
@@ -20,7 +21,10 @@ None.
 
 ### Working In This Directory
 - Task chain and timeouts: `crawl_reviews` (2h) → `load_reviews` (30m) → `cleanse_reviews` (1h) →
-  `gold_analyze` (3h) → `gold_aggregate` (1h) → `post_aggregate_validate` (15m).
+  `gold_analyze` (3h) → `dept_assign` (1h) → `gold_aggregate` (1h) → `post_aggregate_validate` (15m).
+- `dept_assign` is the one task that overrides the DAG-level 3 retries with `retries=1`. The step
+  keeps its own per-row `try_number` ceiling, so a fourth attempt would find zero eligible rows and
+  exit successfully — a persistent failure would report green.
 - All tasks are `BashOperator`s built from `PROJECT_ROOT` and `PYTHON_BIN` environment variables
   (defaults: the DAG file's parent-of-parent, and `${PROJECT_ROOT}/.venv/bin/python`). Keep paths
   derived from those variables — no absolute paths.

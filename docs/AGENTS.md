@@ -9,6 +9,7 @@ decorative: several are asserted by tests (`tests/test_airflow_readiness_docs.py
 `tests/test_backend_datamart_serving_readiness.py`), so they are part of the delivery contract.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `backend-datamart-contract.md` | Physical table contract for the four backend-facing Gold tables; the authoritative interface for dashboard consumers |
@@ -19,6 +20,7 @@ decorative: several are asserted by tests (`tests/test_airflow_readiness_docs.py
 | `pipeline-failure-policy.md` | Where failures are recorded per stage in schema v4 (batch DLQ vs review-level FAILED) |
 
 ## Subdirectories
+
 | Directory | Purpose |
 |-----------|---------|
 | `evidence/` | Release evidence artifacts for readiness claims (see `evidence/AGENTS.md`) |

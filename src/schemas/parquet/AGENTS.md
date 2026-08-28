@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # src/schemas/parquet
 
@@ -9,9 +9,10 @@ mirror the corresponding `schema_v4.sql` table structures and are the only valid
 get, since no database constraint applies to object storage.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
-| `app_review.py` | `AppReviewSchema` (alias `AppReview`) — Bronze raw review: `app_id`, `platform_type`, `platform_review_id`, `review_text`, `rating`, `reviewed_at`. Mirrors `app_reviews` |
+| `app_review.py` | `AppReviewSchema` (alias `AppReview`) — Bronze raw review. Full field contract: `review_id`, `app_id`, `platform_type`, `platform_review_id`, `reviewer_name`, `review_text`, `rating`, `reviewed_at`, `created_at`, `is_reply`, `reply_comment`. Mirrors `app_reviews` |
 | `review_preprocessed.py` | `ReviewPreprocessedSchema` (alias `ReviewPreprocessed`) — Silver cleansed review: `review_id`, `platform_review_id`, `refined_text`. Mirrors `reviews_preprocessed` |
 | `base.py` | Shared helpers: `generate_uuid_v7()` (time-sortable IDs for better index locality), `utc_now()`, `to_utc()` |
 | `__init__.py` | Layer-annotated re-exports plus a doctest-style usage example |

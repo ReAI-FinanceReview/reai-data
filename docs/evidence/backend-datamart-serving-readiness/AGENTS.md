@@ -10,6 +10,7 @@ storage proof and live crawl results are recorded here by hand because they depe
 responses and credentials that are out of scope for CI.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `README.md` | States the automated-vs-manual proof boundary and what a release must record here |

@@ -9,11 +9,13 @@ baseline: existing databases are stamped at revision `20260430_0001`, empty data
 by `alembic upgrade head`, and every later schema change is a hand-written revision.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `env.py` | Migration runner. Loads `.env`, resolves the DB URL, keeps `target_metadata = None` (autogenerate deliberately disabled), configures `compare_type` / `compare_server_default`, and runs offline or online with `NullPool` |
 
 ## Subdirectories
+
 | Directory | Purpose |
 |-----------|---------|
 | `versions/` | Revision scripts, starting from the schema v4 baseline (see `versions/AGENTS.md`) |

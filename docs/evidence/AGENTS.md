@@ -12,6 +12,7 @@ production-like data.
 None at this level — evidence lives in per-claim subdirectories.
 
 ## Subdirectories
+
 | Directory | Purpose |
 |-----------|---------|
 | `backend-datamart-serving-readiness/` | Evidence path for backend datamart serving readiness (see `backend-datamart-serving-readiness/AGENTS.md`) |

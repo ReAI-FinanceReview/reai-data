@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-10T08:45:46Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
 
 # config
 
@@ -9,6 +9,7 @@ app-id lists, and Korean NLP dictionaries. Secrets never live here — they come
 environment variables, and `paths.yml` only references them via `${VARIABLE}` placeholders.
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `crawler_config.yml` | Default config for every component (`config_path` default). Global delay/retry/timeout, per-store country/language/page counts, output settings, and app-id file locations |
@@ -17,6 +18,7 @@ environment variables, and `paths.yml` only references them via `${VARIABLE}` pl
 | `logging.yml` | Near-identical logging config that no code references; `logging_config.yml` is the live one |
 
 ## Subdirectories
+
 | Directory | Purpose |
 |-----------|---------|
 | `app_ids/` | Store-specific app-id lists and the exclusion list (see `app_ids/AGENTS.md`) |
@@ -47,9 +49,10 @@ PYTHONPATH=. uv run pytest tests/test_path_resolver.py -q
 ```
 
 ### Common Patterns
-YAML is loaded with `yaml.safe_load` and accessed defensively via
-`config.get('section', {}).get('key', <default>)`, so a missing key degrades to a coded default
-instead of raising.
+YAML is loaded with `yaml.safe_load`. Call sites that read through
+`config.get('section', {}).get('key', <default>)` degrade to a coded default when a key is missing.
+`PathResolver.get_path()` is the deliberate exception: it fails fast with a `KeyError` listing the
+available keys (`src/utils/path_resolver.py:188-192`) rather than inventing a path.
 
 ## Dependencies
 

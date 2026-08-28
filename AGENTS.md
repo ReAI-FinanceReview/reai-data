@@ -12,6 +12,7 @@ The medallion flow is orchestrated either by the Airflow DAG in `dags/` or by th
 Parquet, while state, index, and analytics tables live in PostgreSQL (pgvector).
 
 ## Key Files
+
 | File | Description |
 |------|-------------|
 | `pyproject.toml` | Project metadata and dependencies; requires Python >= 3.12, dev group is `pytest` |
@@ -26,6 +27,7 @@ Parquet, while state, index, and analytics tables live in PostgreSQL (pgvector).
 | `.gitignore` | Ignores `.env`, `data/`, `logs/` among others |
 
 ## Subdirectories
+
 | Directory | Purpose |
 |-----------|---------|
 | `src/` | All application code: crawlers, processing, gold analytics, loaders, models, pipeline (see `src/AGENTS.md`) |
