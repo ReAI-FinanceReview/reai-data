@@ -181,11 +181,22 @@ def test_agents_key_files_exist(path: Path):
     assert not missing, f"named in a table but absent from {_rel(path.parent)}: {missing}"
 
 
+def _in_agent_tool_dir(path: Path) -> bool:
+    # .gitignore keeps AGENTS.md ignored under root dot-directories other than .github/
+    # (agent-tool state such as .claude/). Requiring one there would be unsatisfiable,
+    # so those directories are outside this rule rather than a CI failure for any PR
+    # that commits, say, a shared .claude/settings.json.
+    top = path.parts[0]
+    return top.startswith(".") and top != ".github"
+
+
 def test_every_directory_with_tracked_files_has_guidance(tracked_files):
     """A new directory must bring its own AGENTS.md, or be listed as an exception."""
     documented = {_rel(p.parent) for p in _agents_files()}
     with_code = {
-        Path(f).parent.as_posix() for f in tracked_files if Path(f).parent != Path(".")
+        Path(f).parent.as_posix()
+        for f in tracked_files
+        if Path(f).parent != Path(".") and not _in_agent_tool_dir(Path(f))
     }
     with_code.add(".")
 
