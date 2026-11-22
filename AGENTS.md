@@ -1,4 +1,4 @@
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # reai-data
 
@@ -95,11 +95,12 @@ boundary is documented in `docs/backend-datamart-contract.md`.
 - `Updated:` in the header is bumped whenever a file's content changes, formatting-only
   edits included. `Generated:` records first authorship and stays fixed.
 - `tests/test_agents_docs.py` is the guard: it asserts the `.gitignore` negation still
-  wins, the header and MANUAL block survive, parent links resolve, `path:line` citations
-  stay inside their file, named files exist, and every directory with tracked files has
-  guidance. It catches a citation whose line number ran off the end of a file; it cannot
-  tell that a still-valid line number now points at different code, so a citation edited
-  by hand still deserves a look.
+  wins, the header is present and the MANUAL marker appears once as the last line, each
+  parent link points at the nearest `AGENTS.md` above it, every `path:line` citation
+  resolves to a file and every line number in it (ranges and lists included) is inside
+  that file, every name in a table's first column exists, and every directory with
+  tracked files has guidance. It cannot tell that a still-valid line number now points at
+  different code, so a citation edited by hand still deserves a look.
 - `tests/fixtures/` is the one directory deliberately without its own file; it is data
   only, and `DIRS_WITHOUT_GUIDANCE` in that test records the exemption.
 
