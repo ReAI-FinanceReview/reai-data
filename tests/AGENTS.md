@@ -84,7 +84,7 @@ Markers: `slow`, `integration`, `requires_db`. The marker is not applied to ever
 database fixtures, so `-m "not requires_db"` still selects some of them, and two
 (`tests/test_bootstrap_db.py:123` and `:180`) run `DROP SCHEMA public CASCADE` on whatever database
 `test_db_url` reaches. To run it without touching any database, point `TEST_DATABASE_URL` at an
-unreachable address; the tests that need one then skip or error.
+unreachable address; those two tests then skip.
 
 ### Common Patterns
 - `@pytest.mark.requires_db` on anything touching PostgreSQL (not yet applied consistently; see
