@@ -74,6 +74,20 @@ def test_postgres_and_minio_ports_are_exposed_for_host_use():
     assert compose["services"]["minio"]["ports"] == ["9000:9000", "9001:9001"]
 
 
+def test_postgres_bind_address_has_its_own_optional_variable():
+    """POSTGRES_HOST_IP is the documented way to publish on loopback only.
+
+    It prefixes the host port through ${VAR:+...}, so unset it renders exactly as
+    before (all interfaces), and it stays out of POSTGRES_PORT, which also fills
+    the DATABASE_URL port. Dropping or renaming it would leave a documented
+    `POSTGRES_HOST_IP=127.0.0.1` silently ignored.
+    """
+    mapping = load_compose()["services"]["postgres"]["ports"][0]
+    host_side = mapping.rsplit(":", 1)[0]
+
+    assert host_side.startswith("${POSTGRES_HOST_IP:+${POSTGRES_HOST_IP}:}"), mapping
+
+
 def test_minio_images_use_pinned_official_release_tags():
     compose = load_compose()
 

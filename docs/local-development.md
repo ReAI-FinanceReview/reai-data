@@ -21,11 +21,20 @@ The `minio-init` one-shot service creates the `reai-data` bucket automatically.
 If the host already uses 5432, move the published port with `POSTGRES_PORT` in
 `.env`. The container keeps listening on 5432; only the published port moves.
 
+An `.env` copied from an older template has no `POSTGRES_PORT` line and hardcodes
+5432 in `DATABASE_URL`. Replace that `DATABASE_URL` line with the template's
+`POSTGRES_PORT` and `DATABASE_URL` lines first.
+
 ```bash
-cp .env.local.example .env   # skip if you already have one
-# in .env: POSTGRES_PORT=5434
+[ -f .env ] || cp .env.local.example .env
+# edit the existing line in .env: POSTGRES_PORT=5434
+grep -c '^POSTGRES_PORT=' .env   # must print 1
 docker compose up -d
 ```
+
+Keep exactly one `POSTGRES_PORT` line, above `DATABASE_URL`. A second line appended
+at the end is the one Compose publishes with, while `DATABASE_URL` has already
+taken the first; `scripts/bootstrap_db.py` refuses to run when the two disagree.
 
 Set it in `.env`, not as a one-off prefix such as
 `POSTGRES_PORT=5434 docker compose up -d`. Compose reads `.env` from the project
@@ -38,9 +47,6 @@ with `DROP SCHEMA public CASCADE`, and a `DATABASE_URL` left pointing at 5432
 would aim it at whatever service made you move the port in the first place. A
 `POSTGRES_PORT` exported in your shell overrides `.env` for Compose and the app
 alike.
-
-An `.env` copied from an older template hardcodes 5432 in `DATABASE_URL`. Replace
-that line with the template's `POSTGRES_PORT` and `DATABASE_URL` lines.
 
 `POSTGRES_PORT` takes a bare port number, because it also fills the port in
 `DATABASE_URL`. The bind address has its own variable.
@@ -62,10 +68,11 @@ component variable is `DB_PORT` (`src/utils/db_connector.py`), used only when
 
 ## Configure the app
 
-Create a local env file from `.env.local.example`.
+Create a local env file from `.env.local.example`, unless you already made one
+for the port override above.
 
 ```bash
-cp .env.local.example .env
+[ -f .env ] || cp .env.local.example .env
 uv sync
 ```
 
