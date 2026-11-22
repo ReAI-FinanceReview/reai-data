@@ -25,6 +25,10 @@ SQL_FILE_ORDER = (
 )
 
 LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "::1"}
+# docker-compose.yml publishes the local postgres on this variable's port.
+POSTGRES_PORT_ENV = "POSTGRES_PORT"
+# libpq connects to this port when a URL names none.
+POSTGRES_DEFAULT_PORT = 5432
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,35 @@ def validate_bootstrap_target(database_url: str) -> URL:
             "Use a localhost DATABASE_URL for local development."
         )
     return url
+
+
+def validate_published_port(url: URL, published_port: str | None) -> None:
+    """Refuse a DATABASE_URL whose port disagrees with POSTGRES_PORT.
+
+    docker-compose.yml publishes the local stack on POSTGRES_PORT, which Compose
+    reads from the same .env. When the two disagree -- a second POSTGRES_PORT line
+    appended below DATABASE_URL, or an older .env whose DATABASE_URL still
+    hardcodes a port -- the URL points at some other PostgreSQL, usually the one
+    that made the port move, and the next step drops its public schema.
+    """
+    if published_port is None:
+        return
+    target_port = url.port or POSTGRES_DEFAULT_PORT
+    try:
+        expected_port = int(published_port)
+    except ValueError:
+        raise BootstrapError(
+            f"{POSTGRES_PORT_ENV}={published_port!r} is not a port number; it must hold "
+            "the bare port docker-compose.yml publishes on."
+        ) from None
+    if target_port != expected_port:
+        raise BootstrapError(
+            f"Refusing to bootstrap {url.host}:{target_port}: {POSTGRES_PORT_ENV}="
+            f"{published_port!r} says the compose stack publishes elsewhere. Keep one "
+            f"{POSTGRES_PORT_ENV} line in .env, above DATABASE_URL, and derive the URL "
+            "port from it (see .env.local.example). To target another database on "
+            "purpose, pass --database-url."
+        )
 
 
 def ensure_sql_files_exist(sql_paths: Iterable[Path]) -> None:
@@ -151,7 +184,12 @@ def run_alembic_baseline_and_migrations(
 def bootstrap_database(database_url: str | None = None, *, stdout=print) -> None:
     root = get_project_root()
     resolved_url = load_database_url(root, database_url)
-    validate_bootstrap_target(resolved_url)
+    target_url = validate_bootstrap_target(resolved_url)
+    if not database_url:
+        # Only the .env path can drift from what Compose publishes; an explicit
+        # --database-url (CI, the test database) is the caller's stated target.
+        # `not` rather than `is None`: load_database_url() treats "" as absent too.
+        validate_published_port(target_url, os.getenv(POSTGRES_PORT_ENV))
 
     sql_paths = get_bootstrap_sql_paths(root)
     ensure_sql_files_exist(sql_paths)

@@ -16,6 +16,7 @@ from src.bootstrap_db import (
     get_bootstrap_sql_paths,
     is_local_database_url,
     validate_bootstrap_target,
+    validate_published_port,
 )
 
 
@@ -99,6 +100,88 @@ def test_validate_bootstrap_target_accepts_localhost_url():
 def test_validate_bootstrap_target_rejects_remote_url():
     with pytest.raises(BootstrapError):
         validate_bootstrap_target("postgresql://reai:reai@db.internal:5432/reai")
+
+
+def test_validate_published_port_accepts_matching_or_unset_port():
+    url = make_url("postgresql://reai:reai@localhost:5434/reai")
+
+    validate_published_port(url, "5434")
+    validate_published_port(url, " 05434 ")
+    validate_published_port(url, None)
+
+
+def test_validate_published_port_reads_a_portless_url_as_the_libpq_default():
+    url = make_url("postgresql://reai:reai@localhost/reai")
+
+    validate_published_port(url, str(bootstrap_module.POSTGRES_DEFAULT_PORT))
+    with pytest.raises(BootstrapError, match="POSTGRES_PORT"):
+        validate_published_port(url, str(bootstrap_module.POSTGRES_DEFAULT_PORT + 2))
+
+
+def test_validate_published_port_rejects_a_port_compose_does_not_publish():
+    url = make_url("postgresql://reai:reai@localhost:5432/reai")
+
+    with pytest.raises(BootstrapError, match="--database-url"):
+        validate_published_port(url, "5434")
+    with pytest.raises(BootstrapError, match="not a port number"):
+        validate_published_port(url, "127.0.0.1:5432")
+
+
+def _isolate_env(monkeypatch, *names: str) -> None:
+    # load_dotenv() writes os.environ directly. Registering each name with
+    # monkeypatch first makes teardown remove whatever the test loads.
+    for name in names:
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_database_env(monkeypatch):
+    # bootstrap_database() loads the repository .env into os.environ, and the
+    # published-port check reads POSTGRES_PORT from there. Without this, one
+    # test's load (or a developer's shell export) decides whether a later test
+    # is refused -- green in CI, red for anyone who moved the port.
+    _isolate_env(monkeypatch, "POSTGRES_PORT", "DATABASE_URL")
+
+
+def _env_with_port_appended(tmp_path: Path) -> Path:
+    """The template's POSTGRES_PORT/DATABASE_URL lines plus a second POSTGRES_PORT
+    appended at the end -- what Compose publishes with, after DATABASE_URL has
+    already resolved the first one."""
+    template_lines = (ROOT / ".env.local.example").read_text().splitlines()
+    kept = [line for line in template_lines if line.startswith(("POSTGRES_PORT=", "DATABASE_URL="))]
+    template_port = next(line for line in kept if line.startswith("POSTGRES_PORT=")).split("=", 1)[1]
+    moved = str(int(template_port) + 2)
+    env_path = tmp_path / ".env"
+    env_path.write_text("\n".join([*kept, f"POSTGRES_PORT={moved}"]) + "\n")
+    return env_path
+
+
+@pytest.mark.parametrize("database_url", [None, ""])
+def test_bootstrap_refuses_env_whose_url_port_drifted_from_postgres_port(
+    monkeypatch, tmp_path, database_url
+):
+    _env_with_port_appended(tmp_path)
+    # tmp_path has no sql/ directory, so even a missed refusal stops at the SQL
+    # file check, before any engine is created.
+    monkeypatch.setattr(bootstrap_module, "get_project_root", lambda: tmp_path)
+
+    # "" is checked too: load_database_url() falls back to .env for it.
+    with pytest.raises(BootstrapError, match="POSTGRES_PORT"):
+        bootstrap_module.bootstrap_database(database_url, stdout=lambda message: None)
+
+
+def test_bootstrap_explicit_database_url_skips_the_published_port_check(monkeypatch, tmp_path):
+    _env_with_port_appended(tmp_path)
+    monkeypatch.setattr(bootstrap_module, "get_project_root", lambda: tmp_path)
+
+    # The explicit URL is the caller's stated target (CI, the test database), so
+    # the run gets past the port check and stops at the missing SQL files instead.
+    with pytest.raises(BootstrapError, match="Missing bootstrap SQL files"):
+        bootstrap_module.bootstrap_database(
+            "postgresql+psycopg2://reai:reai@localhost:5433/reai",
+            stdout=lambda message: None,
+        )
 
 
 def test_build_verification_queries_check_required_seed_counts():
