@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # src/gold
 
@@ -41,7 +41,10 @@ None.
 - `_MAX_RETRY = 3` in `orchestrator.py:26` is the retry ceiling; rows past it are the review-level
   dead letters queried by `src/pipeline/failures.py`.
 - Aggregation must stay idempotent (UPSERT) — Airflow retries and manual backfills re-run the same
-  date. `srv_daily_review_list` is range-partitioned by `date`; partitions must exist beforehand.
+  date. `srv_daily_review_list` is range-partitioned by `date`: `GoldAggregator` creates the
+  partition for the date it writes (`aggregator.py:298-317`) and, after each run, drops partitions
+  older than `retention_days` (default 14, `aggregator.py:272-296`), so a backfill of an older date
+  is dropped again by the same run.
 - Scheduled runs aggregate a single date; `run_range` exists only for manual repair
   (`docs/superpowers/specs/2026-04-18-aggregate-range-backfill-design.md`).
 - ABSA yielding zero aspects must not orphan or drop mart rows — that regression is covered by the

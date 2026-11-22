@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # src/schemas/parquet
 
@@ -39,7 +39,8 @@ None.
 ```bash
 PYTHONPATH=. uv run pytest tests/test_parquet_schemas.py tests/test_parquet_writer.py -q
 ```
-`tests/test_crawler_consistency.py` also depends on this shape being identical across stores.
+No test checks that both stores emit this shape: `tests/test_crawler_consistency.py` uses stand-in
+records rather than `AppReviewSchema`.
 
 ### Common Patterns
 Pydantic v2 `BaseModel` with `ConfigDict`, `Field(default_factory=...)` for generated values, and

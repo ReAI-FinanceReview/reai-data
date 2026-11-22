@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # src/crawlers
 
@@ -39,10 +39,14 @@ None.
 - Logs in this package are Korean and use emoji markers (🍎 / 🤖 / ✅ / ❌); match that style.
 
 ### Testing Requirements
-`tests/test_crawler_consistency.py` asserts App Store and Play Store crawlers emit structurally
-identical records; `tests/test_bronze_loading.py` covers the Parquet → DB handoff.
-`tests/conftest.py` provides `mock_appstore_api` (requests_mock) and `mock_playstore_api`
-(monkeypatched scraper) plus `sample_app_id_file` — use them instead of hitting live stores.
+`tests/test_crawler_consistency.py` covers `save_daily_batch` only: the MinIO upload happens before
+the `ingestion_batch` PENDING row, a failed upload opens no DB session, and a failed commit deletes
+the uploaded object. It drives `AppStoreCrawler` with stand-in records, so no test compares App
+Store and Play Store output. `tests/test_bronze_loading.py` covers the Parquet → DB handoff.
+`tests/conftest.py` still defines `mock_appstore_api` and `mock_playstore_api`, but no test uses
+them, and `mock_appstore_api` cannot run: it depends on the `requests_mock` fixture of the
+requests-mock plugin, which is in neither `pyproject.toml` nor `uv.lock`. Using it means adding that
+dev dependency first.
 
 ```bash
 TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \

@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # scripts
 
@@ -35,8 +35,10 @@ None.
   the script only parses arguments and maps the `RunResult` status to an exit code.
 - `dags/financial_review_pipeline.py` invokes `crawl_reviews.py`, `load_reviews.py`,
   `cleanse_reviews.py`, and `assign_dept.py` by path — renaming or moving a script breaks the DAG.
-- File paths in `cleanse_reviews.py` are derived from `_PROJECT_ROOT / 'config' / 'dictionaries'`;
-  keep new paths derived that way rather than hardcoded absolute strings.
+- Dictionary paths are defined once, as `SYNONYMS_PATH` / `PROFANITY_PATH` in
+  `src/processing/cleanse.py:24-28`. `cleanse_reviews.py` imports them and uses `_PROJECT_ROOT`
+  only to put the repo on `sys.path`. Add a new dictionary path there as well, so the script and
+  the pipeline cleanse step cannot diverge.
 
 ### Testing Requirements
 No dedicated per-script tests; coverage comes from the step layer
@@ -59,6 +61,8 @@ from src.pipeline.steps import run_x  # noqa: E402
 `config/dictionaries/`.
 
 ### External
-`python-dotenv` (loading `.env` in `crawl_reviews.py`), plus whatever the delegated step imports.
+`python-dotenv`: `.env` is loaded when a `DatabaseConnector` resolves its URL
+(`src/utils/db_connector.py:16-22`), and `cleanse_reviews.py` also calls `load_dotenv()` on import;
+`crawl_reviews.py` imports it but never calls it. Plus whatever the delegated step imports.
 
 <!-- MANUAL: Notes added below this line are preserved on regeneration -->

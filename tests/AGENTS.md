@@ -1,13 +1,16 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # tests
 
 ## Purpose
-Flat pytest suite covering every pipeline stage against a **real PostgreSQL** database. There is no
-SQLite fallback and no mocked database layer — the schema is initialized from `sql/schema_v4.sql`
-so pgvector, enums, partitions, and constraints are all exercised. Only external HTTP APIs
-(App Store RSS, google-play-scraper) are stubbed.
+Flat pytest suite covering every pipeline stage. Tests that use the database fixtures run against a
+**real PostgreSQL** database — there is no SQLite fallback, and the schema is initialized from
+`sql/schema_v4.sql` so pgvector, enums, partitions, and constraints are all exercised. Many unit
+tests do replace collaborators with `MagicMock` (DB sessions in `test_gold_orchestrator.py`, MinIO
+and the DB connector in `test_crawler_consistency.py`, boto3 in `test_minio_client.py`), so a
+passing mock-based test says nothing about the real database. The HTTP stub fixtures in
+`conftest.py` are unused.
 
 ## Key Files
 
@@ -27,7 +30,7 @@ so pgvector, enums, partitions, and constraints are all exercised. Only external
 | `test_assign_dept_cli.py` / `test_eval_assignment_cli.py` | Argument contracts for `scripts/assign_dept.py` and `scripts/eval_assignment.py` |
 | `test_batch_loader.py` | Pending/failed batch consumption into `review_master_index` |
 | `test_bronze_loading.py` | Bronze Parquet → DB load integration |
-| `test_crawler_consistency.py` | App Store vs Play Store crawler output parity |
+| `test_crawler_consistency.py` | `save_daily_batch` upload → PENDING registration order and failure cleanup (App Store crawler only; no cross-store parity check) |
 | `test_database_schema.py` | Schema objects created by `schema_v4.sql` |
 | `test_parquet_schemas.py` / `test_parquet_writer.py` | Pydantic Parquet schemas and writer partitioning |
 | `test_path_resolver.py` | `${VAR}` substitution and medallion path resolution |
@@ -68,12 +71,17 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
 docker compose -f docker-compose.test.yml up -d test-postgres
 TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
   PYTHONPATH=. uv run pytest            # full suite
-PYTHONPATH=. uv run pytest -m "not requires_db"   # DB-free subset
+PYTHONPATH=. uv run pytest -m "not requires_db"   # NOT DB-free, see below
 ```
-Markers: `slow`, `integration`, `requires_db`.
+Markers: `slow`, `integration`, `requires_db`. The marker is not applied to every test that uses the
+database fixtures, so `-m "not requires_db"` still selects some of them, and two
+(`tests/test_bootstrap_db.py:123` and `:180`) run `DROP SCHEMA public CASCADE` on whatever database
+`test_db_url` reaches. To run it without touching any database, point `TEST_DATABASE_URL` at an
+unreachable address; the tests that need one then skip or error.
 
 ### Common Patterns
-- `@pytest.mark.requires_db` on anything touching PostgreSQL.
+- `@pytest.mark.requires_db` on anything touching PostgreSQL (not yet applied consistently; see
+  Testing Requirements).
 - Fixtures return live `Session` objects; assertions query through the ORM models in `src/models/`.
 - Sample crawler payloads mirror the real upstream response shapes (App Store RSS entries,
   google-play-scraper dicts) so schema drift is caught at the boundary.
@@ -85,6 +93,7 @@ Markers: `slow`, `integration`, `requires_db`.
 `config/dictionaries/`.
 
 ### External
-`pytest`, `sqlalchemy`, `uuid6`, `requests_mock` (used by `mock_appstore_api`), `pyarrow`.
+`pytest`, `sqlalchemy`, `uuid6`, `pyarrow`. `mock_appstore_api` in `conftest.py` expects the
+requests-mock plugin, which is not a dependency (see `src/crawlers/AGENTS.md`).
 
 <!-- MANUAL: Notes added below this line are preserved on regeneration -->

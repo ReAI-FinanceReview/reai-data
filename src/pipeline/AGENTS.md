@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # src/pipeline
 
@@ -38,9 +38,11 @@ None.
   `--target-date` at parse time via `date.fromisoformat`.
 - `run_aggregate` rejects `target_date` combined with `start_date`/`end_date`, and requires
   `start_date`/`end_date` together. Keep those guards.
-- `run_dept_assign` requires a target date and must keep requiring one. Letting it default would
-  turn a single CLI line into a paid LLM sweep over every `ANALYZED` row; the full backfill stays
-  reachable only through an explicit `scripts/assign_dept.py --backfill`.
+- `run_steps` requires a date for `dept_assign`: its entry passes `target_date or ""`
+  (`src/pipeline/steps.py:364-372`), so a CLI run without `--target-date` fails to parse instead of
+  becoming a paid LLM sweep over every `ANALYZED` row. Keep that guard in `run_steps`, not in
+  `run_dept_assign`: `run_dept_assign(target_date=None)` is the backfill path that
+  `scripts/assign_dept.py --backfill` calls (`scripts/assign_dept.py:54-60`).
 - Heavy modules are imported **inside** each step function so that, for example, `run_crawl` works
   without torch installed. Do not hoist those imports to module scope.
 - `run_preprocess` is deprecated: it emits a `DeprecationWarning` and returns failure. Route

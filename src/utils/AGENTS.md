@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # src/utils
 
@@ -29,8 +29,11 @@ None.
 ### Working In This Directory
 - These modules must not import from `src/crawlers/`, `src/gold/`, `src/loaders/`, or
   `src/processing/`. Utilities depend downward only (`src/models/`, `src/schemas/`).
-- Paths come from `config/paths.yml` through `PathResolver`, driven by `PARQUET_BASE_PATH`. Do not
-  hardcode `data/`, `/mnt/nas/...`, or bucket prefixes at call sites.
+- `PathResolver` resolves `config/paths.yml`, but no production code uses it — only
+  `tests/test_path_resolver.py`. MinIO object keys are built at their call sites
+  (`src/crawlers/base_crawler.py:433-436`, `src/processing/cleanse.py:173-178,197-201`) in the
+  bucket named by `MINIO_BUCKET`; the crawler's Bronze key and the cleanse step's Bronze prefix must
+  stay in agreement. Do not hardcode local filesystem paths such as `data/` or `/mnt/nas/...`.
 - `MINIO_ENDPOINT` selects the backend: `host:9000` (no scheme) targets MinIO, unset/empty targets
   native AWS S3 with IAM credentials. `MINIO_USE_SSL` must be `true` in production.
 - `logger.py` reads `config/logging_config.yml`, not `config/logging.yml`; the latter is an

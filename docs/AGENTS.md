@@ -1,12 +1,12 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # docs
 
 ## Purpose
 Human- and agent-facing documentation for contracts, runbooks, and policy. These files are not
-decorative: several are asserted by tests (`tests/test_airflow_readiness_docs.py`,
-`tests/test_backend_datamart_serving_readiness.py`), so they are part of the delivery contract.
+decorative: five are asserted by tests (listed under Working In This Directory), so they are part
+of the delivery contract.
 
 ## Key Files
 
@@ -29,8 +29,14 @@ decorative: several are asserted by tests (`tests/test_airflow_readiness_docs.py
 ## For AI Agents
 
 ### Working In This Directory
-- `airflow-continuous-load-readiness.md` and the serving-readiness docs are parsed by tests; edit
-  their headings and stated guarantees only alongside the corresponding code and test change.
+- These docs are asserted by tests; edit their headings, phrases, and stated guarantees only
+  alongside the corresponding code and test change:
+  - `airflow-continuous-load-readiness.md` — `tests/test_airflow_readiness_docs.py`
+  - `backend-datamart-serving-readiness.md` — `tests/test_backend_datamart_serving_readiness.py`
+  - `backend-datamart-contract.md` — `tests/test_backend_datamart_contract.py` (heading markers)
+  - `schema-management.md` — `tests/test_alembic_config.py` (exact sentences)
+  - `local-development.md` — `tests/test_local_dev_setup.py` and `tests/test_bootstrap_db.py`
+    (phrases and their order)
 - When behavior changes, update the owning doc in the same change: schema → `schema-management.md`,
   DAG contract → `airflow-continuous-load-readiness.md`, mart columns →
   `backend-datamart-contract.md`, failure handling → `pipeline-failure-policy.md`.
@@ -42,9 +48,11 @@ decorative: several are asserted by tests (`tests/test_airflow_readiness_docs.py
 
 ### Testing Requirements
 ```bash
-PYTHONPATH=. uv run pytest tests/test_airflow_readiness_docs.py -q
+PYTHONPATH=. uv run pytest tests/test_airflow_readiness_docs.py tests/test_alembic_config.py \
+  tests/test_local_dev_setup.py -q
 TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest tests/test_backend_datamart_serving_readiness.py -q
+  PYTHONPATH=. uv run pytest tests/test_bootstrap_db.py tests/test_backend_datamart_contract.py \
+  tests/test_backend_datamart_serving_readiness.py -q
 ```
 
 ### Common Patterns

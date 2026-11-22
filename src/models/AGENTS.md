@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # src/models
 
@@ -32,7 +32,7 @@ queried — Gold analysis reads `ReviewPreprocessed` directly.
 | `fact_service_review_daily.py` | `FactServiceReviewDaily` — service × platform × date review counts and averages |
 | `fact_service_aspect_daily.py` | `FactServiceAspectDaily` — service × date × keyword mentions and sentiment |
 | `fact_category_radar_scores.py` | `FactCategoryRadarScores` — service × date × `CategoryType` radar scores (USABILITY / STABILITY / DESIGN / CUSTOMER_SUPPORT / SPEED) |
-| `srv_daily_review_list.py` | `SrvDailyReviewList` — denormalized wide serving mart, `PARTITION BY RANGE(date)`; partitions must pre-exist |
+| `srv_daily_review_list.py` | `SrvDailyReviewList` — denormalized wide serving mart, `PARTITION BY RANGE(date)`; `GoldAggregator` creates the partition for each date it writes and drops partitions older than `retention_days` (see `src/gold/AGENTS.md`) |
 | `dictionary.py` | `Synonym`, `Profanity`, `FinancialTerm` reference tables |
 
 ## Subdirectories
@@ -48,8 +48,13 @@ None.
   metadata is not yet lossless against the baseline.
 - Adding a model means adding the import **and** the `__all__` entry in `__init__.py`; several
   modules rely on `from src.models import X`.
-- `Review` and `ReviewPreprocessed` describe Parquet-resident tables; do not add query paths that
-  assume their rows are populated in PostgreSQL.
+- `Review` (`app_reviews`) and `ReviewPreprocessed` (`reviews_preprocessed`) rows live in
+  PostgreSQL and are queried: the loader inserts `app_reviews` (`src/loaders/batch_loader.py:213`),
+  cleansing upserts `reviews_preprocessed` (`src/processing/cleanse.py:426`), and Gold reads both
+  (`src/gold/absa_analyzer.py:143,405`, `src/gold/action_analyzer.py:228`). The Parquet files are
+  copies, so a column change goes into the model and `src/schemas/parquet/` together. The module
+  docstrings of `review.py` and `review_preprocessed.py` still say the tables are Parquet-only and
+  not queried; treat them as stale.
 - `ReviewEmbedding` requires `pgvector`, which is why tests need `pgvector/pgvector:pg17` rather than
   plain PostgreSQL. `Organization`'s docstring still claims the `ltree` extension, but
   `schema_v4.sql` contains zero `ltree` references — treat the docstring as stale.

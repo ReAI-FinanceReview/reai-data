@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # config/dictionaries
 
@@ -25,15 +25,17 @@ None.
 - Both JSON files are flat `{string: string}` maps — no nesting, no arrays. The loader assumes that
   shape.
 - Keep them UTF-8 without a BOM; the review corpus is Korean and encoding damage is silent.
-- Profanity tags are consumed downstream as sentiment signals; inventing a new tag string means
-  updating the consuming rules in `src/processing/cleanse.py` and `src/gold/`.
+- Profanity tags are replacement tokens: `ReviewCleaner` substitutes the JSON value verbatim into
+  `refined_text` (`src/processing/cleanse.py:129-141`), and no code downstream branches on a tag. A
+  new tag string needs no code change, but it does change `refined_text` and everything built on it.
 - Synonym canonicalization affects ABSA keyword grouping and therefore `fact_service_aspect_daily`
   rows. A mapping change is an analytics change, not just a text change.
 - `stopwords.txt` is referenced only in prose (`src/schemas/parquet/review_preprocessed.py:24`
   describes stopword removal). Confirm the actual consumer before assuming it is live.
-- The DB also has `synonyms` / `profanity` / `financial_terms` tables (`src/models/dictionary.py`).
-  These files are the file-based path used by the cleansing CLI; keep the two in mind when
-  changing either.
+- The DB also has `synonyms` and `profanities` tables (`sql/schema_v4.sql:389,414`; models in
+  `src/models/dictionary.py`). `FinancialTerm` (`financial_terms`) exists only as an ORM model — no
+  DDL creates it, so querying it fails. These files are the file-based path used by the cleansing
+  CLI; keep the two in mind when changing either.
 
 ### Testing Requirements
 `tests/test_cleanse.py` writes its own temporary dictionaries, so edits here are not covered

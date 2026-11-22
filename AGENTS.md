@@ -51,7 +51,10 @@ Parquet, while state, index, and analytics tables live in PostgreSQL (pgvector).
   commands that resolve the readme will fail until one is added.
 - Never read or write `.env`; use `.env.example` / `.env.local.example` as the source of truth for
   which variables exist.
-- Gold analyze/aggregate steps require a live `OPENAI_API_KEY`; crawl/load/cleanse do not.
+- `OPENAI_API_KEY` is needed by the Gold analyze step (embedding generation fails without it,
+  `src/gold/embedding_generator.py:155-158`; the action-analysis LLM summary is skipped) and by the
+  `llm` department assigner (`src/gold/dept_assigner.py:600-603`). Crawl, load, cleanse, and
+  aggregate do not use it.
 
 ### Testing Requirements
 The suite tests against real PostgreSQL — SQLite substitutes and mocked databases are not accepted
@@ -93,6 +96,11 @@ boundary is documented in `docs/backend-datamart-contract.md`.
 
 ### Keeping These Files True
 
+- These files are maintained by hand. No generator lives in this repository, and the facts in
+  them were corrected against the code by review, so treat any tool-regenerated version as a
+  proposal and review it as a diff. The Generated header and the MANUAL marker are kept for format
+  compatibility; the guard below requires the marker to stay the last line, so put a new fact in
+  the section it belongs to rather than below the marker.
 - `Updated:` in the header is bumped whenever a file's content changes, formatting-only
   edits included. `Generated:` records first authorship and stays fixed.
 - `tests/test_agents_docs.py` is the guard: it asserts the `.gitignore` negation still

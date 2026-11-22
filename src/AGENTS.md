@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # src
 
@@ -14,7 +14,7 @@ aggregation) with `pipeline/` providing the step dispatcher, CLI, and post-aggre
 
 | File | Description |
 |------|-------------|
-| `bootstrap_db.py` | Local DB bootstrap: reset `public` schema, apply `sql/schema_v4.sql`, load seed SQL, stamp `20260430_0001`, upgrade to head, verify seed counts (39/63/63). Refuses non-local hosts |
+| `bootstrap_db.py` | Local DB bootstrap: reset `public` schema, apply `sql/schema_v4.sql`, stamp `20260430_0001` and upgrade to head, then load seed SQL and verify seed counts (39/63/63) — the order `tests/test_bootstrap_db.py:248-258` pins. Refuses non-local hosts |
 
 ## Subdirectories
 

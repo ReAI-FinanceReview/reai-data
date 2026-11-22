@@ -35,8 +35,11 @@ None.
   `src/crawlers/playstore_crawler.py:36` do.
 
 ### Testing Requirements
-No test reads these files directly — `tests/conftest.py` provides a `sample_app_id_file` fixture
-instead. Verify changes with a scoped live crawl:
+No test reads these files directly (`tests/conftest.py` defines a `sample_app_id_file` fixture, but
+no test uses it). There is no scoped crawl: `scripts/crawl_reviews.py` takes no arguments and crawls
+every app in both lists through `UnifiedCrawler` (`src/pipeline/steps.py:42-46`), uploading Bronze
+Parquet to MinIO and registering `ingestion_batch` rows. Run it only against the local stack
+(`docs/local-development.md`), and expect it to write a full batch there:
 
 ```bash
 PYTHONPATH=. uv run python scripts/crawl_reviews.py
