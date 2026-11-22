@@ -18,19 +18,29 @@ The `minio-init` one-shot service creates the `reai-data` bucket automatically.
 
 ### Publish PostgreSQL on another host port
 
-If the host already uses 5432, override the published port with `POSTGRES_PORT`.
-The container keeps listening on 5432; the published port is what moves.
+If the host already uses 5432, move the published port with `POSTGRES_PORT` in
+`.env`. The container keeps listening on 5432; only the published port moves.
 
 ```bash
-POSTGRES_PORT=5434 docker compose up -d
+cp .env.local.example .env   # skip if you already have one
+# in .env: POSTGRES_PORT=5434
+docker compose up -d
 ```
 
-Nothing else to change. `DATABASE_URL` in `.env.local.example` reads
-`localhost:${POSTGRES_PORT:-5432}`, and `python-dotenv` resolves it from the same
-variable, so the container and the host-side connection string move together.
-That matters more than convenience: `scripts/bootstrap_db.py` opens with
-`DROP SCHEMA public CASCADE`, and a `DATABASE_URL` left pointing at 5432 would
-aim it at whatever service made you move the port in the first place.
+Set it in `.env`, not as a one-off prefix such as
+`POSTGRES_PORT=5434 docker compose up -d`. Compose reads `.env` from the project
+directory, and `DATABASE_URL` in the same file reads
+`localhost:${POSTGRES_PORT:-5432}`, which `python-dotenv` resolves from the
+`POSTGRES_PORT` line above it. One line moves the container and the host-side
+connection string together. A prefix reaches Compose only, so the app would still
+resolve 5432. That matters more than convenience: `scripts/bootstrap_db.py` opens
+with `DROP SCHEMA public CASCADE`, and a `DATABASE_URL` left pointing at 5432
+would aim it at whatever service made you move the port in the first place. A
+`POSTGRES_PORT` exported in your shell overrides `.env` for Compose and the app
+alike.
+
+An `.env` copied from an older template hardcodes 5432 in `DATABASE_URL`. Replace
+that line with the template's `POSTGRES_PORT` and `DATABASE_URL` lines.
 
 The mapping publishes on all interfaces, so anyone who can reach the host can
 reach the database with the credentials this file documents. To publish on
@@ -56,6 +66,7 @@ uv sync
 
 Key values in `.env.local.example`:
 
+- `POSTGRES_PORT=5432`
 - `DATABASE_URL=postgresql+psycopg2://reai:reai@localhost:${POSTGRES_PORT:-5432}/reai`
 - `MINIO_ENDPOINT=localhost:9000`
 - `MINIO_BUCKET=reai-data`

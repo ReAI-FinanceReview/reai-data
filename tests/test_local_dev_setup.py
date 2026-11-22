@@ -2,6 +2,8 @@ import re
 from pathlib import Path
 
 import yaml
+from dotenv.main import DotEnv
+from sqlalchemy.engine import make_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,9 +15,10 @@ def load_compose():
     return yaml.safe_load(compose_path.read_text())
 
 
-# Both of Compose's default forms, which are also the two spellings python-dotenv
-# resolves in the env template. Searching rather than matching the whole host side
-# keeps the bind-address form (127.0.0.1:${POSTGRES_PORT:-5432}:5432) valid.
+# Both of Compose's default forms (`:-` and `-`). This reads the compose file only;
+# python-dotenv understands `:-` alone, so the env template is checked by resolving
+# it instead. Searching rather than matching the whole host side keeps a bind-address
+# prefix in front of the port valid.
 POSTGRES_PORT_DEFAULT = re.compile(r"\$\{POSTGRES_PORT:?-(\d+)\}")
 
 
@@ -90,22 +93,52 @@ def test_local_env_template_uses_localhost_endpoints():
     assert env["MINIO_BUCKET"] == "reai-data"
 
 
-def test_local_env_template_derives_its_database_port():
-    """The template must take its port from POSTGRES_PORT rather than hardcode one.
+def resolve_env_file(env_path: Path) -> dict[str, str | None]:
+    """Resolve an env file the way the app's load_dotenv() does.
+
+    override=False is load_dotenv()'s default: a variable already in the process
+    environment wins over the file, for the key itself and inside ${...}
+    references. dotenv_values() resolves with override=True, so it would not show
+    what the app sees. Nothing is written to os.environ.
+    """
+    return DotEnv(env_path, interpolate=True, override=False).dict()
+
+
+def test_local_env_template_derives_its_database_port(monkeypatch, tmp_path):
+    """DATABASE_URL must take its port from POSTGRES_PORT rather than hardcode one.
 
     A hardcoded port aims host-side tools at whatever already occupies it, and
-    bootstrap_db.py opens with DROP SCHEMA public CASCADE. python-dotenv resolves
-    the same ${VAR:-default} form Compose publishes with, so one variable moves
-    the container and the connection string together.
+    bootstrap_db.py opens with DROP SCHEMA public CASCADE. Compose reads
+    POSTGRES_PORT from the same .env, so the documented flow -- edit that one line
+    -- has to move the connection string as well.
     """
-    env = read_env_template(".env.local.example")
+    template = ROOT / ".env.local.example"
+    default_port = compose_postgres_host_port_default()
+    monkeypatch.delenv("POSTGRES_PORT", raising=False)
 
-    match = POSTGRES_PORT_DEFAULT.search(env["DATABASE_URL"])
-    assert match, (
-        "DATABASE_URL must take its port from POSTGRES_PORT, not a literal: "
-        f"{env['DATABASE_URL']!r}"
+    env = resolve_env_file(template)
+    assert env["POSTGRES_PORT"] == default_port, (
+        "the template must define POSTGRES_PORT with the compose default so Compose "
+        f"and the app start from the same value: {env.get('POSTGRES_PORT')!r}"
     )
-    assert match.group(1) == compose_postgres_host_port_default()
+    assert make_url(env["DATABASE_URL"]).port == int(default_port)
+
+    # The documented flow: change the POSTGRES_PORT line in a copied .env.
+    moved = str(int(default_port) + 2)
+    copied = tmp_path / ".env"
+    copied.write_text(
+        template.read_text().replace(
+            f"POSTGRES_PORT={default_port}\n", f"POSTGRES_PORT={moved}\n"
+        )
+    )
+    assert make_url(resolve_env_file(copied)["DATABASE_URL"]).port == int(moved), (
+        "DATABASE_URL must follow the POSTGRES_PORT line; define it above "
+        "DATABASE_URL and reference it instead of a literal port"
+    )
+
+    # A shell export wins over .env for Compose, so it must win for the app too.
+    monkeypatch.setenv("POSTGRES_PORT", moved)
+    assert make_url(resolve_env_file(template)["DATABASE_URL"]).port == int(moved)
 
 
 def test_local_docs_explain_compose_startup():
