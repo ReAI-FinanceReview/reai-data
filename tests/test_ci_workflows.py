@@ -68,3 +68,20 @@ def test_ci_bootstrap_workflow_documents_reproducible_commands():
         "tests/test_ci_workflows.py tests/test_bootstrap_db.py "
         "tests/test_local_dev_setup.py tests/test_alembic_config.py"
     ) in run_commands
+    assert "tests/test_agents_docs.py" not in run_commands
+
+
+def test_ci_runs_the_agents_docs_guard_without_a_database():
+    # The AGENTS.md guard needs no database; outside CI nothing would run it on the
+    # code changes that make the guidance stale. Its own job keeps a failure named
+    # for the guidance and independent of the Postgres service.
+    job = load_bootstrap_workflow()["jobs"]["agents-docs"]
+    uses = {step["name"]: step.get("uses") for step in job["steps"]}
+    run_commands = "\n".join(step["run"] for step in job["steps"] if "run" in step)
+
+    assert "services" not in job
+    assert uses["Check out repository"] == "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+    assert uses["Set up Python"] == "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405"
+    assert uses["Set up uv"] == "astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b"
+    assert "uv sync --frozen" in run_commands
+    assert "PYTHONPATH=. uv run pytest tests/test_agents_docs.py" in run_commands
