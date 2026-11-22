@@ -5,8 +5,9 @@
 
 ## Purpose
 Pydantic schemas for the Parquet files that hold Bronze and Silver review data on MinIO/NAS. They
-mirror the corresponding `schema_v4.sql` table structures and are the only validation those files
-get, since no database constraint applies to object storage.
+mirror the corresponding `schema_v4.sql` table structures. `AppReviewSchema` is the only validation
+Bronze files get; `ReviewPreprocessedSchema` is not used by production code, and Silver files are
+written unvalidated from the dicts `src/processing/cleanse.py` builds (`src/processing/cleanse.py:203`).
 
 ## Key Files
 
@@ -49,10 +50,10 @@ Pydantic v2 `BaseModel` with `ConfigDict`, `Field(default_factory=...)` for gene
 ## Dependencies
 
 ### Internal
-`src/crawlers/base_crawler.py` (Bronze writes), `src/processing/cleanse.py` (Silver writes),
+`src/crawlers/base_crawler.py` (Bronze writes), `src/processing/cleanse.py` (writes Silver without these schemas),
 `src/loaders/batch_loader.py` (reads), `src/utils/parquet_writer.py`.
 
 ### External
 `pydantic`, `uuid6`, `pyarrow` (at the writer boundary).
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

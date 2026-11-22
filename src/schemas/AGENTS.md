@@ -1,12 +1,14 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # src/schemas
 
 ## Purpose
-Pydantic validation layer for data that leaves the database — primarily Parquet payloads written to
-MinIO/NAS. Keeping validation here (rather than in the ORM) means Bronze and Silver files are
-schema-checked at write time even though no database constraint protects them.
+Pydantic validation layer for Parquet payloads on MinIO/NAS. Only Bronze is actually validated:
+the crawlers build `AppReviewSchema` records before writing (`src/crawlers/appstore_crawler.py:162`,
+`src/crawlers/playstore_crawler.py:131`) and the loader re-validates them on read
+(`src/loaders/batch_loader.py:127`). Silver is written straight from dicts
+(`src/processing/cleanse.py:203`) and no production code uses `ReviewPreprocessedSchema`.
 
 ## Key Files
 
@@ -45,4 +47,4 @@ Used by `src/crawlers/`, `src/processing/`, `src/loaders/`, and `src/utils/parqu
 ### External
 `pydantic`, `uuid6`.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

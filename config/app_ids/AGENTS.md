@@ -58,4 +58,4 @@ category so the list stays reviewable by humans.
 ### External
 App Store and Google Play identifier namespaces.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

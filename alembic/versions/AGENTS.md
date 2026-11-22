@@ -58,4 +58,4 @@ without its SQL file (root `AGENTS.md`).
 ### External
 `alembic`, `psycopg2-binary`, PostgreSQL 17 with the `vector` (pgvector) extension.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

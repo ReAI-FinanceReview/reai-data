@@ -69,4 +69,4 @@ Database-backed tests need the Docker test database; start and connect it as des
 ### External
 `requests`, `google-play-scraper`, `pyarrow`, `boto3`, `uuid6`, `pyyaml`.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

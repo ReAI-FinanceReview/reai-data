@@ -54,11 +54,12 @@ and DB state so the rule layer stays trivially testable.
 
 ### Internal
 `config/dictionaries/synonyms.json`, `config/dictionaries/profanity.json`,
-`src/models/review_master_index.py`, `src/schemas/parquet/review_preprocessed.py`,
-`src/utils/minio_client.py`, `src/utils/parquet_writer.py`.
+`src/models/review_master_index.py`, `src/models/review_preprocessed.py` (ORM; Silver Parquet is
+written from plain dicts, not `src/schemas/parquet/`), `src/models/enums.py`,
+`src/utils/minio_client.py`, `src/utils/logger.py`.
 
 ### External
 `emoji`, `flashtext`, `konlpy`, `nltk`, `pyarrow`, `sqlalchemy` (stdlib `re` / `unicodedata` for the
 core rules).
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

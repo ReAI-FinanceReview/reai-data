@@ -65,4 +65,4 @@ from src.pipeline.steps import run_x  # noqa: E402
 (`src/utils/db_connector.py:16-22`), and `cleanse_reviews.py` also calls `load_dotenv()` on import;
 `crawl_reviews.py` imports it but never calls it. Plus whatever the delegated step imports.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

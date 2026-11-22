@@ -68,9 +68,10 @@ The suite tests against real PostgreSQL — SQLite substitutes and mocked databa
 `AGENTS.md` files only name the modules to pass to it.
 
 Markers registered in `tests/conftest.py:662`: `slow`, `integration`, `requires_db`.
-CI (`.github/workflows/bootstrap-db.yml`) runs only the bootstrap-focused subset plus the
-AGENTS.md guard: `tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py
-tests/test_alembic_config.py tests/test_agents_docs.py`.
+CI (`.github/workflows/bootstrap-db.yml`) runs only the bootstrap-focused subset
+(`tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py
+tests/test_alembic_config.py`) and, in a separate DB-free job, the AGENTS.md guard
+(`tests/test_agents_docs.py`).
 
 ### Common Patterns
 - Every component takes `config_path: str = "config/crawler_config.yml"` and builds its own
@@ -109,10 +110,12 @@ boundary is documented in `docs/backend-datamart-contract.md`.
   parent link points at the nearest `AGENTS.md` above it, every `path:line` citation
   resolves to a file and every line number in it (ranges and lists included) is inside
   that file, every name in a table's first column exists, and every directory with
-  tracked files has guidance. CI runs it on every pull request, so a code change that
-  strands a citation fails there. It cannot tell that a still-valid line number now points at
+  tracked files has guidance (root dot-directories other than `.github/` are outside that
+  rule, since their AGENTS.md stays ignored). CI runs it on every pull request in the
+  "Check AGENTS.md guidance" job, so a code change that strands a citation, renames a file a
+  Key Files table names, or adds an undocumented directory fails there. It cannot tell that a still-valid line number now points at
   different code, so a citation edited by hand still deserves a look.
 - `tests/fixtures/` is the one directory deliberately without its own file; it is data
   only, and `DIRS_WITHOUT_GUIDANCE` in that test records the exemption.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

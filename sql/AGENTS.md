@@ -68,4 +68,4 @@ use deterministic UUID v7-shaped identifiers so fixtures and expectations stay s
 PostgreSQL 17 with the `vector` (pgvector) extension. `ltree` is **not** used — it was removed in
 issue #32, and `organizations.org_id` is plain `TEXT` with hyphen-separated levels (`1`, `1-1`, `10-5`).
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

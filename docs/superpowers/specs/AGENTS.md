@@ -42,4 +42,4 @@ A bolded **Goal** line followed by a **Design** bullet list naming the concrete 
 ### External
 None (Markdown only).
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

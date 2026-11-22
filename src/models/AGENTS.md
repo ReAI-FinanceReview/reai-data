@@ -52,7 +52,8 @@ None.
   PostgreSQL and are queried: the loader inserts `app_reviews` (`src/loaders/batch_loader.py:213`),
   cleansing upserts `reviews_preprocessed` (`src/processing/cleanse.py:426`), and Gold reads both
   (`src/gold/absa_analyzer.py:143,405`, `src/gold/action_analyzer.py:228`). The Parquet files are
-  copies, so a column change goes into the model and `src/schemas/parquet/` together. The module
+  copies, so a column change goes into the model and `src/schemas/parquet/` together, and for Silver
+  also into the record dicts `src/processing/cleanse.py` writes, which no schema checks. The module
   docstrings of `review.py` and `review_preprocessed.py` still say the tables are Parquet-only and
   not queried; treat them as stale.
 - `ReviewEmbedding` requires `pgvector`, which is why tests need `pgvector/pgvector:pg17` rather than
@@ -82,4 +83,4 @@ Korean module docstring plus English body comments; `Column(UUID(as_uuid=True))`
 `sqlalchemy`, `pgvector.sqlalchemy` (optional import guard), PostgreSQL dialect types
 (`UUID`, `JSONB`, `ARRAY`).
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

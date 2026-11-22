@@ -12,7 +12,7 @@ same Alembic head.
 
 | File | Description |
 |------|-------------|
-| `bootstrap-db.yml` | Job `bootstrap-db` on `pull_request`, `push: main`, and `workflow_dispatch`. Runs a `pgvector/pgvector:pg17` service (SHA-pinned) on 5432, Python 3.12 + `uv sync --frozen`, then: single-head check → drop/recreate `public` + `alembic upgrade head` → `alembic current --check-heads` → `scripts/bootstrap_db.py` → head check again → focused pytest subset |
+| `bootstrap-db.yml` | Job `bootstrap-db` on `pull_request`, `push: main`, and `workflow_dispatch`. Runs a `pgvector/pgvector:pg17` service (SHA-pinned) on 5432, Python 3.12 + `uv sync --frozen`, then: single-head check → drop/recreate `public` + `alembic upgrade head` → `alembic current --check-heads` → `scripts/bootstrap_db.py` → head check again → focused pytest subset. A second job, `agents-docs` ("Check AGENTS.md guidance"), runs `tests/test_agents_docs.py` with no database |
 
 ## Subdirectories
 None.
@@ -27,8 +27,8 @@ None.
 - Both `DATABASE_URL` and `TEST_DATABASE_URL` point at the same CI service database, and the
   workflow drops the `public` schema — never point these at anything shared.
 - CI runs only the bootstrap-focused tests (`test_ci_workflows.py`, `test_bootstrap_db.py`,
-  `test_local_dev_setup.py`, `test_alembic_config.py`) plus the DB-free AGENTS.md guard
-  (`test_agents_docs.py`). The Gold/mart suites are not covered here; run them locally against
+  `test_local_dev_setup.py`, `test_alembic_config.py`) in `bootstrap-db`, and the DB-free AGENTS.md
+  guard (`test_agents_docs.py`) in its own `agents-docs` job. The Gold/mart suites are not covered here; run them locally against
   the Docker test stack.
 - `tests/test_ci_workflows.py` asserts the contents of this file — update the test in the same
   change.
@@ -51,4 +51,4 @@ PYTHONPATH=. uv run pytest tests/test_ci_workflows.py -q
 `actions/checkout`, `actions/setup-python`, `astral-sh/setup-uv`, the `pgvector/pgvector:pg17`
 service image.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

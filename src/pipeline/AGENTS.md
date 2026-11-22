@@ -79,4 +79,4 @@ Validation checks are dataclasses with `as_dict()` so reports serialize straight
 ### External
 `sqlalchemy`, `python-dotenv`; stdlib `argparse`, `dataclasses`, `json`.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

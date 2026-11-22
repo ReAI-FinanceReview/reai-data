@@ -38,8 +38,10 @@ PYTHONPATH=. uv run pytest tests/test_batch_loader.py tests/test_bronze_loading.
 ```
 Database-backed tests need the Docker test database; start and connect it as described in
 `tests/AGENTS.md` (Testing Requirements).
-`tests/conftest.py` supplies `db_with_pending_batches` and `db_with_failed_batches`, which write
-real Parquet files into a temp Bronze directory — use them rather than stubbing the reader.
+`tests/conftest.py` supplies `db_with_pending_batches`, which writes real Parquet files into a temp
+Bronze directory — use it rather than stubbing the reader. `db_with_failed_batches` only inserts
+batch rows whose `storage_path` points at files that do not exist, so it suits status and retry-count
+checks, not a successful retry.
 
 ### Common Patterns
 Raw SQL via `sqlalchemy.text` is used where bulk UPSERT semantics matter; UUIDs and timezone-aware
@@ -54,4 +56,4 @@ UTC timestamps everywhere.
 ### External
 `sqlalchemy`, `pyarrow`, `boto3`.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

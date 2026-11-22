@@ -45,4 +45,4 @@ to verify individually.
 ### External
 None (Markdown only).
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

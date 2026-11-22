@@ -104,4 +104,4 @@ unreachable address; those two tests then skip.
 `pytest`, `sqlalchemy`, `uuid6`, `pyarrow`. `mock_appstore_api` in `conftest.py` expects the
 requests-mock plugin, which is not a dependency (see `src/crawlers/AGENTS.md`).
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

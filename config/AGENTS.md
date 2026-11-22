@@ -69,4 +69,4 @@ available keys (`src/utils/path_resolver.py:188-192`) rather than inventing a pa
 `pyyaml`; the environment variables listed in `.env.example`. `PARQUET_BASE_PATH`, read only through
 `paths.yml`, is not among them.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

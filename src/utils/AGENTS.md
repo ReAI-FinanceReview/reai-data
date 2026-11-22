@@ -64,4 +64,4 @@ throwaway directories instead of the configured medallion paths.
 ### External
 `sqlalchemy`, `psycopg2-binary`, `boto3`, `pyarrow`, `pandas`, `pyyaml`, `python-dotenv`.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

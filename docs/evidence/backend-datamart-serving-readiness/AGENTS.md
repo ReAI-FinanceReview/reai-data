@@ -53,4 +53,4 @@ re-run the same thing.
 ### External
 Live App Store / Play Store responses and a real `OPENAI_API_KEY` for the manual portion.
 
-<!-- MANUAL: Notes added below this line are preserved on regeneration -->
+<!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->
