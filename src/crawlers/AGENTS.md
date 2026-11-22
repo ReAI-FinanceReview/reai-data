@@ -49,9 +49,10 @@ requests-mock plugin, which is in neither `pyproject.toml` nor `uv.lock`. Using 
 dev dependency first.
 
 ```bash
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest tests/test_crawler_consistency.py tests/test_bronze_loading.py -q
+PYTHONPATH=. uv run pytest tests/test_crawler_consistency.py tests/test_bronze_loading.py -q
 ```
+Database-backed tests need the Docker test database; start and connect it as described in
+`tests/AGENTS.md` (Testing Requirements).
 
 ### Common Patterns
 - App-id files are read with `read_app_ids()`, which skips blank lines and `#` comments.

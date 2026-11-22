@@ -61,9 +61,10 @@ None.
 
 ### Testing Requirements
 ```bash
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest tests/test_enums.py tests/test_database_schema.py -q
+PYTHONPATH=. uv run pytest tests/test_enums.py tests/test_database_schema.py -q
 ```
+Database-backed tests need the Docker test database; start and connect it as described in
+`tests/AGENTS.md` (Testing Requirements).
 Any model change must also be checked against `sql/schema_v4.sql` and the mart contract in
 `docs/backend-datamart-contract.md`.
 

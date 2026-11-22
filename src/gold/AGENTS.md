@@ -58,12 +58,14 @@ None.
 
 ### Testing Requirements
 ```bash
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" PYTHONPATH=. uv run pytest \
+PYTHONPATH=. uv run pytest \
   tests/test_gold_orchestrator.py tests/test_gold_absa_analyzer.py \
   tests/test_gold_action_analyzer.py tests/test_gold_embedding_generator.py \
   tests/test_gold_aggregator.py tests/test_gold_dept_assigner.py \
   tests/test_backend_datamart_contract.py -q
 ```
+Database-backed tests need the Docker test database; start and connect it as described in
+`tests/AGENTS.md` (Testing Requirements).
 Mart output must also satisfy `docs/backend-datamart-contract.md`.
 
 ### Common Patterns

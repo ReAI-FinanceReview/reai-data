@@ -19,7 +19,7 @@ Parquet, while state, index, and analytics tables live in PostgreSQL (pgvector).
 | `uv.lock` | Locked dependency graph; install with `uv sync` (CI uses `uv sync --frozen`) |
 | `.python-version` | Pins the interpreter to 3.12 |
 | `alembic.ini` | Alembic config (`script_location = alembic`, `prepend_sys_path = .`, UTC) |
-| `docker-compose.yml` | Local infra: PostgreSQL `pgvector/pgvector:pg17` on 5432, MinIO on 9000/9001, bucket bootstrap |
+| `docker-compose.yml` | Local infra: PostgreSQL `pgvector/pgvector:pg17`, MinIO, bucket bootstrap; ports and env setup are in `docs/local-development.md` |
 | `docker-compose.test.yml` | Test infra: `test-postgres` on `${TEST_POSTGRES_PORT:-5433}`/testdb, `test-minio` on 9002/9003 |
 | `.env.example` | Full environment template (DATABASE_URL, MINIO_*, OPENAI_API_KEY, ENABLE_PARQUET_WRITE) |
 | `.env.local.example` | Minimal local-stack env matching `docker-compose.yml` |
@@ -58,13 +58,9 @@ Parquet, while state, index, and analytics tables live in PostgreSQL (pgvector).
 
 ### Testing Requirements
 The suite tests against real PostgreSQL — SQLite substitutes and mocked databases are not accepted
-(see `tests/conftest.py`). Standard flow:
-
-```bash
-docker compose -f docker-compose.test.yml up -d test-postgres
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest
-```
+(see `tests/conftest.py`). Start the Docker test database and run pytest as `tests/AGENTS.md`
+(Testing Requirements) describes; that file holds the one canonical command, and the other
+`AGENTS.md` files only name the modules to pass to it.
 
 Markers registered in `tests/conftest.py:662`: `slow`, `integration`, `requires_db`.
 CI (`.github/workflows/bootstrap-db.yml`) runs only the bootstrap-focused subset plus the

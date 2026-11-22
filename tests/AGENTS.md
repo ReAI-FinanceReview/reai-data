@@ -53,9 +53,9 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
 ## For AI Agents
 
 ### Working In This Directory
-- `test_db_url` resolves `TEST_DATABASE_URL`, defaulting to
-  `postgresql://testuser:testpass@localhost:${TEST_POSTGRES_PORT:-5433}/testdb`. The schema fixture
-  runs `DROP SCHEMA public CASCADE` — **never** point it at a production database.
+- `test_db_url` (`tests/conftest.py:58-60`) uses `TEST_DATABASE_URL` when it is set; otherwise it
+  connects to the `docker-compose.test.yml` database on `localhost:${TEST_POSTGRES_PORT:-5433}`.
+  The schema fixture runs `DROP SCHEMA public CASCADE` — **never** point it at a production database.
 - The image must be `pgvector/pgvector:pg17` (or equivalent); `schema_v4.sql` requires the `vector`
   extension.
 - `test_db_session` is function-scoped and rolls back, so tests must not rely on committed state
@@ -67,12 +67,19 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
   `pytest_configure` at `conftest.py:662`.
 
 ### Testing Requirements
+This is the one canonical way to run the suite; other `AGENTS.md` files only name the modules to
+pass to the same `pytest` command.
+
 ```bash
 docker compose -f docker-compose.test.yml up -d test-postgres
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest            # full suite
+PYTHONPATH=. uv run pytest            # full suite
 PYTHONPATH=. uv run pytest -m "not requires_db"   # NOT DB-free, see below
 ```
+Leave `TEST_DATABASE_URL` unset for the Docker test database. The compose port binding
+(`docker-compose.test.yml:10`) and the fallback URL in `test_db_url` both read `TEST_POSTGRES_PORT`
+(default 5433), so if that port is taken, export `TEST_POSTGRES_PORT` once for both commands rather
+than editing a URL. Set `TEST_DATABASE_URL` only to target a different database; it takes precedence.
+
 Markers: `slow`, `integration`, `requires_db`. The marker is not applied to every test that uses the
 database fixtures, so `-m "not requires_db"` still selects some of them, and two
 (`tests/test_bootstrap_db.py:123` and `:180`) run `DROP SCHEMA public CASCADE` on whatever database

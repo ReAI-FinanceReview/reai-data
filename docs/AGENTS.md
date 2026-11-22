@@ -50,10 +50,11 @@ of the delivery contract.
 ```bash
 PYTHONPATH=. uv run pytest tests/test_airflow_readiness_docs.py tests/test_alembic_config.py \
   tests/test_local_dev_setup.py -q
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest tests/test_bootstrap_db.py tests/test_backend_datamart_contract.py \
+PYTHONPATH=. uv run pytest tests/test_bootstrap_db.py tests/test_backend_datamart_contract.py \
   tests/test_backend_datamart_serving_readiness.py -q
 ```
+Database-backed tests need the Docker test database; start and connect it as described in
+`tests/AGENTS.md` (Testing Requirements).
 
 ### Common Patterns
 Each doc opens with an H1 title, then a "Contract boundary" or "Purpose"-style section that states

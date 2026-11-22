@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # sql
 
@@ -47,9 +47,10 @@ None.
 covers the seed-order and verification-count contract.
 
 ```bash
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest tests/test_database_schema.py tests/test_bootstrap_db.py -q
+PYTHONPATH=. uv run pytest tests/test_database_schema.py tests/test_bootstrap_db.py -q
 ```
+Database-backed tests need the Docker test database; start and connect it as described in
+`tests/AGENTS.md` (Testing Requirements).
 
 ### Common Patterns
 Every file opens with a banner comment stating purpose, date, row counts, and load order. Seed rows

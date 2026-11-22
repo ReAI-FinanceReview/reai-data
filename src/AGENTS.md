@@ -48,9 +48,10 @@ Each subpackage has matching tests under `tests/` (e.g. `src/gold/aggregator.py`
 `tests/test_gold_aggregator.py`). Most require a live PostgreSQL:
 
 ```bash
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest tests/test_gold_aggregator.py -q
+PYTHONPATH=. uv run pytest tests/test_gold_aggregator.py -q
 ```
+Database-backed tests need the Docker test database; start and connect it as described in
+`tests/AGENTS.md` (Testing Requirements).
 
 ### Common Patterns
 - Constructors accept `config_path` (default `"config/crawler_config.yml"`) and instantiate

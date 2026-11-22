@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # src/processing
 
@@ -41,9 +41,10 @@ None.
 synonym/profanity JSON files per test.
 
 ```bash
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest tests/test_cleanse.py -q
+PYTHONPATH=. uv run pytest tests/test_cleanse.py -q
 ```
+Database-backed tests need the Docker test database; start and connect it as described in
+`tests/AGENTS.md` (Testing Requirements).
 
 ### Common Patterns
 Pure functions for each text rule, composed by `ReviewCleaner.clean()`; the pipeline class owns IO

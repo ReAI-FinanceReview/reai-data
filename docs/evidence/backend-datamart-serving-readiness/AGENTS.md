@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # docs/evidence/backend-datamart-serving-readiness
 
@@ -33,10 +33,10 @@ None.
 The PR-safe portion of the proof:
 
 ```bash
-docker compose -f docker-compose.test.yml up -d test-postgres
-TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost:5433/testdb}" \
-  PYTHONPATH=. uv run pytest tests/test_backend_datamart_contract.py tests/test_backend_datamart_serving_readiness.py -q
+PYTHONPATH=. uv run pytest tests/test_backend_datamart_contract.py tests/test_backend_datamart_serving_readiness.py -q
 ```
+Database-backed tests need the Docker test database; start and connect it as described in
+`tests/AGENTS.md` (Testing Requirements).
 The manual portion uses the real entrypoint:
 `PYTHONPATH=. uv run python scripts/run_pipeline.py --steps gold,aggregate --target-date YYYY-MM-DD`.
 
