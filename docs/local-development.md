@@ -10,24 +10,76 @@ docker compose up -d
 
 Services:
 
-- PostgreSQL: `localhost:5432`
+- PostgreSQL: `localhost:5432` (host port; see the override below)
 - MinIO API: `localhost:9000`
 - MinIO Console: `http://localhost:9001`
 
 The `minio-init` one-shot service creates the `reai-data` bucket automatically.
 
-## Configure the app
+### Publish PostgreSQL on another host port
 
-Create a local env file from `.env.local.example`.
+If the host already uses 5432, move the published port with `POSTGRES_PORT` in
+`.env`. The container keeps listening on 5432; only the published port moves.
+
+An `.env` copied from an older template has no `POSTGRES_PORT` line and hardcodes
+5432 in `DATABASE_URL`. Replace that `DATABASE_URL` line with the template's
+`POSTGRES_PORT` and `DATABASE_URL` lines first.
 
 ```bash
-cp .env.local.example .env
+[ -f .env ] || cp .env.local.example .env
+# edit the existing line in .env: POSTGRES_PORT=5434
+grep -c '^POSTGRES_PORT=' .env   # must print 1
+docker compose up -d
+```
+
+Keep exactly one `POSTGRES_PORT` line, above `DATABASE_URL`. A second line appended
+at the end is the one Compose publishes with, while `DATABASE_URL` has already
+taken the first; `scripts/bootstrap_db.py` refuses to run when the two disagree.
+
+Set it in `.env`, not as a one-off prefix such as
+`POSTGRES_PORT=5434 docker compose up -d`. Compose reads `.env` from the project
+directory, and `DATABASE_URL` in the same file reads
+`localhost:${POSTGRES_PORT:-5432}`, which `python-dotenv` resolves from the
+`POSTGRES_PORT` line above it. One line moves the container and the host-side
+connection string together. A prefix reaches Compose only, so the app would still
+resolve 5432. That matters more than convenience: `scripts/bootstrap_db.py` opens
+with `DROP SCHEMA public CASCADE`, and a `DATABASE_URL` left pointing at 5432
+would aim it at whatever service made you move the port in the first place. A
+`POSTGRES_PORT` exported in your shell overrides `.env` for Compose and the app
+alike.
+
+`POSTGRES_PORT` takes a bare port number, because it also fills the port in
+`DATABASE_URL`. The bind address has its own variable.
+
+Without `POSTGRES_HOST_IP` the mapping publishes on all interfaces, so anyone who
+can reach the host can reach the database with the credentials this file
+documents. To publish on loopback only, add this to `.env`:
+
+```bash
+POSTGRES_HOST_IP=127.0.0.1
+```
+
+Only Compose reads `POSTGRES_HOST_IP`; the app keeps connecting to `localhost`.
+
+`docker-compose.test.yml` has its own separate override, `TEST_POSTGRES_PORT`,
+which `tests/conftest.py` also uses to build the test database URL. The app's own
+component variable is `DB_PORT` (`src/utils/db_connector.py`), used only when
+`DATABASE_URL` is absent -- three variables, three owners, no overlap.
+
+## Configure the app
+
+Create a local env file from `.env.local.example`, unless you already made one
+for the port override above.
+
+```bash
+[ -f .env ] || cp .env.local.example .env
 uv sync
 ```
 
 Key values in `.env.local.example`:
 
-- `DATABASE_URL=postgresql+psycopg2://reai:reai@localhost:5432/reai`
+- `POSTGRES_PORT=5432`
+- `DATABASE_URL=postgresql+psycopg2://reai:reai@localhost:${POSTGRES_PORT:-5432}/reai`
 - `MINIO_ENDPOINT=localhost:9000`
 - `MINIO_BUCKET=reai-data`
 

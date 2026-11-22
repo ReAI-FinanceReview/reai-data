@@ -8,7 +8,9 @@ services:
       POSTGRES_PASSWORD: reai
       POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
     ports:
-      - "5432:5432"
+      # POSTGRES_PORT is a bare port: .env.local.example also puts it in DATABASE_URL.
+      # POSTGRES_HOST_IP, when set, restricts publishing to that address.
+      - "${POSTGRES_HOST_IP:+${POSTGRES_HOST_IP}:}${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
