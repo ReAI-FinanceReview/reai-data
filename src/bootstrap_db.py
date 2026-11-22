@@ -27,6 +27,8 @@ SQL_FILE_ORDER = (
 LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "::1"}
 # docker-compose.yml publishes the local postgres on this variable's port.
 POSTGRES_PORT_ENV = "POSTGRES_PORT"
+# libpq connects to this port when a URL names none.
+POSTGRES_DEFAULT_PORT = 5432
 
 
 @dataclass(frozen=True)
@@ -99,12 +101,21 @@ def validate_published_port(url: URL, published_port: str | None) -> None:
     """
     if published_port is None:
         return
-    if str(url.port) != published_port.strip():
+    target_port = url.port or POSTGRES_DEFAULT_PORT
+    try:
+        expected_port = int(published_port)
+    except ValueError:
         raise BootstrapError(
-            f"Refusing to bootstrap {url.host}:{url.port}: {POSTGRES_PORT_ENV}="
+            f"{POSTGRES_PORT_ENV}={published_port!r} is not a port number; it must hold "
+            "the bare port docker-compose.yml publishes on."
+        ) from None
+    if target_port != expected_port:
+        raise BootstrapError(
+            f"Refusing to bootstrap {url.host}:{target_port}: {POSTGRES_PORT_ENV}="
             f"{published_port!r} says the compose stack publishes elsewhere. Keep one "
             f"{POSTGRES_PORT_ENV} line in .env, above DATABASE_URL, and derive the URL "
-            "port from it (see .env.local.example)."
+            "port from it (see .env.local.example). To target another database on "
+            "purpose, pass --database-url."
         )
 
 
@@ -174,9 +185,10 @@ def bootstrap_database(database_url: str | None = None, *, stdout=print) -> None
     root = get_project_root()
     resolved_url = load_database_url(root, database_url)
     target_url = validate_bootstrap_target(resolved_url)
-    if database_url is None:
+    if not database_url:
         # Only the .env path can drift from what Compose publishes; an explicit
         # --database-url (CI, the test database) is the caller's stated target.
+        # `not` rather than `is None`: load_database_url() treats "" as absent too.
         validate_published_port(target_url, os.getenv(POSTGRES_PORT_ENV))
 
     sql_paths = get_bootstrap_sql_paths(root)
