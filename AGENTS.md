@@ -64,8 +64,9 @@ TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://testuser:testpass@localhost
 ```
 
 Markers registered in `tests/conftest.py:662`: `slow`, `integration`, `requires_db`.
-CI (`.github/workflows/bootstrap-db.yml`) runs only the bootstrap-focused subset:
-`tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py tests/test_alembic_config.py`.
+CI (`.github/workflows/bootstrap-db.yml`) runs only the bootstrap-focused subset plus the
+AGENTS.md guard: `tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py
+tests/test_alembic_config.py tests/test_agents_docs.py`.
 
 ### Common Patterns
 - Every component takes `config_path: str = "config/crawler_config.yml"` and builds its own
@@ -99,7 +100,8 @@ boundary is documented in `docs/backend-datamart-contract.md`.
   parent link points at the nearest `AGENTS.md` above it, every `path:line` citation
   resolves to a file and every line number in it (ranges and lists included) is inside
   that file, every name in a table's first column exists, and every directory with
-  tracked files has guidance. It cannot tell that a still-valid line number now points at
+  tracked files has guidance. CI runs it on every pull request, so a code change that
+  strands a citation fails there. It cannot tell that a still-valid line number now points at
   different code, so a citation edited by hand still deserves a look.
 - `tests/fixtures/` is the one directory deliberately without its own file; it is data
   only, and `DIRS_WITHOUT_GUIDANCE` in that test records the exemption.

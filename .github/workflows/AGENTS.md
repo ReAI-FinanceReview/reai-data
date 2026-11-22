@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # .github/workflows
 
@@ -27,8 +27,9 @@ None.
 - Both `DATABASE_URL` and `TEST_DATABASE_URL` point at the same CI service database, and the
   workflow drops the `public` schema — never point these at anything shared.
 - CI runs only the bootstrap-focused tests (`test_ci_workflows.py`, `test_bootstrap_db.py`,
-  `test_local_dev_setup.py`, `test_alembic_config.py`). The Gold/mart suites are not covered here;
-  run them locally against the Docker test stack.
+  `test_local_dev_setup.py`, `test_alembic_config.py`) plus the DB-free AGENTS.md guard
+  (`test_agents_docs.py`). The Gold/mart suites are not covered here; run them locally against
+  the Docker test stack.
 - `tests/test_ci_workflows.py` asserts the contents of this file — update the test in the same
   change.
 
@@ -44,7 +45,7 @@ PYTHONPATH=. uv run pytest tests/test_ci_workflows.py -q
 ## Dependencies
 
 ### Internal
-`scripts/bootstrap_db.py`, `alembic/`, `pyproject.toml` + `uv.lock`, the four focused test modules.
+`scripts/bootstrap_db.py`, `alembic/`, `pyproject.toml` + `uv.lock`, the five test modules it runs.
 
 ### External
 `actions/checkout`, `actions/setup-python`, `astral-sh/setup-uv`, the `pgvector/pgvector:pg17`

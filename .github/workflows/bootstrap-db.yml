@@ -87,4 +87,4 @@ jobs:
         run: PYTHONPATH=. uv run alembic current --check-heads
 
       - name: Run focused bootstrap tests
-        run: PYTHONPATH=. uv run pytest tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py tests/test_alembic_config.py
+        run: PYTHONPATH=. uv run pytest tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py tests/test_alembic_config.py tests/test_agents_docs.py

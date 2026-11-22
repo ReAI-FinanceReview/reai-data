@@ -68,3 +68,6 @@ def test_ci_bootstrap_workflow_documents_reproducible_commands():
         "tests/test_ci_workflows.py tests/test_bootstrap_db.py "
         "tests/test_local_dev_setup.py tests/test_alembic_config.py"
     ) in run_commands
+    # The AGENTS.md guard needs no database; outside CI nothing would run it on the
+    # code changes that make the guidance stale.
+    assert "tests/test_agents_docs.py" in run_commands
