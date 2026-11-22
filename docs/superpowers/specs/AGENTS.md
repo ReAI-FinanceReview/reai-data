@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # docs/superpowers/specs
 
@@ -24,7 +24,8 @@ None.
   `GoldAggregator.run_range()` stays a manual repair tool. Do not make range backfill the scheduled
   default without superseding this spec.
 - Specs are paired with a plan of the same slug in `../plans/` where one exists.
-- Naming convention: `YYYY-MM-DD-<slug>-design.md`.
+- Naming convention: `YYYY-MM-DD-<slug>-design.md`. `*.md` is ignored by default, so add a new spec
+  with `git add -f` (root `AGENTS.md`).
 
 ### Testing Requirements
 None directly. The behavior it constrains is covered by `tests/test_gold_aggregator.py` and

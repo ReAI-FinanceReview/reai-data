@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # docs/superpowers/plans
 
@@ -25,6 +25,7 @@ None.
 - The paired design rationale for the backfill plan lives in
   `../specs/2026-04-18-aggregate-range-backfill-design.md`.
 - New plans follow `YYYY-MM-DD-<slug>.md` and keep the slug consistent with any matching spec.
+  `*.md` is ignored by default, so add a new plan with `git add -f` (root `AGENTS.md`).
 
 ### Testing Requirements
 None directly. Validate against the implementing code and its tests:

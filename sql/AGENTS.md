@@ -32,14 +32,17 @@ None.
   revision (`docs/schema-management.md`).
 - The bootstrap load order is fixed in `src/bootstrap_db.py:20` (`SQL_FILE_ORDER`) because of FK
   parentage: `app_service` → `apps` → `app_metadata`. Adding a seed file means updating that tuple
-  and, if the row count matters, `build_verification_queries()` (expects 39 / 63 / 63).
+  and, if the row count matters, `build_verification_queries()` (expects 39 / 63 / 63). A new
+  `.sql` file is ignored by the blanket `*.sql` rule: add a `!<name>.sql` negation like the existing
+  seed files have, or `git add -f` it (root `AGENTS.md`).
 - Seed files must stay idempotent — `scripts/bootstrap_db.py` re-applies them after a schema reset.
 - Migrations own structural change; seed SQL owns business catalog refreshes. Data movement belongs
   in a migration only when it is inseparable from a schema change.
 - `schema_v2.sql`, `schema_v3.sql`, and `organizations_data.sql` are unreferenced by code and docs.
-  Two of them are still named in `.gitignore` (`!schema_v3.sql`, `!organizations_data.sql`), which is
-  what keeps them tracked against the blanket `*.sql` rule — do not prune those negations while
-  treating the files as history. Do not delete them as part of an unrelated change.
+  They stay tracked because they are already tracked — ignore rules never apply to tracked files, and
+  `schema_v2.sql` has no negation at all. The negations in `.gitignore` (`!schema_v3.sql`,
+  `!organizations_data.sql`, ...) only decide whether a new, untracked file of that name can be
+  added without `-f`. Do not delete these files as part of an unrelated change.
 
 ### Testing Requirements
 `tests/test_database_schema.py` asserts the objects `schema_v4.sql` creates, and

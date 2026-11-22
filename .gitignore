@@ -216,8 +216,12 @@ $RECYCLE.BIN/
 *.md
 !README.md
 # AGENTS.md is guidance committed per directory. The negation is unanchored, so it also
-# un-ignores AGENTS.md under directories that have no rule of their own -- keep those below.
+# un-ignores AGENTS.md in any directory that no rule excludes as a whole; a directory rule
+# such as logs/ wins wherever it sits in this file. Root dot-directories hold agent-tool
+# state (.claude/, .codex/, ...), so AGENTS.md stays ignored there, except under .github/.
 !AGENTS.md
+/.*/**/AGENTS.md
+!/.github/**/AGENTS.md
 
 # SQL
 *.sql

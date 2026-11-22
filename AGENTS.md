@@ -24,7 +24,7 @@ Parquet, while state, index, and analytics tables live in PostgreSQL (pgvector).
 | `.env.example` | Full environment template (DATABASE_URL, MINIO_*, OPENAI_API_KEY, ENABLE_PARQUET_WRITE) |
 | `.env.local.example` | Minimal local-stack env matching `docker-compose.yml` |
 | `reai.vuerd.json` | ERD source (vuerd format) for the physical schema |
-| `.gitignore` | Ignores `.env`, `data/`, `logs/` among others |
+| `.gitignore` | Ignores `.env`, `data/`, `logs/` among others, and blanket-ignores `*.md` and `*.sql` (see below) |
 
 ## Subdirectories
 
@@ -49,6 +49,11 @@ Parquet, while state, index, and analytics tables live in PostgreSQL (pgvector).
   revision under `alembic/versions/`, never into the baseline file. See `docs/schema-management.md`.
 - `pyproject.toml` declares `readme = "README.md"`, but no `README.md` exists at the root; packaging
   commands that resolve the readme will fail until one is added.
+- `.gitignore` blanket-ignores `*.md` and `*.sql`. Only `README.md`, `AGENTS.md`, and the SQL file
+  names it lists are negated; the other tracked `.md`/`.sql` files stay tracked only because ignore
+  rules never apply to a file that is already tracked. A new doc, plan, spec, seed file, or
+  revision `.sql` is therefore left out of `git add .` without warning — add it with `git add -f`
+  (or add a negation) and confirm with `git status` before committing.
 - Never read or write `.env`; use `.env.example` / `.env.local.example` as the source of truth for
   which variables exist.
 - `OPENAI_API_KEY` is needed by the Gold analyze step (embedding generation fails without it,
@@ -100,7 +105,7 @@ boundary is documented in `docs/backend-datamart-contract.md`.
 - `Updated:` in the header is bumped whenever a file's content changes, formatting-only
   edits included. `Generated:` records first authorship and stays fixed.
 - `tests/test_agents_docs.py` is the guard: it asserts the `.gitignore` negation still
-  wins, the header is present and the MANUAL marker appears once as the last line, each
+  wins (and stays out of agent-tool dot-directories such as `.claude/`), the header is present and the MANUAL marker appears once as the last line, each
   parent link points at the nearest `AGENTS.md` above it, every `path:line` citation
   resolves to a file and every line number in it (ranges and lists included) is inside
   that file, every name in a table's first column exists, and every directory with

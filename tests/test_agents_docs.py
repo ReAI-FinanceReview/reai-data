@@ -92,6 +92,19 @@ def test_agents_file_is_not_ignored(path: Path):
     assert result.returncode == 1, f"{_rel(path)} is ignored by .gitignore"
 
 
+@pytest.mark.usefixtures("tracked_files")
+@pytest.mark.parametrize(
+    "relative", [".claude/AGENTS.md", ".codex/AGENTS.md", ".omx/AGENTS.md", ".agents/AGENTS.md"]
+)
+def test_agent_tool_state_agents_files_stay_ignored(relative: str):
+    """The unanchored !AGENTS.md negation must not reach agent-tool state directories."""
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "check-ignore", "-q", "--no-index", relative],
+        capture_output=True,
+    )
+    assert result.returncode == 0, f"{relative} is committable; it belongs to an agent tool"
+
+
 def test_agents_file_carries_its_header_and_manual_block(path: Path):
     content = path.read_text()
 

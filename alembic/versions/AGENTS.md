@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-08-28T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
 
 # alembic/versions
 
@@ -46,7 +46,9 @@ PYTHONPATH=. uv run pytest tests/test_alembic_config.py -q
 ### Common Patterns
 Module-level `revision` / `down_revision` / `branch_labels` / `depends_on` constants, a docstring
 header with revision id and create date, and SQL loaded from a sibling file via
-`Path(__file__).with_name(...)` when the DDL is too large to inline.
+`Path(__file__).with_name(...)` when the DDL is too large to inline. Such a sibling `.sql` is caught
+by the blanket `*.sql` ignore, so add it with `git add -f`; otherwise CI checks out the revision
+without its SQL file (root `AGENTS.md`).
 
 ## Dependencies
 
