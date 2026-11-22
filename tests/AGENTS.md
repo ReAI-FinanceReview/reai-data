@@ -81,8 +81,9 @@ Leave `TEST_DATABASE_URL` unset for the Docker test database. The compose port b
 than editing a URL. Set `TEST_DATABASE_URL` only to target a different database; it takes precedence.
 
 Markers: `slow`, `integration`, `requires_db`. The marker is not applied to every test that uses the
-database fixtures, so `-m "not requires_db"` still selects some of them, and two
-(`tests/test_bootstrap_db.py:123` and `:180`) run `DROP SCHEMA public CASCADE` on whatever database
+database fixtures, so `-m "not requires_db"` still selects some of them, and two in `tests/test_bootstrap_db.py`
+(`test_required_seed_files_are_reexecution_safe` and
+`test_bootstrap_explicit_database_url_controls_alembic_when_env_differs`) run `DROP SCHEMA public CASCADE` on whatever database
 `test_db_url` reaches. To run it without touching any database, point `TEST_DATABASE_URL` at an
 unreachable address; those two tests then skip.
 

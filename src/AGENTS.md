@@ -14,7 +14,7 @@ aggregation) with `pipeline/` providing the step dispatcher, CLI, and post-aggre
 
 | File | Description |
 |------|-------------|
-| `bootstrap_db.py` | Local DB bootstrap: reset `public` schema, apply `sql/schema_v4.sql`, stamp `20260430_0001` and upgrade to head, then load seed SQL and verify seed counts (39/63/63) — the order `tests/test_bootstrap_db.py:248-258` pins. Refuses non-local hosts |
+| `bootstrap_db.py` | Local DB bootstrap: reset `public` schema, apply `sql/schema_v4.sql`, stamp `20260430_0001` and upgrade to head, then load seed SQL and verify seed counts (39/63/63) — the order `test_bootstrap_runs_migrations_before_seed_sql` in `tests/test_bootstrap_db.py` pins. Refuses non-local hosts, and, when `DATABASE_URL` comes from `.env`/the shell, a URL port that disagrees with `POSTGRES_PORT` (`validate_published_port`) |
 
 ## Subdirectories
 
