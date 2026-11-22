@@ -42,13 +42,18 @@ alike.
 An `.env` copied from an older template hardcodes 5432 in `DATABASE_URL`. Replace
 that line with the template's `POSTGRES_PORT` and `DATABASE_URL` lines.
 
-The mapping publishes on all interfaces, so anyone who can reach the host can
-reach the database with the credentials this file documents. To publish on
-loopback only, give `POSTGRES_PORT` an address as well:
+`POSTGRES_PORT` takes a bare port number, because it also fills the port in
+`DATABASE_URL`. The bind address has its own variable.
+
+Without `POSTGRES_HOST_IP` the mapping publishes on all interfaces, so anyone who
+can reach the host can reach the database with the credentials this file
+documents. To publish on loopback only, add this to `.env`:
 
 ```bash
-POSTGRES_PORT=127.0.0.1:5434 docker compose up -d
+POSTGRES_HOST_IP=127.0.0.1
 ```
+
+Only Compose reads `POSTGRES_HOST_IP`; the app keeps connecting to `localhost`.
 
 `docker-compose.test.yml` has its own separate override, `TEST_POSTGRES_PORT`,
 which `tests/conftest.py` also uses to build the test database URL. The app's own
