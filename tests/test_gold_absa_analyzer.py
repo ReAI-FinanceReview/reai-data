@@ -18,7 +18,10 @@ from src.gold.absa_analyzer import (
     _SENTIMENT_DICT,
     _CATEGORY_KEYWORDS,
     _COMPACT_NEGATION_PREFIXES,
+    _KEYWORD_TO_CATEGORY,
     _NEGATION_WORDS,
+    _PHRASE_KEYWORDS,
+    _PREDICATE_LEXICON,
     _SATISFIED_USAGE_RE,
     _skip_reason_before_extraction,
 )
@@ -582,6 +585,14 @@ class TestColloquialPredicateTier:
     def test_predicate_vocabulary_does_not_enter_the_surface_dictionary(self, okt_analyzer):
         """용언 단계 어휘(귀찮)는 표면 사전 결과를 바꾸지 않는다 (main 과 같이 [불편])."""
         assert okt_analyzer._extract_keywords("너무 귀찮고 불편해요") == ["불편"]
+
+    def test_predicate_only_vocabulary_stays_out_of_the_surface_dictionary(self, okt_analyzer):
+        """용언 단계 전용 어휘가 표면 사전에 들어가면 이미 성공한 리뷰의 결과가 바뀐다."""
+        surface = set(_SENTIMENT_DICT) | set(_KEYWORD_TO_CATEGORY)
+        predicate_only = set(_PREDICATE_LEXICON) | set(_PHRASE_KEYWORDS)
+        assert predicate_only.isdisjoint(surface)
+        for keyword in sorted(predicate_only):
+            assert okt_analyzer._dict_match_keywords_with_spans(keyword) == [], keyword
 
 
 class TestSatisfiedUsagePhrase:

@@ -58,9 +58,13 @@ None.
   `ANALYZED`.
 - New ABSA vocabulary must be justified on reviews outside the cases it is meant to fix: check
   that its polarity matches star ratings on existing `ANALYZED` reviews (the #94 case analysis is
-  in PR #118's description). Predicate-step vocabulary goes into `_PREDICATE_LEXICON` or
-  `_PHRASE_KEYWORDS`, never into `_SENTIMENT_DICT` / `_CATEGORY_KEYWORDS`: those also feed the
-  surface-dictionary step, so an entry there changes reviews that already succeed.
+  in PR #118's description). Predicate-step vocabulary never goes into `_SENTIMENT_DICT` /
+  `_CATEGORY_KEYWORDS`: those also feed the surface-dictionary step, so an entry there changes
+  reviews that already succeed (a test pins this). Where it goes instead: a sentiment stem into
+  `_PREDICATE_LEXICON`; a function verb that `안` turns into an outage report into
+  `_NEGATED_FUNCTION_VERBS`, which generates its `안X` phrase keyword; an Okt stem mis-analysis
+  into `_STEM_ALIASES`. Any other phrase keyword needs an entry in `_PHRASE_KEYWORDS` and code in
+  the predicate step that emits it.
 - Negation differs by step. Noun and surface-dictionary keywords use the ±3-token window
   (`_has_negation`). A predicate-step keyword is negated when the token right before it is
   `안`/`못`, or when the token right after it is the long-form `않다` or `못`+`하다`
