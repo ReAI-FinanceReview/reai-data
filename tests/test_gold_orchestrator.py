@@ -301,7 +301,9 @@ def _cleanup_skip_probe(engine, app_id):
     from sqlalchemy import text
 
     with engine.begin() as connection:
-        for table in ("review_aspects", "review_embeddings", "reviews_preprocessed"):
+        for table in (
+            "review_action_analysis", "review_aspects", "review_embeddings", "reviews_preprocessed",
+        ):
             connection.execute(
                 text(
                     f"DELETE FROM {table} WHERE review_id IN "
@@ -391,19 +393,25 @@ def test_unanalyzable_reviews_become_terminal_skipped(
 
 @pytest.mark.requires_db
 @pytest.mark.parametrize(
-    ("texts", "expected_status"),
+    ("reviews", "expected_status"),
     [
+        # (refined_text, 임베딩을 미리 넣을지)
         # 분석 제외 리뷰만 있는 날: 0건 분석이어도 단계 실패가 아니다
-        (("",), "success"),
-        # SKIPPED 는 텍스트만 보고 정해져 API 장애일에도 생긴다. 실패를 덮으면 안 된다
-        (("", "로그인이 안돼요"), "failed"),
-        (("로그인이 안돼요",), "failed"),
+        ((("", False),), "success"),
+        # 빈 텍스트는 API 없이도 SKIPPED 가 된다. 그것으로 실패를 덮으면 안 된다
+        ((("", False), ("로그인이 안돼요", False)), "failed"),
+        ((("로그인이 안돼요", False),), "failed"),
+        # 부분 실패: 하나라도 분석되면 #94 이전처럼 단계는 성공이다
+        ((("로그인이 안돼요", True), ("결제가 느려요", False)), "success"),
     ],
 )
 def test_run_gold_fails_only_when_nothing_was_analyzed_and_something_failed(
-    test_db_engine, test_db_url, test_db_schema, monkeypatch, texts, expected_status
+    test_db_engine, test_db_url, test_db_schema, monkeypatch, reviews, expected_status
 ):
-    """임베딩이 없는 한국어 리뷰는 API 키가 없으면 FAILED 가 된다 (장애 재현)."""
+    """임베딩이 없는 한국어 리뷰는 API 키가 없으면 FAILED 가 된다 (장애 재현).
+
+    임베딩을 미리 넣은 한국어 리뷰는 API 없이 분석까지 끝난다.
+    """
     from sqlalchemy import text
     from uuid6 import uuid7
 
@@ -422,10 +430,10 @@ def test_run_gold_fails_only_when_nothing_was_analyzed_and_something_failed(
                 ),
                 {"app_id": app_id, "pid": f"run.gold.skip.{app_id}"},
             )
-            for refined_text in texts:
+            for refined_text, embed in reviews:
                 _seed_review(
                     connection, app_id=app_id, refined_text=refined_text, status="CLEANED",
-                    retry_count=0, embed=False,
+                    retry_count=0, embed=embed,
                 )
 
         result = run_gold(target_date=_SKIP_TARGET_DATE.isoformat())
