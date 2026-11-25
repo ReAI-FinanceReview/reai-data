@@ -1,10 +1,10 @@
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
 
 # reai-data
 
 ## Purpose
 Korean financial-app review ETL and NLP analytics pipeline. It crawls App Store / Play Store
-reviews for 63 banking apps, lands them as Bronze Parquet in MinIO/S3, cleanses them to Silver,
+reviews for 61 banking apps, lands them as Bronze Parquet in MinIO/S3, cleanses them to Silver,
 enriches them in the Gold layer (embeddings → ABSA → actionability/LLM summary), and aggregates
 into PostgreSQL fact tables plus a denormalized serving mart consumed by a dashboard backend.
 The medallion flow is orchestrated either by the Airflow DAG in `dags/` or by the step CLI

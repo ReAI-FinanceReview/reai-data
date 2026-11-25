@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
 
 # src
 
@@ -14,7 +14,7 @@ aggregation) with `pipeline/` providing the step dispatcher, CLI, and post-aggre
 
 | File | Description |
 |------|-------------|
-| `bootstrap_db.py` | Local DB bootstrap: reset `public` schema, apply `sql/schema_v4.sql`, stamp `20260430_0001` and upgrade to head, then load seed SQL and verify seed counts (39/63/63) — the order `test_bootstrap_runs_migrations_before_seed_sql` in `tests/test_bootstrap_db.py` pins. Refuses non-local hosts, and, when `DATABASE_URL` comes from `.env`/the shell, a URL port that disagrees with `POSTGRES_PORT` (`validate_published_port`) |
+| `bootstrap_db.py` | Local DB bootstrap: reset `public` schema, apply `sql/schema_v4.sql`, stamp `20260430_0001` and upgrade to head, then load seed SQL and verify seed counts (39/65/61) — the order `test_bootstrap_runs_migrations_before_seed_sql` in `tests/test_bootstrap_db.py` pins. Refuses non-local hosts, and, when `DATABASE_URL` comes from `.env`/the shell, a URL port that disagrees with `POSTGRES_PORT` (`validate_published_port`) |
 
 ## Subdirectories
 

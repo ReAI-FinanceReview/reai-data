@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
 
 # src/models
 
@@ -17,7 +17,7 @@ queried — Gold analysis reads `ReviewPreprocessed` directly.
 | `enums.py` | Central ENUMs: `PlatformType`, `AppType`, `ProcessingStatusType`, `AnalysisStatusType`, `SentimentType`, `IngestionBatchStatusType`, `CategoryType` |
 | `__init__.py` | Package version (`5.0.0`) and the curated re-export list grouped by layer |
 | `app_service.py` | `AppService` — logical service master (39 rows) |
-| `apps.py` | `App` — physical app instance per platform (63 rows) |
+| `apps.py` | `App` — physical app instance per platform (65 rows) |
 | `app_metadata.py` | `AppMetadata` — app ↔ service link with SCD Type 2 history (`valid_from`/`valid_to`/`is_active`) |
 | `organizations.py` | `Organization` — 114-row org hierarchy. **Docstring claims `ltree`, but the DDL has none**: `org_id` is plain `TEXT` with hyphen levels (`1`, `1-1`, `10-5`). ltree was removed in issue #32 |
 | `review_master_index.py` | `ReviewMasterIndex` — central hub across Bronze → Silver → Gold; carries `processing_status`, `retry_count`, `error_message` |

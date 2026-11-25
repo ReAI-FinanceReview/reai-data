@@ -1,12 +1,13 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
 
 # config/app_ids
 
 ## Purpose
 Crawl targets. Plain-text lists of the store app identifiers to crawl, grouped by Korean bank
-category, plus an exclusion list. These files define the pipeline's scope: 63 apps across two
-stores, matching the seed catalog in `sql/apps_data.sql`.
+category, plus an exclusion list. These files define the pipeline's scope: 61 apps across two
+stores (36 App Store + 25 Play Store), matching the active `app_metadata` links in the seed catalog
+(`sql/apps_data.sql` holds 65 apps; the other 4 are retired).
 
 ## Key Files
 
@@ -26,8 +27,11 @@ None.
   documentation comments are safe.
 - Adding an app here is only half the change: crawled reviews resolve against `apps` /
   `app_metadata`, so a new app also needs seed rows in `sql/apps_data.sql` and
-  `sql/app_metadata_data.sql` (and the bootstrap verification counts of 39 / 63 / 63 will need
+  `sql/app_metadata_data.sql` (and the bootstrap verification counts of 39 / 65 / 61 will need
   updating in `src/bootstrap_db.py`).
+- Retiring an app is the mirror image: turn its line into a `#` comment that states the reason and
+  date, and close its `app_metadata` row (`valid_to`, `is_active = FALSE`) rather than deleting the
+  `apps` row, so reviews already loaded for it keep their mapping.
 - App Store entries are numeric IDs; Play Store entries are package names. Mixing them silently
   yields empty crawls.
 - File locations are configurable via `config/crawler_config.yml`; do not hardcode these paths in

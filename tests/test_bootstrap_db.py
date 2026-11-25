@@ -189,8 +189,8 @@ def test_build_verification_queries_check_required_seed_counts():
 
     assert queries == [
         BootstrapVerification("app_service", "SELECT COUNT(*) FROM app_service", 39),
-        BootstrapVerification("apps", "SELECT COUNT(*) FROM apps", 63),
-        BootstrapVerification("app_metadata_active", "SELECT COUNT(*) FROM app_metadata WHERE is_active = TRUE", 63),
+        BootstrapVerification("apps", "SELECT COUNT(*) FROM apps", 65),
+        BootstrapVerification("app_metadata_active", "SELECT COUNT(*) FROM app_metadata WHERE is_active = TRUE", 61),
     ]
 
 
@@ -227,8 +227,8 @@ def test_required_seed_files_are_reexecution_safe(test_db_engine):
 
         assert counts == {
             "app_service": 39,
-            "apps": 63,
-            "app_metadata": 63,
+            "apps": 65,
+            "app_metadata": 61,
         }
     finally:
         _reset_schema(test_db_engine)

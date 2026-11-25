@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
 
 # sql
 
@@ -15,8 +15,8 @@ pipeline can run. Older schema snapshots are kept for history only.
 |------|-------------|
 | `schema_v4.sql` | Current baseline DDL (2026-03-05): Bronze → Silver → Gold → data mart, pgvector, partitioned `srv_daily_review_list`. Applied by `src/bootstrap_db.py`, mirrored by Alembic revision `20260430_0001` |
 | `app_service_data.sql` | Seed: 39 logical service masters, UUIDs `01960000-{NNNN}-7000-8000-…`. Load order 1 |
-| `apps_data.sql` | Seed: 63 physical apps (37 App Store + 26 Play Store), UUIDs `01960001-{NNNN}-…`. Load order 2 |
-| `app_metadata_data.sql` | Seed: 63 active SCD Type 2 rows linking apps ↔ services with group/bank classification. Load order 3 |
+| `apps_data.sql` | Seed: 65 physical apps (38 App Store + 27 Play Store), UUIDs `01960001-{NNNN}-…`. Load order 2 |
+| `app_metadata_data.sql` | Seed: 65 SCD Type 2 rows linking apps ↔ services with group/bank classification — 61 active, 4 closed with `valid_to` and `is_active = FALSE`. Load order 3 |
 | `organizations_data.sql` | Organization hierarchy rows generated from `organization.csv`; not part of the bootstrap load order |
 | `schema_v3.sql` | Historical schema snapshot (2026-02-16); not referenced by code |
 | `schema_v2.sql` | Historical schema snapshot (2026-02-04); not referenced by code |
@@ -32,7 +32,7 @@ None.
   revision (`docs/schema-management.md`).
 - The bootstrap load order is fixed in `src/bootstrap_db.py:20` (`SQL_FILE_ORDER`) because of FK
   parentage: `app_service` → `apps` → `app_metadata`. Adding a seed file means updating that tuple
-  and, if the row count matters, `build_verification_queries()` (expects 39 / 63 / 63). A new
+  and, if the row count matters, `build_verification_queries()` (expects 39 / 65 / 61). A new
   `.sql` file is ignored by the blanket `*.sql` rule: add a `!<name>.sql` negation like the existing
   seed files have, or `git add -f` it (root `AGENTS.md`).
 - Seed files must stay idempotent — `scripts/bootstrap_db.py` re-applies them after a schema reset.
