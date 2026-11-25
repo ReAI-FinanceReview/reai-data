@@ -15,7 +15,7 @@ Metabase/Grafana dashboard 구현을 추가하지 않는다.
 |---|---|---|
 | `fresh_ingestion` warning | target date 신규 batch/review count가 0건 | 성공 가능, report 확인 |
 | `batch_state` failure | `PENDING`, `FAILED`, `RETRYING`, `DEAD_LETTER` batch가 남음 | task 실패 |
-| `review_state` failure | `RAW`, `CLEANED`, retry-exhausted `FAILED` review가 남음 | task 실패 |
+| `review_state` failure | `RAW`, `CLEANED`, retry-exhausted `FAILED` review가 남음 (`SKIPPED` 는 종결 상태라 `skipped_count` 로 보고만 함) | task 실패 |
 | `metadata_mapping` failure | `service_id` 또는 active `app_metadata` mapping 누락 | task 실패 |
 | `orphan_integrity` failure | analyzed row의 action/app review/preprocessed/aspect 연결 누락 | task 실패 |
 | `mart_freshness` failure | analyzed upstream이 있는데 target-date mart row가 없음 | task 실패 |
