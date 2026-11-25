@@ -395,14 +395,14 @@ def test_unanalyzable_reviews_become_terminal_skipped(
 @pytest.mark.parametrize(
     ("reviews", "expected_status"),
     [
-        # (refined_text, 임베딩을 미리 넣을지)
+        # (refined_text, 임베딩을 미리 넣을지, 기대 리뷰 상태)
         # 분석 제외 리뷰만 있는 날: 0건 분석이어도 단계 실패가 아니다
-        ((("", False),), "success"),
+        ((("", False, "SKIPPED"),), "success"),
         # 빈 텍스트는 API 없이도 SKIPPED 가 된다. 그것으로 실패를 덮으면 안 된다
-        ((("", False), ("로그인이 안돼요", False)), "failed"),
-        ((("로그인이 안돼요", False),), "failed"),
+        ((("", False, "SKIPPED"), ("로그인이 안돼요", False, "FAILED")), "failed"),
+        ((("로그인이 안돼요", False, "FAILED"),), "failed"),
         # 부분 실패: 하나라도 분석되면 #94 이전처럼 단계는 성공이다
-        ((("로그인이 안돼요", True), ("결제가 느려요", False)), "success"),
+        ((("로그인이 안돼요", True, "ANALYZED"), ("결제가 느려요", False, "FAILED")), "success"),
     ],
 )
 def test_run_gold_fails_only_when_nothing_was_analyzed_and_something_failed(
@@ -430,14 +430,25 @@ def test_run_gold_fails_only_when_nothing_was_analyzed_and_something_failed(
                 ),
                 {"app_id": app_id, "pid": f"run.gold.skip.{app_id}"},
             )
-            for refined_text, embed in reviews:
+            seeded = {
                 _seed_review(
                     connection, app_id=app_id, refined_text=refined_text, status="CLEANED",
                     retry_count=0, embed=embed,
-                )
+                ): review_status
+                for refined_text, embed, review_status in reviews
+            }
 
         result = run_gold(target_date=_SKIP_TARGET_DATE.isoformat())
 
         assert result.status == expected_status, result.message
+        with test_db_engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT review_id, processing_status::text FROM review_master_index "
+                    "WHERE app_id = :app_id"
+                ),
+                {"app_id": app_id},
+            ).all()
+        assert {review_id: status for review_id, status in rows} == seeded
     finally:
         _cleanup_skip_probe(test_db_engine, app_id)
