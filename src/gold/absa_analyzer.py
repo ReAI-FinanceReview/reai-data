@@ -416,7 +416,8 @@ class GoldABSAAnalyzer:
 
         Okt ``pos(stem=True)`` 의 어간을 사전과 맞추고('빨라요' → 빠르, '너무조아요' → 좋),
         '안'/'못' 바로 뒤의 기능동사를 부정 구문 키워드로 묶는다('안열리는데' → 안열리).
-        감성 용언의 부정은 바로 앞 토큰이 '안'/'못' 인지로 정한다('안빨라요', '안 느려요').
+        감성 용언의 부정은 바로 앞 토큰이 '안'/'못' 인지('안빨라요', '안 느려요'), 바로 뒤가
+        장형 부정 '않다' 또는 '못'+'하다' 인지('귀찮지 않아요', '느려지진 않네요')로 정한다.
         Okt 오류는 잡지 않는다. 여기서 빈 결과는 분석 제외(종결)로 이어지므로, 일시적
         오류가 재시도 가능한 실패로 남아야 한다.
 
@@ -484,6 +485,12 @@ class GoldABSAAnalyzer:
                     ),
                     None,
                 )
+                # 장형 부정: Okt 는 '-지는/-진/-지도' 를 용언에 붙이고 '않다' 를 다음 토큰으로 낸다
+                next_stems = [s for s, _ in stems[i + 1:i + 3]]
+                if keyword and (
+                    next_stems[:1] == ["않다"] or next_stems == ["못", "하다"]
+                ):
+                    is_negated = not is_negated
             if keyword:
                 add(keyword, start, end, is_negated and keyword not in _PHRASE_KEYWORDS)
             i += 1

@@ -61,8 +61,10 @@ None.
   `_PHRASE_KEYWORDS`, never into `_SENTIMENT_DICT` / `_CATEGORY_KEYWORDS`: those also feed the
   surface-dictionary step, so an entry there changes reviews that already succeed.
 - Negation differs by step. Noun and surface-dictionary keywords use the ±3-token window
-  (`_has_negation`); predicate-step keywords are negated only when the token right before them is
-  `안`/`못`; phrase keywords in `_PHRASE_KEYWORDS` carry their own polarity and are never flipped.
+  (`_has_negation`). A predicate-step keyword is negated when the token right before it is
+  `안`/`못`, or when the token right after it is the long-form `않다` or `못`+`하다`
+  (`귀찮지 않아요`); both together cancel out. Phrase keywords in `_PHRASE_KEYWORDS` carry their own
+  polarity and are never flipped.
 - Embedding and LLM summary calls require a live `OPENAI_API_KEY`.
 - Department assignment is **not** inside `GoldOrchestrator`. It is its own pipeline step
   (`run_dept_assign` / `scripts/assign_dept.py`) that reads `ANALYZED` rows and must leave
