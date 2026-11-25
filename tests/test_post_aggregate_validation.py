@@ -23,6 +23,10 @@ MISSING_MAPPING_TARGET_DATE = _TODAY - timedelta(days=8)
 ORPHAN_TARGET_DATE = _TODAY - timedelta(days=9)
 MART_MISSING_TARGET_DATE = _TODAY - timedelta(days=10)
 COUNT_MISMATCH_TARGET_DATE = _TODAY - timedelta(days=11)
+# 아래 두 날짜는 집계(run_aggregate)를 돌리지 않는 매핑 전용 테스트가 쓰므로
+# 마트 테스트의 1~13 구간 밖에 둔다.
+CLOSED_LINK_IN_RANGE_TARGET_DATE = _TODAY - timedelta(days=14)
+CLOSED_LINK_AFTER_RANGE_TARGET_DATE = _TODAY - timedelta(days=15)
 
 
 @pytest.mark.requires_db
@@ -253,6 +257,108 @@ def test_post_aggregate_validation_fails_missing_service_metadata_mapping(
         _cleanup_probe(
             test_db_engine,
             target_date=MISSING_MAPPING_TARGET_DATE,
+            service_id=service_id,
+            app_id=app_id,
+            review_id=review_id,
+            platform_review_id=platform_review_id,
+        )
+
+
+@pytest.mark.requires_db
+@pytest.mark.parametrize(
+    ("target_date", "valid_to", "expected_passed"),
+    [
+        # 닫힌 연결(is_active FALSE)이라도 valid_to 당일까지의 리뷰는 매핑된 것으로 본다.
+        (CLOSED_LINK_IN_RANGE_TARGET_DATE, CLOSED_LINK_IN_RANGE_TARGET_DATE, True),
+        # valid_to 다음 날의 리뷰는 연결 기간 밖이므로 여전히 실패한다.
+        (
+            CLOSED_LINK_AFTER_RANGE_TARGET_DATE,
+            CLOSED_LINK_AFTER_RANGE_TARGET_DATE - timedelta(days=1),
+            False,
+        ),
+    ],
+    ids=["review_inside_closed_link_range", "review_after_valid_to"],
+)
+def test_post_aggregate_validation_judges_closed_metadata_link_by_date_range(
+    test_db_engine,
+    test_db_url,
+    test_db_schema,
+    monkeypatch,
+    target_date: date,
+    valid_to: date,
+    expected_passed: bool,
+):
+    service_id = uuid7()
+    app_id = uuid7()
+    review_id = uuid7()
+    platform_review_id = f"post-aggregate-closed-link-{review_id}"
+    monkeypatch.setenv("DATABASE_URL", test_db_url)
+
+    _cleanup_probe(
+        test_db_engine,
+        target_date=target_date,
+        service_id=service_id,
+        app_id=app_id,
+        review_id=review_id,
+        platform_review_id=platform_review_id,
+    )
+    try:
+        with test_db_engine.begin() as connection:
+            _insert_app_context(
+                connection,
+                service_id=service_id,
+                app_id=app_id,
+                include_metadata=False,
+                target_date=target_date,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO app_metadata (
+                        app_id,
+                        service_id,
+                        app_type,
+                        valid_from,
+                        valid_to,
+                        is_active
+                    )
+                    VALUES (
+                        :app_id,
+                        :service_id,
+                        'CONSUMER',
+                        :valid_from,
+                        :valid_to,
+                        FALSE
+                    )
+                    """
+                ),
+                {
+                    "app_id": app_id,
+                    "service_id": service_id,
+                    "valid_from": target_date - timedelta(days=30),
+                    "valid_to": valid_to,
+                },
+            )
+            _insert_review_master_index(
+                connection,
+                target_date=target_date,
+                service_id=service_id,
+                app_id=app_id,
+                review_id=review_id,
+                platform_review_id=platform_review_id,
+            )
+
+        result = run_post_aggregate_validation(target_date=target_date.isoformat())
+
+        check = _assert_check(result.validations, "metadata_mapping", passed=expected_passed)
+        assert check["metrics"] == {
+            "missing_service_id": 0,
+            "missing_active_mapping": 0 if expected_passed else 1,
+        }
+    finally:
+        _cleanup_probe(
+            test_db_engine,
+            target_date=target_date,
             service_id=service_id,
             app_id=app_id,
             review_id=review_id,

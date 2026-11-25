@@ -200,7 +200,6 @@ class PostAggregateValidator:
                 LEFT JOIN app_metadata am
                   ON am.app_id = rmi.app_id
                  AND am.service_id = rmi.service_id
-                 AND am.is_active IS TRUE
                  AND (am.valid_from IS NULL OR am.valid_from <= :target_date)
                  AND (am.valid_to IS NULL OR am.valid_to >= :target_date)
                 WHERE rmi.review_created_at >= :target_date
