@@ -145,7 +145,9 @@ def run_gold(
             limit=limit,
             target_date=parsed_date,
         )
-        if result["total"] > 0 and result["analyzed"] == 0:
+        # SKIPPED 는 실패가 아니라 종결 판정이다 (#94). 분석 제외 리뷰만 있는 날을
+        # 단계 실패로 보지 않도록, 전부 FAILED 일 때만 실패로 본다.
+        if result["total"] > 0 and result["failed"] == result["total"]:
             raise RuntimeError(f"Gold: 0/{result['total']} succeeded")
 
     return _handle_step("gold", _run)

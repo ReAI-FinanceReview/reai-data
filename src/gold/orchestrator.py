@@ -2,9 +2,10 @@
 
 CLEANED 상태의 review_master_index 레코드를 배치로 가져와
 Gold 분석 모듈(embedding → ABSA → action)을 순차 실행한 뒤
-processing_status를 ANALYZED / FAILED로 갱신합니다.
+processing_status를 ANALYZED / SKIPPED / FAILED로 갱신합니다.
 
 재시도 조건: processing_status = FAILED AND retry_count < 3
+SKIPPED(규칙 기반으로 분석할 수 없는 리뷰, #94)는 종결 상태라 재시도하지 않습니다.
 
 Usage:
     orchestrator = GoldOrchestrator()
@@ -18,6 +19,7 @@ import traceback
 from typing import List, Optional
 from uuid import UUID
 
+from src.gold.skip import AnalysisSkipped
 from src.models.enums import ProcessingStatusType
 from src.models.review_master_index import ReviewMasterIndex
 from src.utils.db_connector import DatabaseConnector
@@ -30,7 +32,7 @@ class GoldOrchestrator:
     """Gold Layer 파이프라인 오케스트레이터.
 
     CLEANED 레코드를 embedding → ABSA → action analysis 순서로 처리하고
-    처리 결과에 따라 processing_status를 ANALYZED / FAILED로 갱신합니다.
+    처리 결과에 따라 processing_status를 ANALYZED / SKIPPED / FAILED로 갱신합니다.
     """
 
     def __init__(self, config_path: str = "config/crawler_config.yml"):
@@ -64,38 +66,45 @@ class GoldOrchestrator:
             target_date: 처리할 리뷰 생성일. None이면 날짜 제한 없음.
 
         Returns:
-            {"total": int, "analyzed": int, "failed": int}
+            {"total": int, "analyzed": int, "skipped": int, "failed": int}
         """
         session = self.db_connector.get_session()
         try:
             review_ids = self._fetch_pending_ids(session, limit, target_date=target_date)
             if not review_ids:
                 self.logger.info("Gold Orchestrator: 처리 대상 리뷰 없음")
-                return {"total": 0, "analyzed": 0, "failed": 0}
+                return {"total": 0, "analyzed": 0, "skipped": 0, "failed": 0}
 
             self.logger.info(f"Gold Orchestrator: {len(review_ids)}건 처리 시작")
-            analyzed, failed = 0, 0
+            analyzed, skipped, failed = 0, 0, 0
 
             for i in range(0, len(review_ids), batch_size):
                 chunk = review_ids[i : i + batch_size]
                 for review_id in chunk:
-                    ok = self._process_one(session, review_id)
-                    if ok:
+                    status = self._process_one(session, review_id)
+                    if status == ProcessingStatusType.ANALYZED:
                         analyzed += 1
+                    elif status == ProcessingStatusType.SKIPPED:
+                        skipped += 1
                     else:
                         failed += 1
 
                 session.commit()
                 self.logger.info(
                     f"진행 중: {min(i + batch_size, len(review_ids))}/{len(review_ids)} "
-                    f"(analyzed={analyzed}, failed={failed})"
+                    f"(analyzed={analyzed}, skipped={skipped}, failed={failed})"
                 )
 
             self.logger.info(
                 f"Gold Orchestrator 완료: total={len(review_ids)}, "
-                f"analyzed={analyzed}, failed={failed}"
+                f"analyzed={analyzed}, skipped={skipped}, failed={failed}"
             )
-            return {"total": len(review_ids), "analyzed": analyzed, "failed": failed}
+            return {
+                "total": len(review_ids),
+                "analyzed": analyzed,
+                "skipped": skipped,
+                "failed": failed,
+            }
 
         except Exception:
             session.rollback()
@@ -138,12 +147,13 @@ class GoldOrchestrator:
             query = query.limit(limit)
         return [row.review_id for row in query.all()]
 
-    def _process_one(self, session, review_id: UUID) -> bool:
+    def _process_one(self, session, review_id: UUID) -> ProcessingStatusType:
         """단일 review_id에 대해 전체 Gold 분석 파이프라인 실행.
 
         Returns:
-            True  - 전 모듈 성공 → processing_status = ANALYZED
-            False - 오류 발생   → processing_status = FAILED, retry_count++
+            ANALYZED - 전 모듈 성공
+            SKIPPED  - ABSA 가 분석 제외 판정 → 종결, retry_count 유지, action 분석 생략
+            FAILED   - 오류 발생 → retry_count++
         """
         try:
             ok_embed = self._embedding.process(session, review_id)
@@ -164,7 +174,17 @@ class GoldOrchestrator:
                 status=ProcessingStatusType.ANALYZED,
                 error_message=None,
             )
-            return True
+            return ProcessingStatusType.ANALYZED
+
+        except AnalysisSkipped as skip:
+            self.logger.info(f"[{review_id}] Gold 분석 제외: {skip.error_message}")
+            self._update_status(
+                session,
+                review_id,
+                status=ProcessingStatusType.SKIPPED,
+                error_message=skip.error_message,
+            )
+            return ProcessingStatusType.SKIPPED
 
         except Exception as exc:
             err_msg = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
@@ -176,7 +196,7 @@ class GoldOrchestrator:
                 error_message=err_msg[:2000],
                 increment_retry=True,
             )
-            return False
+            return ProcessingStatusType.FAILED
 
     def _update_status(
         self,

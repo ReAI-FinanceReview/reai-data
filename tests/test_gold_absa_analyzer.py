@@ -19,7 +19,10 @@ from src.gold.absa_analyzer import (
     _CATEGORY_KEYWORDS,
     _COMPACT_NEGATION_PREFIXES,
     _NEGATION_WORDS,
+    _SATISFIED_USAGE_RE,
+    _skip_reason_before_extraction,
 )
+from src.gold.skip import AnalysisSkipped
 from src.models.enums import CategoryType, ProcessingStatusType
 from src.models.review_aspects import ReviewAspect
 
@@ -351,16 +354,19 @@ class TestProcess:
         session.add_all.assert_not_called()
         assert session.get.call_count == 1
 
-    def test_fails_if_empty_refined_text(self):
+    def test_skips_empty_refined_text(self):
+        """빈 refined_text(이모지만 있던 리뷰)는 재시도 대상이 아니라 종결 SKIPPED (#94)."""
         session = _make_session(already_analyzed=False)
         preprocessed = MagicMock()
         preprocessed.refined_text = ""
         session.get.return_value = preprocessed
-        result = self.analyzer.process(session, self.review_id)
-        assert result is False
+        with pytest.raises(AnalysisSkipped) as excinfo:
+            self.analyzer.process(session, self.review_id)
+        assert excinfo.value.error_message == "skip:empty"
         session.add_all.assert_not_called()
 
-    def test_fails_if_no_keywords_found(self):
+    def test_fails_if_no_keywords_found_without_okt(self):
+        """Okt 없이(용언 단계를 못 돌림) aspect 0건이면 SKIPPED 로 확정하지 않고 재시도 가능한 실패."""
         session = _make_session(already_analyzed=False)
         preprocessed = MagicMock()
         preprocessed.refined_text = "안녕하세요 반갑습니다"  # no matching keywords
@@ -441,3 +447,214 @@ class TestProcessBatch:
         assert count == 1
         session.rollback.assert_not_called()  # 세션 전체 롤백 없어야 함
         session.commit.assert_called_once()   # 성공분은 커밋됨
+
+
+# ─────────────────────────────────────────────
+# H. 구어체 리뷰 용언 단계 (issue #94) — 실제 Okt
+# ─────────────────────────────────────────────
+# 아래 문장은 모두 실데이터에서 FAILED 로 남았던 리뷰다. 어휘는 실패 66건 밖의
+# ANALYZED 리뷰에서 평점과 극성이 맞는지 확인한 것만 넣었다 (PR #94 case 분석).
+
+@pytest.fixture(scope="module")
+def okt_analyzer():
+    from src.gold.absa_analyzer import KONLPY_AVAILABLE, Okt
+
+    if not KONLPY_AVAILABLE:
+        pytest.skip("konlpy is not installed")
+    from src.utils.logger import get_logger
+
+    analyzer = GoldABSAAnalyzer.__new__(GoldABSAAnalyzer)
+    analyzer.logger = get_logger(__name__)
+    analyzer.db_connector = None
+    analyzer._okt = Okt()
+    return analyzer
+
+
+def _aspects_by_keyword(analyzer, session, text):
+    # 임베딩이 없는 review_id 라 벡터 카테고리 폴백은 None 이 된다
+    return {a.keyword: a for a in analyzer._analyze(session, uuid7(), text)}
+
+
+class TestColloquialPredicateTier:
+    @pytest.mark.parametrize(
+        ("text", "keyword", "score", "category"),
+        [
+            # 부정 + 기능동사: 동작하지 않는다는 신고
+            ("밥먹고 뭐하시나요? 앱이 안열리는데. 한심하네요.", "안열리", 0.10, "STABILITY"),
+            ("안됨", "안되", 0.10, "STABILITY"),
+            ("안됩니다", "안되", 0.10, "STABILITY"),
+            ("안켜짐", "안켜지", 0.10, "STABILITY"),
+            ("못쓰겠네", "못쓰", 0.15, None),
+            # 감성 용언 활용형 → 사전 어간
+            ("빨라요", "빠르", 0.80, "SPEED"),          # Okt 가 빨르다로 복원
+            ("느려터졌음", "느리", 0.20, "SPEED"),
+            ("귀찮아요 ㅠㅠ", "귀찮", 0.20, "USABILITY"),
+            ("너무조아요", "좋", 0.96, None),           # 너무 × 1.2
+            # 현재진행 사용 만족 구문
+            ("잘 쓰고 있어요", "잘쓰", 0.80, None),
+            ("잘쓰고있어요", "잘쓰", 0.80, None),
+        ],
+    )
+    def test_rescues_previously_failed_reviews(
+        self, test_db_session, okt_analyzer, text, keyword, score, category
+    ):
+        aspects = _aspects_by_keyword(okt_analyzer, test_db_session, text)
+        assert keyword in aspects
+        assert aspects[keyword].sentiment_score == pytest.approx(score, abs=1e-4)
+        assert aspects[keyword].category == category
+
+    def test_spaced_negation_is_not_flipped_back(self, test_db_session, okt_analyzer):
+        """'안 돼요' 의 '안' 이 문맥 부정으로 다시 잡혀 0.90(긍정)이 되면 안 된다."""
+        aspects = _aspects_by_keyword(okt_analyzer, test_db_session, "안 돼요")
+        assert aspects["안되"].sentiment_score == pytest.approx(0.10, abs=1e-4)
+
+    def test_negated_sentiment_predicate_still_flips(self, test_db_session, okt_analyzer):
+        """사전 용언은 기존 부정 반전 규칙을 그대로 따른다: 안 좋아요 → 1 - 0.8."""
+        aspects = _aspects_by_keyword(okt_analyzer, test_db_session, "안 좋아요")
+        assert aspects["좋"].sentiment_score == pytest.approx(0.20, abs=1e-4)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "잘 쓰고 있었는데 ㅠㅠ",  # 과거진행: 불만 리뷰 도입부 (ANALYZED 1★ 다수)
+            "잘쓰던건데",              # Okt 합성어 잘쓰다: ANALYZED 2건 모두 1★
+            "빨리 해주세요",           # 부사 빨리 ≠ 형용사 빠르다
+            "안녕하세요 반갑습니다",   # #84 회귀: 인사말의 '안' 은 부정이 아니다
+            "ㅇㅇ",
+            "뭐지..",
+            "짱",                      # 근거 1건뿐이라 넣지 않음
+            "최곱니다",                # Okt 가 최 + 곱다로 분석
+        ],
+    )
+    def test_extracts_nothing_for_rejected_or_meaningless_text(self, okt_analyzer, text):
+        assert okt_analyzer._extract_keywords(text) == []
+
+    def test_predicate_tier_does_not_run_when_nouns_exist(self, okt_analyzer):
+        """명사가 나오는 리뷰는 기존 결과 그대로다 (용언 단계는 0건일 때만)."""
+        keywords = okt_analyzer._extract_keywords("로그인이 안돼요")
+        assert keywords == ["로그인"]
+
+    def test_predicate_tier_does_not_run_when_dict_fallback_matches(self, okt_analyzer):
+        """표면 사전이 잡는 짧은 리뷰도 기존 결과 그대로다 ('쉽게 할수있어 좋아요')."""
+        keywords = okt_analyzer._extract_keywords("쉽게 할수있어 좋아요")
+        assert sorted(keywords) == sorted(["좋", "쉽"])  # 사전 매칭 순서는 set 순회 순서
+
+
+class TestSatisfiedUsagePhrase:
+    @pytest.mark.parametrize(
+        "text", ["잘 쓰고 있어요", "잘쓰고있음", "잘 사용하고 있습니다", "잘사용중인데"]
+    )
+    def test_matches_present_progressive(self, text):
+        assert _SATISFIED_USAGE_RE.search(text)
+
+    @pytest.mark.parametrize(
+        "text", ["잘 쓰고 있었는데 업데이트 후 안돼요", "잘쓰던 기능인데", "잘 썼습니다"]
+    )
+    def test_ignores_past_forms(self, text):
+        assert _SATISFIED_USAGE_RE.search(text) is None
+
+
+# ─────────────────────────────────────────────
+# I. 분석 제외 판정 (issue #94)
+# ─────────────────────────────────────────────
+
+class TestSkipReasonBeforeExtraction:
+    @pytest.mark.parametrize(
+        ("text", "reason"),
+        [
+            (None, "empty"),
+            ("", "empty"),
+            ("   ", "empty"),
+            ("Not working ipad .even iphone. I faced click issue", "non_korean"),
+            ("Не могу зайти слетает", "non_korean"),
+            ("挺好的", "non_korean"),
+            ("[PROFANITY]", None),        # 마스킹 토큰만 남은 한국어 욕설 → 추출 단계에서 판정
+            ("ㅇ", None),
+            ("앱 good", None),
+            ("12345 !!", None),
+        ],
+    )
+    def test_reason(self, text, reason):
+        assert _skip_reason_before_extraction(text) == reason
+
+
+# ─────────────────────────────────────────────
+# J. process() — 실제 DB (issue #94)
+# ─────────────────────────────────────────────
+
+def _seed_cleaned_review(session, refined_text):
+    from sqlalchemy import text as sql
+
+    app_id, review_id = uuid7(), uuid7()
+    session.execute(
+        sql(
+            "INSERT INTO apps (app_id, platform_app_id, platform_type, name) "
+            "VALUES (:app_id, :platform_app_id, 'APPSTORE', 'ABSA Skip Test App')"
+        ),
+        {"app_id": app_id, "platform_app_id": f"absa.skip.{app_id}"},
+    )
+    session.execute(
+        sql(
+            "INSERT INTO review_master_index "
+            "(review_id, app_id, platform_review_id, platform_type, processing_status, retry_count) "
+            "VALUES (:review_id, :app_id, :platform_review_id, 'APPSTORE', 'CLEANED', 0)"
+        ),
+        {"review_id": review_id, "app_id": app_id, "platform_review_id": f"absa-skip-{review_id}"},
+    )
+    session.execute(
+        sql(
+            "INSERT INTO reviews_preprocessed (review_id, platform_review_id, refined_text) "
+            "VALUES (:review_id, :platform_review_id, :refined_text)"
+        ),
+        {
+            "review_id": review_id,
+            "platform_review_id": f"absa-skip-{review_id}",
+            "refined_text": refined_text,
+        },
+    )
+    session.flush()
+    return review_id
+
+
+def _aspect_count(session, review_id):
+    return session.query(ReviewAspect).filter(ReviewAspect.review_id == review_id).count()
+
+
+@pytest.mark.requires_db
+class TestProcessSkipWithDatabase:
+    @pytest.mark.parametrize(
+        ("refined_text", "error_message"),
+        [
+            ("", "skip:empty"),
+            ("The app is not user friendly and is constantly crashing.", "skip:non_korean"),
+            ("ㅇㅇ", "skip:no_aspect"),
+            ("[PROFANITY]", "skip:no_aspect"),
+        ],
+    )
+    def test_unanalyzable_review_raises_skip_without_aspects(
+        self, test_db_session, okt_analyzer, refined_text, error_message
+    ):
+        review_id = _seed_cleaned_review(test_db_session, refined_text)
+        with pytest.raises(AnalysisSkipped) as excinfo:
+            okt_analyzer.process(test_db_session, review_id)
+        assert excinfo.value.error_message == error_message
+        # #84 orphan 무결성: aspect 없는 리뷰를 ANALYZED 로 두지 않는다
+        assert _aspect_count(test_db_session, review_id) == 0
+        from src.models.review_master_index import ReviewMasterIndex
+
+        rmi = test_db_session.get(ReviewMasterIndex, review_id)
+        assert rmi.processing_status == ProcessingStatusType.CLEANED
+
+    def test_outage_report_from_issue_is_analyzed(self, test_db_session, okt_analyzer):
+        review_id = _seed_cleaned_review(
+            test_db_session, "밥먹고 뭐하시나요? 앱이 안열리는데. 한심하네요."
+        )
+        assert okt_analyzer.process(test_db_session, review_id) is True
+        test_db_session.flush()
+        aspect = (
+            test_db_session.query(ReviewAspect)
+            .filter(ReviewAspect.review_id == review_id)
+            .one()
+        )
+        assert (aspect.keyword, aspect.category) == ("안열리", "STABILITY")
+        assert aspect.sentiment_score == pytest.approx(0.10, abs=1e-4)

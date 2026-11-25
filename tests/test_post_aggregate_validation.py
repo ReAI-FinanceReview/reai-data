@@ -23,6 +23,8 @@ MISSING_MAPPING_TARGET_DATE = _TODAY - timedelta(days=8)
 ORPHAN_TARGET_DATE = _TODAY - timedelta(days=9)
 MART_MISSING_TARGET_DATE = _TODAY - timedelta(days=10)
 COUNT_MISMATCH_TARGET_DATE = _TODAY - timedelta(days=11)
+# 마트를 쓰지 않는 review_state 전용 검증이라 1~13 공유 구간 밖을 쓴다.
+SKIPPED_REVIEW_TARGET_DATE = _TODAY - timedelta(days=14)
 
 
 @pytest.mark.requires_db
@@ -208,6 +210,70 @@ def test_post_aggregate_validation_fails_retry_exhausted_review_state(
             review_id=review_id,
             platform_review_id=platform_review_id,
         )
+
+
+@pytest.mark.requires_db
+def test_post_aggregate_validation_treats_skipped_reviews_as_terminal(
+    test_db_engine,
+    test_db_url,
+    test_db_schema,
+    monkeypatch,
+):
+    """SKIPPED(#94)는 미처리도 재시도 소진도 아니다. retry_count 가 3 이어도 세지 않는다."""
+    service_id = uuid7()
+    app_id = uuid7()
+    review_ids = [uuid7(), uuid7()]
+    platform_review_ids = [f"post-aggregate-skipped-{review_id}" for review_id in review_ids]
+    monkeypatch.setenv("DATABASE_URL", test_db_url)
+
+    def cleanup():
+        # _cleanup_probe 는 리뷰 1건 기준으로 앱까지 지우므로 두 번째 리뷰를 먼저 지운다
+        with test_db_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM review_master_index WHERE review_id = :review_id"),
+                {"review_id": review_ids[1]},
+            )
+        _cleanup_probe(
+            test_db_engine,
+            target_date=SKIPPED_REVIEW_TARGET_DATE,
+            service_id=service_id,
+            app_id=app_id,
+            review_id=review_ids[0],
+            platform_review_id=platform_review_ids[0],
+        )
+
+    cleanup()
+    try:
+        with test_db_engine.begin() as connection:
+            _insert_app_context(
+                connection,
+                service_id=service_id,
+                app_id=app_id,
+                include_metadata=True,
+                target_date=SKIPPED_REVIEW_TARGET_DATE,
+            )
+            for review_id, platform_review_id, retry_count in zip(
+                review_ids, platform_review_ids, (0, 3)
+            ):
+                _insert_review_master_index(
+                    connection,
+                    target_date=SKIPPED_REVIEW_TARGET_DATE,
+                    service_id=service_id,
+                    app_id=app_id,
+                    review_id=review_id,
+                    platform_review_id=platform_review_id,
+                    processing_status="SKIPPED",
+                    retry_count=retry_count,
+                )
+
+        result = run_post_aggregate_validation(target_date=SKIPPED_REVIEW_TARGET_DATE.isoformat())
+
+        check = _assert_check(result.validations, "review_state", passed=True)
+        assert check["metrics"]["skipped_count"] == 2
+        assert check["metrics"]["stuck_count"] == 0
+        assert check["metrics"]["retry_exhausted_failed_count"] == 0
+    finally:
+        cleanup()
 
 
 @pytest.mark.requires_db

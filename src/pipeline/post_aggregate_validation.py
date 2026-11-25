@@ -173,6 +173,19 @@ class PostAggregateValidator:
                 "retry_exhausted_threshold": RETRY_EXHAUSTED_THRESHOLD,
             },
         ).scalar_one()
+        # SKIPPED 는 종결 상태라(#94) 미처리·재시도 소진 어느 쪽에도 세지 않고 보고만 한다.
+        skipped_count = session.execute(
+            text(
+                """
+                SELECT COUNT(*) AS count
+                FROM review_master_index
+                WHERE review_created_at >= :target_date
+                  AND review_created_at < :target_date_end
+                  AND processing_status = 'SKIPPED'
+                """
+            ),
+            self._date_window_params(target_date),
+        ).scalar_one()
         analyzed_count = self._analyzed_count(session, target_date)
         by_status = {row.status: int(row.count) for row in stuck_rows}
         stuck_count = sum(by_status.values()) + int(failed_exhausted or 0)
@@ -182,6 +195,7 @@ class PostAggregateValidator:
             passed=stuck_count == 0,
             metrics={
                 "analyzed_count": analyzed_count,
+                "skipped_count": int(skipped_count or 0),
                 "stuck_count": stuck_count,
                 "by_status": by_status,
                 "retry_exhausted_failed_count": int(failed_exhausted or 0),
