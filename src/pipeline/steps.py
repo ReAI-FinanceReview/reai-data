@@ -145,9 +145,10 @@ def run_gold(
             limit=limit,
             target_date=parsed_date,
         )
-        # SKIPPED 는 실패가 아니라 종결 판정이다 (#94). 분석 제외 리뷰만 있는 날을
-        # 단계 실패로 보지 않도록, 전부 FAILED 일 때만 실패로 본다.
-        if result["total"] > 0 and result["failed"] == result["total"]:
+        # SKIPPED 는 실패가 아니라 종결 판정이다 (#94). 분석 제외 리뷰만 있는 날은 성공으로
+        # 두되, 분석 0건에 실패가 하나라도 섞이면 실패로 본다. SKIPPED 는 텍스트만 보고 정해지므로
+        # API 장애일에도 생긴다 — 그것만으로 장애를 성공으로 덮으면 DAG 재시도가 돌지 않는다.
+        if result["analyzed"] == 0 and result["failed"] > 0:
             raise RuntimeError(f"Gold: 0/{result['total']} succeeded")
 
     return _handle_step("gold", _run)

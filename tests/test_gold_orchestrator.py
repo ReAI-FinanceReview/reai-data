@@ -325,6 +325,7 @@ def test_unanalyzable_reviews_become_terminal_skipped(
     from src.gold.orchestrator import GoldOrchestrator
 
     monkeypatch.setenv("DATABASE_URL", test_db_url)
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     app_id = uuid7()
     try:
         with test_db_engine.begin() as connection:
@@ -389,16 +390,28 @@ def test_unanalyzable_reviews_become_terminal_skipped(
 
 
 @pytest.mark.requires_db
-def test_run_gold_does_not_fail_a_day_with_only_skipped_reviews(
-    test_db_engine, test_db_url, test_db_schema, monkeypatch
+@pytest.mark.parametrize(
+    ("texts", "expected_status"),
+    [
+        # 분석 제외 리뷰만 있는 날: 0건 분석이어도 단계 실패가 아니다
+        (("",), "success"),
+        # SKIPPED 는 텍스트만 보고 정해져 API 장애일에도 생긴다. 실패를 덮으면 안 된다
+        (("", "로그인이 안돼요"), "failed"),
+        (("로그인이 안돼요",), "failed"),
+    ],
+)
+def test_run_gold_fails_only_when_nothing_was_analyzed_and_something_failed(
+    test_db_engine, test_db_url, test_db_schema, monkeypatch, texts, expected_status
 ):
-    """분석 제외 리뷰만 있는 날은 0건 성공이어도 단계 실패가 아니다 (전부 FAILED 일 때만 실패)."""
+    """임베딩이 없는 한국어 리뷰는 API 키가 없으면 FAILED 가 된다 (장애 재현)."""
     from sqlalchemy import text
     from uuid6 import uuid7
 
     from src.pipeline.steps import run_gold
 
     monkeypatch.setenv("DATABASE_URL", test_db_url)
+    # 빈 값으로 고정해 저장소 .env 가 실제 키를 채우지 못하게 한다 (load_dotenv 는 덮어쓰지 않음)
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     app_id = uuid7()
     try:
         with test_db_engine.begin() as connection:
@@ -409,13 +422,14 @@ def test_run_gold_does_not_fail_a_day_with_only_skipped_reviews(
                 ),
                 {"app_id": app_id, "pid": f"run.gold.skip.{app_id}"},
             )
-            _seed_review(
-                connection, app_id=app_id, refined_text="", status="CLEANED",
-                retry_count=0, embed=False,
-            )
+            for refined_text in texts:
+                _seed_review(
+                    connection, app_id=app_id, refined_text=refined_text, status="CLEANED",
+                    retry_count=0, embed=False,
+                )
 
         result = run_gold(target_date=_SKIP_TARGET_DATE.isoformat())
 
-        assert result.status == "success", result.message
+        assert result.status == expected_status, result.message
     finally:
         _cleanup_skip_probe(test_db_engine, app_id)
