@@ -31,6 +31,7 @@ def test_enum_import_from_enums_module():
     assert ProcessingStatusType.CLEANED.value == "CLEANED"
     assert ProcessingStatusType.ANALYZED.value == "ANALYZED"
     assert ProcessingStatusType.FAILED.value == "FAILED"
+    assert ProcessingStatusType.SKIPPED.value == "SKIPPED"
 
     assert AnalysisStatusType.PENDING.value == "PENDING"
     assert AnalysisStatusType.PROCESSING.value == "PROCESSING"
@@ -113,7 +114,7 @@ def test_enum_members_count():
 
     assert len(PlatformType) == 2  # APPSTORE, PLAYSTORE
     assert len(AppType) == 3  # CONSUMER, CORPORATE, GLOBAL
-    assert len(ProcessingStatusType) == 4  # RAW, CLEANED, ANALYZED, FAILED
+    assert len(ProcessingStatusType) == 5  # RAW, CLEANED, ANALYZED, FAILED, SKIPPED
     assert len(AnalysisStatusType) == 4  # PENDING, PROCESSING, SUCCESS, FAILED
     assert len(SentimentType) == 3  # POSITIVE, NEGATIVE, NEUTRAL
 

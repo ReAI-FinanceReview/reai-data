@@ -16,6 +16,7 @@ carry real schema changes on top of it.
 | `20260430_0001_schema_v4_baseline.py` | Revision `20260430_0001`, `down_revision = None`. `upgrade()` executes the sibling `.sql` file through the raw DBAPI cursor; `downgrade()` intentionally raises |
 | `20260430_0001_schema_v4_baseline.sql` | The immutable DDL snapshot matching `sql/schema_v4.sql` at the time Alembic was introduced |
 | `20260813_0002_reviews_assigned_review_id_unique.py` | Revision `20260813_0002`, `down_revision = 20260430_0001`. Adds the `assigner` discriminator column (default `'rule'` for pre-existing rows) and the `(review_id, assigner)` unique constraint that makes assignment re-runs UPSERT. It deliberately does not delete pre-existing duplicates — the constraint fails instead, leaving the choice to the data owner |
+| `20261125_0003_processing_status_skipped.py` | Revision `20261125_0003`, `down_revision = 20260813_0002`. Adds `SKIPPED` to `processing_status_type` inside an autocommit block (issue #94). `downgrade()` recreates the type without it and refuses while any row is `SKIPPED` |
 
 ## Subdirectories
 None.

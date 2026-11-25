@@ -119,7 +119,8 @@ def test_enum_values_correct(test_db_session):
         """
     ))
     status_values = {row[0] for row in result}
-    assert status_values == {'RAW', 'CLEANED', 'ANALYZED', 'FAILED'}
+    # SKIPPED 는 Alembic 20261125_0003 이 추가한다 (스키마 픽스처가 head 까지 마이그레이션)
+    assert status_values == {'RAW', 'CLEANED', 'ANALYZED', 'FAILED', 'SKIPPED'}
 
 
 # ========================================
