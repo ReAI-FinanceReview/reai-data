@@ -80,14 +80,43 @@ nothing to analyze: retrying them returns the same result every time (issue #94)
 `SKIPPED` rows are therefore neither dead letters nor unresolved work:
 `fetch_review_dead_letters()` ignores them, and `post_aggregate_validate`'s
 `review_state` check reports them as `skipped_count` without failing.
-`no_aspect` is only decided when Okt is available. Without it the predicate step
-cannot run, so a zero-aspect review stays a retryable `FAILED`.
+`no_aspect` is only decided after a complete Okt analysis. When Okt is unavailable
+or `Okt.nouns` raised, a zero-aspect review stays a retryable `FAILED`.
+
+The `gold` pipeline step fails when it analyzed nothing and at least one review
+`FAILED`. A run whose reviews were all `SKIPPED` succeeds, but `SKIPPED` alone
+cannot hide an outage: `empty` and `non_korean` are decided from the text, so
+they still occur on a day when the embedding API is down.
 
 ```sql
 SELECT error_message, COUNT(*)
 FROM review_master_index
 WHERE processing_status = 'SKIPPED'
 GROUP BY error_message;
+```
+
+### Re-opening skipped reviews
+
+`SKIPPED` is terminal for the current rules, not forever. When a rule change can
+alter the verdict — translation for `non_korean` (#115), new vocabulary for
+`no_aspect` (#117) — move the affected rows back to `CLEANED` and run the `gold`
+step without `--target-date` (or once per affected date). Re-running cleansing does
+not do this: it promotes only `RAW` rows and `FAILED` rows whose `error_message`
+starts with `Cleanse failed:`.
+
+```sql
+BEGIN;
+-- Only when refined_text changed since the skip (e.g. after a cleansing fix):
+-- the embedding generator keeps an existing row, so a stale one must go first.
+DELETE FROM review_embeddings
+WHERE review_id IN (
+    SELECT review_id FROM review_master_index
+    WHERE processing_status = 'SKIPPED' AND error_message = 'skip:non_korean'
+);
+UPDATE review_master_index
+SET processing_status = 'CLEANED', error_message = NULL
+WHERE processing_status = 'SKIPPED' AND error_message = 'skip:non_korean';
+COMMIT;
 ```
 
 ## Cleanse Failure Handling

@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
 
 # src/gold
 
@@ -40,8 +40,9 @@ None.
 - Returning `False` from `process()` is treated as failure — the orchestrator raises, marks the row
   `FAILED`, and increments `retry_count`. Never swallow an analyzer error into a `True` return.
 - Raise `AnalysisSkipped` only when a retry would give the same answer (the input itself cannot be
-  analyzed). A missing dependency is not such a case: ABSA without Okt returns `False` on zero
-  aspects instead of skipping, and the predicate step lets Okt errors propagate.
+  analyzed). A missing or failing dependency is not such a case: ABSA returns `False` on zero
+  aspects when Okt is unavailable or `Okt.nouns` raised, and the predicate step lets Okt errors
+  propagate.
 - `_MAX_RETRY = 3` in `orchestrator.py:28` is the retry ceiling; rows past it are the review-level
   dead letters queried by `src/pipeline/failures.py`.
 - Aggregation must stay idempotent (UPSERT) — Airflow retries and manual backfills re-run the same
@@ -55,8 +56,13 @@ None.
   `absa-orphan-integrity` fixes; keep the tests that pin it. Zero aspects ends in `SKIPPED`, never
   `ANALYZED`.
 - New ABSA vocabulary must be justified on reviews outside the cases it is meant to fix: check
-  that its polarity matches star ratings on existing `ANALYZED` reviews. Phrase keywords in
-  `_PHRASE_KEYWORDS` carry their own polarity and are exempt from the context negation flip.
+  that its polarity matches star ratings on existing `ANALYZED` reviews (the #94 case analysis is
+  in PR #118's description). Predicate-step vocabulary goes into `_PREDICATE_LEXICON` or
+  `_PHRASE_KEYWORDS`, never into `_SENTIMENT_DICT` / `_CATEGORY_KEYWORDS`: those also feed the
+  surface-dictionary step, so an entry there changes reviews that already succeed.
+- Negation differs by step. Noun and surface-dictionary keywords use the ±3-token window
+  (`_has_negation`); predicate-step keywords are negated only when the token right before them is
+  `안`/`못`; phrase keywords in `_PHRASE_KEYWORDS` carry their own polarity and are never flipped.
 - Embedding and LLM summary calls require a live `OPENAI_API_KEY`.
 - Department assignment is **not** inside `GoldOrchestrator`. It is its own pipeline step
   (`run_dept_assign` / `scripts/assign_dept.py`) that reads `ANALYZED` rows and must leave

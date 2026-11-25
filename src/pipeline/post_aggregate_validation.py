@@ -173,7 +173,7 @@ class PostAggregateValidator:
                 "retry_exhausted_threshold": RETRY_EXHAUSTED_THRESHOLD,
             },
         ).scalar_one()
-        # SKIPPED 는 종결 상태라(#94) 미처리·재시도 소진 어느 쪽에도 세지 않고 보고만 한다.
+        # SKIPPED is terminal (#94): report it, but count it as neither unresolved nor exhausted.
         skipped_count = session.execute(
             text(
                 """
