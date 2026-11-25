@@ -453,7 +453,7 @@ class TestProcessBatch:
 # H. 구어체 리뷰 용언 단계 (issue #94) — 실제 Okt
 # ─────────────────────────────────────────────
 # 아래 문장은 모두 실데이터에서 FAILED 로 남았던 리뷰다. 어휘는 실패 66건 밖의
-# ANALYZED 리뷰에서 평점과 극성이 맞는지 확인한 것만 넣었다 (PR #94 case 분석).
+# ANALYZED 리뷰에서 평점과 극성이 맞는지 확인한 것만 넣었다 (PR #118 본문의 case 분석).
 
 @pytest.fixture(scope="module")
 def okt_analyzer():
@@ -495,6 +495,7 @@ class TestColloquialPredicateTier:
             ("잘쓰고있어요", "잘쓰", 0.80, None),
         ],
     )
+    @pytest.mark.requires_db
     def test_rescues_previously_failed_reviews(
         self, test_db_session, okt_analyzer, text, keyword, score, category
     ):
@@ -503,15 +504,38 @@ class TestColloquialPredicateTier:
         assert aspects[keyword].sentiment_score == pytest.approx(score, abs=1e-4)
         assert aspects[keyword].category == category
 
+    @pytest.mark.requires_db
     def test_spaced_negation_is_not_flipped_back(self, test_db_session, okt_analyzer):
         """'안 돼요' 의 '안' 이 문맥 부정으로 다시 잡혀 0.90(긍정)이 되면 안 된다."""
         aspects = _aspects_by_keyword(okt_analyzer, test_db_session, "안 돼요")
         assert aspects["안되"].sentiment_score == pytest.approx(0.10, abs=1e-4)
 
-    def test_negated_sentiment_predicate_still_flips(self, test_db_session, okt_analyzer):
-        """사전 용언은 기존 부정 반전 규칙을 그대로 따른다: 안 좋아요 → 1 - 0.8."""
+    @pytest.mark.requires_db
+    def test_surface_dictionary_keyword_keeps_window_negation(self, test_db_session, okt_analyzer):
+        """표면 사전 단계 키워드는 기존 문맥 창 부정 규칙 그대로다: 안 좋아요 → 1 - 0.8."""
         aspects = _aspects_by_keyword(okt_analyzer, test_db_session, "안 좋아요")
         assert aspects["좋"].sentiment_score == pytest.approx(0.20, abs=1e-4)
+
+    @pytest.mark.requires_db
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            # '안' 은 바로 뒤 용언만 부정한다. 문맥 창이면 느리·귀찮까지 뒤집혔다
+            ("안 열리고 느려요", {"안열리": 0.10, "느리": 0.20}),
+            ("안 켜지고 귀찮아요", {"안켜지": 0.10, "귀찮": 0.20}),
+            # 붙여 쓴 부정: 토큰은 활용형(안빨라요)이고 키워드는 어간(빠르)이다
+            ("안빨라요", {"빠르": 0.20}),
+            ("안 빨라요", {"빠르": 0.20}),
+            ("안쉬워요", {"쉽": 0.20}),
+            ("안느려요", {"느리": 0.80}),
+            ("안 귀찮아요", {"귀찮": 0.80}),
+        ],
+    )
+    def test_predicate_negation_follows_the_adjacent_token(
+        self, test_db_session, okt_analyzer, text, expected
+    ):
+        aspects = _aspects_by_keyword(okt_analyzer, test_db_session, text)
+        assert {k: round(a.sentiment_score, 4) for k, a in aspects.items()} == expected
 
     @pytest.mark.parametrize(
         "text",
@@ -524,6 +548,7 @@ class TestColloquialPredicateTier:
             "뭐지..",
             "짱",                      # 근거 1건뿐이라 넣지 않음
             "최곱니다",                # Okt 가 최 + 곱다로 분석
+            "잘 쓰고 있지 않아요",     # 부정형: 구문 키워드는 반전하지 않으므로 아예 잡지 않는다
         ],
     )
     def test_extracts_nothing_for_rejected_or_meaningless_text(self, okt_analyzer, text):
@@ -539,6 +564,10 @@ class TestColloquialPredicateTier:
         keywords = okt_analyzer._extract_keywords("쉽게 할수있어 좋아요")
         assert sorted(keywords) == sorted(["좋", "쉽"])  # 사전 매칭 순서는 set 순회 순서
 
+    def test_predicate_vocabulary_does_not_enter_the_surface_dictionary(self, okt_analyzer):
+        """용언 단계 어휘(귀찮)는 표면 사전 결과를 바꾸지 않는다 (main 과 같이 [불편])."""
+        assert okt_analyzer._extract_keywords("너무 귀찮고 불편해요") == ["불편"]
+
 
 class TestSatisfiedUsagePhrase:
     @pytest.mark.parametrize(
@@ -548,9 +577,18 @@ class TestSatisfiedUsagePhrase:
         assert _SATISFIED_USAGE_RE.search(text)
 
     @pytest.mark.parametrize(
-        "text", ["잘 쓰고 있었는데 업데이트 후 안돼요", "잘쓰던 기능인데", "잘 썼습니다"]
+        "text",
+        [
+            "잘 쓰고 있었는데 업데이트 후 안돼요",  # 과거진행
+            "잘쓰던 기능인데",
+            "잘 썼습니다",
+            "잘 쓰고 있는데 안돼요",                # 대조: 불만 도입부
+            "잘 쓰고 있다가 갑자기 안돼요",
+            "잘 쓰고 있지 않아요",                  # 부정
+            "잘 사용 중이 아니에요",
+        ],
     )
-    def test_ignores_past_forms(self, text):
+    def test_ignores_past_contrastive_and_negated_forms(self, text):
         assert _SATISFIED_USAGE_RE.search(text) is None
 
 
@@ -658,3 +696,88 @@ class TestProcessSkipWithDatabase:
         )
         assert (aspect.keyword, aspect.category) == ("안열리", "STABILITY")
         assert aspect.sentiment_score == pytest.approx(0.10, abs=1e-4)
+
+    def test_noun_step_failure_stays_retryable(self, test_db_session, okt_analyzer):
+        """Okt.nouns 가 예외로 실패한 채 0건이면 종결 SKIPPED 가 아니라 재시도 가능한 실패다."""
+        from src.gold.absa_analyzer import Okt
+        from src.utils.logger import get_logger
+
+        class _NounsFailingOkt(Okt):
+            # 결함 주입: 형태소 분석기는 실제 Okt 이고 nouns 호출만 실패시킨다
+            def nouns(self, phrase):
+                raise RuntimeError("injected Okt.nouns failure")
+
+        analyzer = GoldABSAAnalyzer.__new__(GoldABSAAnalyzer)
+        analyzer.logger = get_logger(__name__)
+        analyzer.db_connector = None
+        analyzer._okt = _NounsFailingOkt()
+        review_id = _seed_cleaned_review(test_db_session, "로그인")
+
+        assert analyzer.process(test_db_session, review_id) is False
+        assert _aspect_count(test_db_session, review_id) == 0
+
+
+@pytest.mark.requires_db
+def test_process_batch_records_skipped_reviews(
+    test_db_engine, test_db_url, test_db_schema, okt_analyzer, monkeypatch
+):
+    """standalone 배치(features 단계)도 분석 제외 리뷰를 SKIPPED 로 남기고 retry_count 를 유지한다."""
+    from sqlalchemy import text as sql
+
+    monkeypatch.setenv("DATABASE_URL", test_db_url)
+    app_id = uuid7()
+    seeded = {}
+    try:
+        with test_db_engine.begin() as connection:
+            connection.execute(
+                sql(
+                    "INSERT INTO apps (app_id, platform_app_id, platform_type, name) "
+                    "VALUES (:app_id, :pid, 'APPSTORE', 'ABSA Batch Skip Test App')"
+                ),
+                {"app_id": app_id, "pid": f"absa.batch.skip.{app_id}"},
+            )
+            for refined_text, reason in (("", "skip:empty"), ("Not working at all", "skip:non_korean")):
+                review_id = uuid7()
+                prid = f"absa-batch-skip-{review_id}"
+                connection.execute(
+                    sql(
+                        "INSERT INTO review_master_index (review_id, app_id, platform_review_id, "
+                        "platform_type, processing_status, retry_count) "
+                        "VALUES (:review_id, :app_id, :prid, 'APPSTORE', 'CLEANED', 1)"
+                    ),
+                    {"review_id": review_id, "app_id": app_id, "prid": prid},
+                )
+                connection.execute(
+                    sql(
+                        "INSERT INTO reviews_preprocessed (review_id, platform_review_id, refined_text) "
+                        "VALUES (:review_id, :prid, :refined_text)"
+                    ),
+                    {"review_id": review_id, "prid": prid, "refined_text": refined_text},
+                )
+                seeded[review_id] = reason
+
+        GoldABSAAnalyzer().process_batch(batch_size=10)
+
+        with test_db_engine.connect() as connection:
+            rows = connection.execute(
+                sql(
+                    "SELECT review_id, processing_status, error_message, retry_count "
+                    "FROM review_master_index WHERE app_id = :app_id"
+                ),
+                {"app_id": app_id},
+            ).all()
+        assert {row.review_id: row.error_message for row in rows} == seeded
+        assert {(row.processing_status, row.retry_count) for row in rows} == {("SKIPPED", 1)}
+    finally:
+        with test_db_engine.begin() as connection:
+            connection.execute(
+                sql(
+                    "DELETE FROM reviews_preprocessed WHERE review_id IN "
+                    "(SELECT review_id FROM review_master_index WHERE app_id = :app_id)"
+                ),
+                {"app_id": app_id},
+            )
+            connection.execute(
+                sql("DELETE FROM review_master_index WHERE app_id = :app_id"), {"app_id": app_id}
+            )
+            connection.execute(sql("DELETE FROM apps WHERE app_id = :app_id"), {"app_id": app_id})
