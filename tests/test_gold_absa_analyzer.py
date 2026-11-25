@@ -555,10 +555,19 @@ class TestColloquialPredicateTier:
             "짱",                      # 근거 1건뿐이라 넣지 않음
             "최곱니다",                # Okt 가 최 + 곱다로 분석
             "잘 쓰고 있지 않아요",     # 부정형: 구문 키워드는 반전하지 않으므로 아예 잡지 않는다
+            "잘 쓰고 있지는 않아요",
+            "잘 쓰고 있진 않아요",
+            "잘 쓰고 있지도 않아요",
+            "잘 쓰고 있지 못해요",
         ],
     )
     def test_extracts_nothing_for_rejected_or_meaningless_text(self, okt_analyzer, text):
         assert okt_analyzer._extract_keywords(text) == []
+
+    @pytest.mark.parametrize("text", ["잘 쓰고 있지만 안돼요", "잘 쓰고 있던 거 안돼요"])
+    def test_contrastive_usage_keeps_only_the_complaint(self, okt_analyzer, text):
+        """대조·과거형 도입부는 '잘 쓰고 있는데 안돼요' 처럼 불만 키워드만 남는다."""
+        assert okt_analyzer._extract_keywords(text) == ["안되"]
 
     def test_predicate_tier_does_not_run_when_nouns_exist(self, okt_analyzer):
         """명사가 나오는 리뷰는 기존 결과 그대로다 (용언 단계는 0건일 때만)."""
@@ -591,6 +600,13 @@ class TestSatisfiedUsagePhrase:
             "잘 쓰고 있는데 안돼요",                # 대조: 불만 도입부
             "잘 쓰고 있다가 갑자기 안돼요",
             "잘 쓰고 있지 않아요",                  # 부정
+            "잘 쓰고 있지는 않아요",
+            "잘 쓰고 있진 않아요",
+            "잘 쓰고 있지도 않아요",
+            "잘 쓰고 있지 못해요",
+            "잘 쓰고 있지만 안돼요",                # 대조
+            "잘 쓰고 있으나 안돼요",
+            "잘 쓰고 있던 거 안돼요",               # 과거
             "잘 사용 중이 아니에요",
         ],
     )
