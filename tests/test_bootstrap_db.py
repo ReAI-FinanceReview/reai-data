@@ -1,6 +1,9 @@
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 from psycopg2 import OperationalError as PsycopgOperationalError
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -9,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from tests.conftest import _apply_migrations
 
 from src import bootstrap_db as bootstrap_module
+from src.crawlers.base_crawler import BaseCrawler
 from src.bootstrap_db import (
     BootstrapError,
     BootstrapVerification,
@@ -220,7 +224,8 @@ def test_required_seed_files_are_reexecution_safe(test_db_engine):
             counts = {
                 "app_service": conn.execute(text("SELECT COUNT(*) FROM app_service")).scalar_one(),
                 "apps": conn.execute(text("SELECT COUNT(*) FROM apps")).scalar_one(),
-                "app_metadata": conn.execute(
+                "app_metadata": conn.execute(text("SELECT COUNT(*) FROM app_metadata")).scalar_one(),
+                "app_metadata_active": conn.execute(
                     text("SELECT COUNT(*) FROM app_metadata WHERE is_active = TRUE")
                 ).scalar_one(),
             }
@@ -228,8 +233,69 @@ def test_required_seed_files_are_reexecution_safe(test_db_engine):
         assert counts == {
             "app_service": 39,
             "apps": 65,
-            "app_metadata": 61,
+            "app_metadata": 65,
+            "app_metadata_active": 61,
         }
+    finally:
+        _reset_schema(test_db_engine)
+
+
+def _crawl_ids_by_platform() -> set[tuple[str, str]]:
+    # Parse the id files exactly as the crawlers do (BaseCrawler.read_app_ids), at the
+    # paths the crawler config names, so this cannot drift from what actually gets crawled.
+    config = yaml.safe_load((ROOT / "config" / "crawler_config.yml").read_text(encoding="utf-8"))
+    reader = SimpleNamespace(logger=logging.getLogger(__name__))
+    return {
+        (platform, app_id)
+        for platform, key in (("APPSTORE", "appstore"), ("PLAYSTORE", "playstore"))
+        for app_id in BaseCrawler.read_app_ids(reader, str(ROOT / config["app_ids"][key]))
+    }
+
+
+def test_seeded_open_links_match_the_crawl_id_files(test_db_engine):
+    # The crawl lists and the seed catalog are kept in step by hand until the catalog
+    # becomes the single source (#119). Pin the invariants a hand edit can break: every
+    # crawled id has exactly one open link, every open link is crawled, is_active agrees
+    # with valid_to, and no app has two links valid on the same day.
+    seed_paths = get_bootstrap_sql_paths(ROOT)[1:]
+    crawl_ids = _crawl_ids_by_platform()
+
+    try:
+        _reset_schema(test_db_engine)
+    except (OperationalError, PsycopgOperationalError) as exc:
+        pytest.skip(f"test PostgreSQL is not available: {exc}")
+
+    try:
+        for sql_path in seed_paths:
+            _execute_sql_file(test_db_engine, sql_path)
+
+        with test_db_engine.connect() as conn:
+            open_links = conn.execute(
+                text(
+                    "SELECT a.platform_type::text, a.platform_app_id "
+                    "FROM app_metadata m JOIN apps a USING (app_id) "
+                    "WHERE m.valid_to IS NULL"
+                )
+            ).all()
+            flag_mismatches = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM app_metadata "
+                    "WHERE is_active IS DISTINCT FROM (valid_to IS NULL)"
+                )
+            ).scalar_one()
+            overlapping_pairs = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM app_metadata m1 JOIN app_metadata m2 "
+                    "ON m1.app_id = m2.app_id AND m1.id < m2.id "
+                    "AND daterange(m1.valid_from, m1.valid_to, '[]') "
+                    "&& daterange(m2.valid_from, m2.valid_to, '[]')"
+                )
+            ).scalar_one()
+
+        assert len(open_links) == len(set(open_links)), "an id has more than one open link"
+        assert set(open_links) == crawl_ids
+        assert flag_mismatches == 0
+        assert overlapping_pairs == 0
     finally:
         _reset_schema(test_db_engine)
 
