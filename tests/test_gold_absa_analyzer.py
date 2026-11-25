@@ -575,7 +575,9 @@ class TestColloquialPredicateTier:
     def test_extracts_nothing_for_rejected_or_meaningless_text(self, okt_analyzer, text):
         assert okt_analyzer._extract_keywords(text) == []
 
-    @pytest.mark.parametrize("text", ["잘 쓰고 있지만 안돼요", "잘 쓰고 있던 거 안돼요"])
+    @pytest.mark.parametrize(
+        "text", ["잘 쓰고 있지만 안돼요", "잘 쓰고 있던 거 안돼요", "잘 쓰고 있긴 한데 안돼요"]
+    )
     def test_contrastive_usage_keeps_only_the_complaint(self, okt_analyzer, text):
         """대조·과거형 도입부는 '잘 쓰고 있는데 안돼요' 처럼 불만 키워드만 남는다."""
         assert okt_analyzer._extract_keywords(text) == ["안되"]
@@ -626,6 +628,8 @@ class TestSatisfiedUsagePhrase:
             "잘 쓰고 있지만 안돼요",                # 대조
             "잘 쓰고 있으나 안돼요",
             "잘 쓰고 있던 거 안돼요",               # 과거
+            "잘 쓰고 있긴 한데 안돼요",             # 양보: 불만 도입부
+            "잘 쓰고 있기는 한데",
             "잘 사용 중이 아니에요",
         ],
     )
