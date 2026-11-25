@@ -138,6 +138,13 @@ _NEGATED_FUNCTION_VERBS: Dict[str, str] = {
     "넘어가": "넘어가", "뜨": "뜨", "들어가": "들어가",
 }
 
+# 장형 부정('귀찮지 않아요')으로 보는 용언 표면형 어미
+_LONG_FORM_ENDINGS: Tuple[str, ...] = ("지", "진", "지는", "지도")
+
+# '않다' 가 바람·요청·목적·반문이면 지금 그렇다는 뜻이라 부정으로 보지 않는다
+# ('느려지지 않게 해주세요', '않았으면', '않도록', '귀찮지 않나요')
+_NOT_A_DENIAL: Tuple[str, ...] = ("않게", "않도록", "않으면", "않았으면", "않을까", "않나")
+
 # 용언 단계 전용 감성 어간 {어간: (기본점수, 카테고리)}. 사전 어간과 같이 부정 반전 대상이다.
 _PREDICATE_LEXICON: Dict[str, Tuple[float, Optional[CategoryType]]] = {
     "귀찮": (0.20, CategoryType.USABILITY),
@@ -492,10 +499,15 @@ class GoldABSAAnalyzer:
                     ),
                     None,
                 )
-                # 장형 부정: Okt 는 '-지는/-진/-지도' 를 용언에 붙이고 '않다' 를 다음 토큰으로 낸다
+                # 장형 부정: Okt 는 '-지는/-진/-지도' 를 용언에 붙이고 '않다' 를 다음 토큰으로 낸다.
+                # 용언이 '-지' 꼴일 때만 본다('느려서 못 하겠어요' 의 못 하다는 부정이 아니다).
                 next_stems = [s for s, _ in stems[i + 1:i + 3]]
-                if keyword and (
-                    next_stems[:1] == ["않다"] or next_stems == ["못", "하다"]
+                if keyword and surface[i][0].endswith(_LONG_FORM_ENDINGS) and (
+                    (
+                        next_stems[:1] == ["않다"]
+                        and not surface[i + 1][0].startswith(_NOT_A_DENIAL)
+                    )
+                    or next_stems == ["못", "하다"]
                 ):
                     is_negated = not is_negated
             if keyword:

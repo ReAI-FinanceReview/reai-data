@@ -67,9 +67,10 @@ None.
   the predicate step that emits it.
 - Negation differs by step. Noun and surface-dictionary keywords use the ±3-token window
   (`_has_negation`). A predicate-step keyword is negated when the token right before it is
-  `안`/`못`, or when the token right after it is the long-form `않다` or `못`+`하다`
-  (`귀찮지 않아요`); both together cancel out. Phrase keywords in `_PHRASE_KEYWORDS` carry their own
-  polarity and are never flipped.
+  `안`/`못`, or when the predicate ends in `-지`/`-진`/`-지는`/`-지도` and the next token is the
+  long-form `않다` or `못`+`하다` (`귀찮지 않아요`; not `느려서 못 하겠어요`); both together cancel
+  out. A wish, request, or question (`않게`, `않았으면`, `않나요`, `_NOT_A_DENIAL`) is not a
+  denial. Phrase keywords in `_PHRASE_KEYWORDS` carry their own polarity and are never flipped.
 - Embedding and LLM summary calls require a live `OPENAI_API_KEY`.
 - Department assignment is **not** inside `GoldOrchestrator`. It is its own pipeline step
   (`run_dept_assign` / `scripts/assign_dept.py`) that reads `ANALYZED` rows and must leave
