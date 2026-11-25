@@ -62,6 +62,34 @@ The review-level condition is intentionally called "dead-letter-equivalent"
 because `processing_status_type` does not include a separate `DEAD_LETTER`
 value. The current operational boundary is `FAILED` plus the retry threshold.
 
+## Skipped Reviews (`SKIPPED`)
+
+`SKIPPED` is not a failure. Gold ABSA is rule-based, and some reviews give it
+nothing to analyze: retrying them returns the same result every time (issue #94).
+`GoldOrchestrator` records them as the terminal status `SKIPPED` instead of
+`FAILED`:
+
+- `error_message = "skip:<reason>"`, where the reason is `empty` (no
+  `refined_text`, e.g. an emoji-only review), `non_korean` (no Hangul once
+  cleansing placeholders such as `[PROFANITY]` are removed), or `no_aspect`
+  (Korean text with no keyword after noun, dictionary, and predicate extraction)
+- `retry_count` is left unchanged, and the orchestrator never selects the row again
+- no aspects and no action analysis are written, so the row never reaches the marts,
+  same as `FAILED`
+
+`SKIPPED` rows are therefore neither dead letters nor unresolved work:
+`fetch_review_dead_letters()` ignores them, and `post_aggregate_validate`'s
+`review_state` check reports them as `skipped_count` without failing.
+`no_aspect` is only decided when Okt is available. Without it the predicate step
+cannot run, so a zero-aspect review stays a retryable `FAILED`.
+
+```sql
+SELECT error_message, COUNT(*)
+FROM review_master_index
+WHERE processing_status = 'SKIPPED'
+GROUP BY error_message;
+```
+
 ## Cleanse Failure Handling
 
 The Bronze-to-Silver cleanse pipeline treats empty review text as `skipped`.

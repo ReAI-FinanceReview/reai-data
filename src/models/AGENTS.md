@@ -23,7 +23,7 @@ queried — Gold analysis reads `ReviewPreprocessed` directly.
 | `review_master_index.py` | `ReviewMasterIndex` — central hub across Bronze → Silver → Gold; carries `processing_status`, `retry_count`, `error_message` |
 | `ingestion_batch.py` | `IngestionBatch` — Parquet batch ingestion state and batch-level DLQ |
 | `review.py` | `Review` — Bronze raw review. Also written to Parquet; the ORM path is used by `src/gold/action_analyzer.py:221` |
-| `review_preprocessed.py` | `ReviewPreprocessed` — Silver cleansed text, and the primary DB input to Gold analysis (`src/gold/absa_analyzer.py:143,405`). Also written to Parquet |
+| `review_preprocessed.py` | `ReviewPreprocessed` — Silver cleansed text, and the primary DB input to Gold analysis (`src/gold/absa_analyzer.py:217,581`). Also written to Parquet |
 | `review_embedding.py` | `ReviewEmbedding` — pgvector embedding column |
 | `review_aspects.py` | `ReviewAspect` — ABSA keyword/sentiment/category rows |
 | `review_action_analysis.py` | `ReviewActionAnalysis` — Snorkel actionability results and LLM summary |
@@ -51,7 +51,7 @@ None.
 - `Review` (`app_reviews`) and `ReviewPreprocessed` (`reviews_preprocessed`) rows live in
   PostgreSQL and are queried: the loader inserts `app_reviews` (`src/loaders/batch_loader.py:213`),
   cleansing upserts `reviews_preprocessed` (`src/processing/cleanse.py:426`), and Gold reads both
-  (`src/gold/absa_analyzer.py:143,405`, `src/gold/action_analyzer.py:228`). The Parquet files are
+  (`src/gold/absa_analyzer.py:217,581`, `src/gold/action_analyzer.py:228`). The Parquet files are
   copies, so a column change goes into the model and `src/schemas/parquet/` together, and for Silver
   also into the record dicts `src/processing/cleanse.py` writes, which no schema checks. The module
   docstrings of `review.py` and `review_preprocessed.py` still say the tables are Parquet-only and

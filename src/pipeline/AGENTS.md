@@ -39,7 +39,7 @@ None.
 - `run_aggregate` rejects `target_date` combined with `start_date`/`end_date`, and requires
   `start_date`/`end_date` together. Keep those guards.
 - `run_steps` requires a date for `dept_assign`: its entry passes `target_date or ""`
-  (`src/pipeline/steps.py:364-372`), so a CLI run without `--target-date` fails to parse instead of
+  (`src/pipeline/steps.py:366-374`), so a CLI run without `--target-date` fails to parse instead of
   becoming a paid LLM sweep over every `ANALYZED` row. Keep that guard in `run_steps`, not in
   `run_dept_assign`: `run_dept_assign(target_date=None)` is the backfill path that
   `scripts/assign_dept.py --backfill` calls (`scripts/assign_dept.py:54-60`).

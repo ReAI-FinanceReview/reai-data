@@ -25,7 +25,7 @@ passing mock-based test says nothing about the real database. The HTTP stub fixt
 | `test_gold_action_analyzer.py` | Attention/action rules, Snorkel labeling functions, LLM summary |
 | `test_gold_aggregator.py` | Fact table + serving mart UPSERT semantics |
 | `test_gold_embedding_generator.py` | Embedding generation and persistence |
-| `test_gold_orchestrator.py` | CLEANED → ANALYZED/FAILED state machine and retry policy |
+| `test_gold_orchestrator.py` | CLEANED → ANALYZED/SKIPPED/FAILED state machine and retry policy (the SKIPPED cases run against the real database and analyzers) |
 | `test_gold_dept_assigner.py` | Rule and LLM department assigners, org-path expansion, tie-breaking |
 | `test_assign_dept_cli.py` / `test_eval_assignment_cli.py` | Argument contracts for `scripts/assign_dept.py` and `scripts/eval_assignment.py` |
 | `test_batch_loader.py` | Pending/failed batch consumption into `review_master_index` |
