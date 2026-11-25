@@ -719,8 +719,16 @@ class TestProcessSkipWithDatabase:
         assert (aspect.keyword, aspect.category) == ("안열리", "STABILITY")
         assert aspect.sentiment_score == pytest.approx(0.10, abs=1e-4)
 
-    def test_noun_step_failure_stays_retryable(self, test_db_session, okt_analyzer):
-        """Okt.nouns 가 예외로 실패한 채 0건이면 종결 SKIPPED 가 아니라 재시도 가능한 실패다."""
+    @pytest.mark.parametrize(
+        "refined_text",
+        [
+            "로그인",
+            # 정상이면 명사 단계에서 [로그인] 으로 끝나는 리뷰. 용언 단계의 [안되] 로 굳히지 않는다
+            "로그인 안돼요",
+        ],
+    )
+    def test_noun_step_failure_stays_retryable(self, test_db_session, okt_analyzer, refined_text):
+        """Okt.nouns 가 예외로 실패하고 표면 사전도 비면 종결 판정 없이 재시도 가능한 실패다."""
         from src.gold.absa_analyzer import Okt
         from src.utils.logger import get_logger
 
@@ -733,7 +741,7 @@ class TestProcessSkipWithDatabase:
         analyzer.logger = get_logger(__name__)
         analyzer.db_connector = None
         analyzer._okt = _NounsFailingOkt()
-        review_id = _seed_cleaned_review(test_db_session, "로그인")
+        review_id = _seed_cleaned_review(test_db_session, refined_text)
 
         assert analyzer.process(test_db_session, review_id) is False
         assert _aspect_count(test_db_session, review_id) == 0
