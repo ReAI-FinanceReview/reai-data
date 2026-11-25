@@ -148,8 +148,10 @@ _NOT_A_DENIAL: Tuple[str, ...] = ("않게", "않도록", "않으면", "않았으
 # 그래도 부정인 형태: 동시('귀찮지 않으면서')
 _DENIAL_DESPITE: Tuple[str, ...] = ("않으면서",)
 # '않게/않도록' 뒤가 결과('않게 됐어요', '않도록 바뀌었어요')면 부정이다. Okt 어간(돼다, 되어다)은
-# 일정하지 않아 표면형으로 본다.
+# 일정하지 않아 표면형으로 본다. 그 결과가 바람·조건·의문('됐으면', '되길', '돼야', '되나요',
+# '될까요')이면 아직 이뤄지지 않은 것이라 부정이 아니다.
 _RESULT_VERB_PREFIXES: Tuple[str, ...] = ("되", "돼", "됐", "바뀌", "바뀐", "바꼈")
+_UNREALIZED_MARKERS: Tuple[str, ...] = ("면", "길", "기를", "야", "나", "까")
 
 # 용언 단계 전용 감성 어간 {어간: (기본점수, 카테고리)}. 사전 어간과 같이 부정 반전 대상이다.
 _PREDICATE_LEXICON: Dict[str, Tuple[float, Optional[CategoryType]]] = {
@@ -237,7 +239,12 @@ def _long_form_denies(
     if auxiliary.startswith(_DENIAL_DESPITE):
         return True
     if auxiliary.startswith(("않게", "않도록")):
-        return i + 2 < len(surface) and surface[i + 2][0].startswith(_RESULT_VERB_PREFIXES)
+        if i + 2 >= len(surface):
+            return False
+        result = surface[i + 2][0]
+        return result.startswith(_RESULT_VERB_PREFIXES) and not any(
+            marker in result for marker in _UNREALIZED_MARKERS
+        )
     return not auxiliary.startswith(_NOT_A_DENIAL)
 
 

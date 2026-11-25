@@ -71,7 +71,8 @@ None.
   (`_LONG_FORM_ENDINGS`, including particles Okt attaches such as `귀찮지가`, `귀찮질`) and the next
   token is the long-form `않다` or `못`+`하다` (`귀찮지 않아요`; not `느려서 못 하겠어요`). Short and
   long forms together cancel out. A wish, request, or question (`않게 해주세요`, `않았으면`,
-  `않나요`) is not a denial; `않으면서` and a result (`않게 됐어요`) are. Phrase keywords in
+  `않나요`) is not a denial; `않으면서` and a realized result (`않게 됐어요`, but not `않게
+  됐으면`) are. Other wish and question endings are a known gap (#117). Phrase keywords in
   `_PHRASE_KEYWORDS` carry their own polarity and are never flipped.
 - Embedding and LLM summary calls require a live `OPENAI_API_KEY`.
 - Department assignment is **not** inside `GoldOrchestrator`. It is its own pipeline step
