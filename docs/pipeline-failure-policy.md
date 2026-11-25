@@ -150,10 +150,13 @@ substitute the reason being re-opened.
 
 4. For each affected date, run `gold` and department assignment. Without
    `--target-date`, `gold` also sweeps every other `CLEANED` and retryable
-   `FAILED` row in the table, each a paid embedding and LLM call.
+   `FAILED` row in the table, each a paid embedding and LLM call. Department
+   assignment runs the paid LLM assigner too; use the DAG's batch size of 10 so
+   an interrupted run keeps the batches it already paid for.
 
    ```bash
-   PYTHONPATH=. uv run python -m src.pipeline.cli --steps gold,dept_assign --target-date YYYY-MM-DD
+   PYTHONPATH=. uv run python -m src.pipeline.cli --steps gold,dept_assign \
+     --target-date YYYY-MM-DD --batch-size 10
    ```
 
 5. Re-aggregate the affected range with an explicit `retention_days`. Do not use
@@ -161,7 +164,11 @@ substitute the reason being re-opened.
    the default `retention_days=14`. After writing, every aggregation drops the
    `srv_daily_review_list` partitions older than the cutoff, affected or not
    (`src/gold/aggregator.py:272-296`). Pick a value that reaches the oldest
-   partition you intend to keep, not just the oldest affected date.
+   partition you intend to keep, not just the oldest affected date:
+   `N = (today - oldest partition date to keep).days`. The next scheduled run
+   uses the default of 14 again, so a re-created partition older than 14 days
+   lasts only until then; the `fact_*` tables are not partitioned and keep the
+   re-aggregated rows.
 
    ```bash
    PYTHONPATH=. uv run python -c "
