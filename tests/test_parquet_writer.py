@@ -291,5 +291,36 @@ def test_parquet_writer_base_path_creation(temp_dir):
     assert non_existent_path.exists()
 
 
+def test_parquet_writer_app_version_round_trip(temp_dir):
+    """app_version is a Bronze column and survives write/read, including missing values."""
+    import pyarrow.parquet as pq
+
+    def review(platform_review_id, app_version):
+        return AppReviewSchema(
+            app_id="123e4567-e89b-12d3-a456-426614174000",
+            platform_type="PLAYSTORE",
+            platform_review_id=platform_review_id,
+            review_text="Test review",
+            rating=4,
+            reviewed_at=datetime(2026, 11, 24, 9, 0, 0, tzinfo=timezone.utc),
+            app_version=app_version,
+        )
+
+    writer = ParquetWriter(base_path=temp_dir / "reviews", partition_by='none')
+    mixed_path = writer.write_batch([review("v_1", "5.3.1"), review("v_2", None)])
+    # A batch in which no review carries a version still writes the column.
+    all_missing_path = writer.write_batch([review("v_3", None)])
+
+    for path in (mixed_path, all_missing_path):
+        assert "app_version" in pq.read_schema(path).names
+    assert [r.app_version for r in read_parquet_to_schemas(mixed_path, AppReviewSchema)] == [
+        "5.3.1",
+        None,
+    ]
+    assert [r.app_version for r in read_parquet_to_schemas(all_missing_path, AppReviewSchema)] == [
+        None
+    ]
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

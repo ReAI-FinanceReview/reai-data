@@ -271,5 +271,27 @@ def test_timestamp_generation():
     assert review.created_at.tzinfo is not None
 
 
+def test_app_review_schema_app_version_is_optional():
+    """app_version defaults to None; the stores omit it for some reviews (issue #120)."""
+    from src.schemas.parquet import AppReviewSchema
+
+    fields = dict(
+        app_id="123e4567-e89b-12d3-a456-426614174000",
+        platform_type="PLAYSTORE",
+        platform_review_id="gp:12345",
+        review_text="업데이트 후 로그인이 빨라졌어요",
+        rating=4,
+        reviewed_at=datetime(2026, 11, 24, 9, 0, 0, tzinfo=timezone.utc),
+    )
+
+    without_version = AppReviewSchema(**fields)
+    with_version = AppReviewSchema(**fields, app_version="5.3.1")
+
+    assert without_version.app_version is None
+    assert without_version.model_dump()["app_version"] is None
+    assert with_version.app_version == "5.3.1"
+    assert with_version.model_dump()["app_version"] == "5.3.1"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
 
 # src/crawlers
 
@@ -14,8 +14,8 @@ stage's job (`src/loaders/`), which keeps crawl failures isolated from DB state.
 | File | Description |
 |------|-------------|
 | `base_crawler.py` | `BaseCrawler(ABC)`: config/app-id loading, request pacing, `collect_app_records()`, `save_crawl_batch()`, `save_daily_batch()`, `run()` template. Owns Parquet format consistency for all stores |
-| `appstore_crawler.py` | `AppStoreCrawler`: App Store RSS/API via `requests`; app-id file from `config.app_ids.appstore` |
-| `playstore_crawler.py` | `PlayStoreCrawler`: `google_play_scraper.reviews` + `app`; app-id file from `config.app_ids.playstore` |
+| `appstore_crawler.py` | `AppStoreCrawler`: App Store RSS/API via `requests`; app-id file from `config.app_ids.appstore`. Record `app_version` comes from the entry's `im:version.label` |
+| `playstore_crawler.py` | `PlayStoreCrawler`: `google_play_scraper.reviews` + `app`; app-id file from `config.app_ids.playstore`. Record `app_version` comes from `reviewCreatedVersion` (google-play-scraper fills `appVersion` from the same payload element), `None` when the store omits it |
 | `unified_crawler.py` | `UnifiedCrawler`: runs both stores sequentially, catching each store's failure so one store cannot abort the other. Deliberately **not** a `BaseCrawler` subclass |
 | `exceptions.py` | `ParquetWriteError` — Parquet write failure during the crawl stage |
 | `__init__.py` | `Store` enum (`appstore` / `playstore` / `unified`) and the `get_crawler(store, config_path)` factory |
@@ -42,7 +42,8 @@ None.
 `tests/test_crawler_consistency.py` covers `save_daily_batch` only: the MinIO upload happens before
 the `ingestion_batch` PENDING row, a failed upload opens no DB session, and a failed commit deletes
 the uploaded object. It drives `AppStoreCrawler` with stand-in records, so no test compares App
-Store and Play Store output. `tests/test_bronze_loading.py` covers the Parquet → DB handoff.
+Store and Play Store output. `tests/test_bronze_loading.py` covers the Parquet → DB handoff and
+each store's `app_version` mapping into Bronze.
 `tests/conftest.py` still defines `mock_appstore_api` and `mock_playstore_api`, but no test uses
 them, and `mock_appstore_api` cannot run: it depends on the `requests_mock` fixture of the
 requests-mock plugin, which is in neither `pyproject.toml` nor `uv.lock`. Using it means adding that

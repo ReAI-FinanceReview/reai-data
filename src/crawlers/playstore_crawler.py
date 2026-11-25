@@ -138,7 +138,8 @@ class PlayStoreCrawler(BaseCrawler):
                 rating=rating,
                 reviewed_at=reviewed_at_cache[platform_review_id],
                 is_reply=False,
-                reply_comment=review_data.get('replyContent')
+                reply_comment=review_data.get('replyContent'),
+                app_version=review_data.get('reviewCreatedVersion')
             ))
         return parquet_records
 

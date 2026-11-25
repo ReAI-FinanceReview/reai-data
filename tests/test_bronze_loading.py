@@ -11,6 +11,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from src.crawlers.appstore_crawler import AppStoreCrawler
+from src.crawlers.playstore_crawler import PlayStoreCrawler
 from src.crawlers.exceptions import ParquetWriteError
 from src.models.apps import App
 from src.models.review_master_index import ReviewMasterIndex
@@ -20,12 +21,12 @@ from src.utils.parquet_writer import read_parquet_to_schemas
 from src.schemas.parquet.app_review import AppReviewSchema
 
 
-def _make_crawler(test_db_session, temp_bronze_dir, enable_parquet=True):
-    """Helper: create AppStoreCrawler with mocked dependencies."""
+def _make_crawler(test_db_session, temp_bronze_dir, enable_parquet=True, crawler_cls=AppStoreCrawler):
+    """Helper: create a store crawler (AppStoreCrawler by default) with mocked dependencies."""
     from src.utils.parquet_writer import ParquetWriter
 
-    with patch.object(AppStoreCrawler, '__init__', lambda self, *args, **kwargs: None):
-        crawler = AppStoreCrawler()
+    with patch.object(crawler_cls, '__init__', lambda self, *args, **kwargs: None):
+        crawler = crawler_cls()
         crawler.logger = MagicMock()
         crawler.enable_parquet = enable_parquet
         crawler.config = {}
@@ -447,6 +448,79 @@ def test_parquet_data_integrity(
         assert record.platform_type == 'APPSTORE'
         assert record.review_text is not None
         assert 1 <= record.rating <= 5
+
+
+# ========================================
+# H. APP VERSION MAPPING (Issue #120)
+# ========================================
+
+@pytest.mark.requires_db
+def test_appstore_app_version_written_to_parquet(
+    test_db_session,
+    temp_bronze_dir,
+    sample_appstore_reviews
+):
+    """App Store RSS `im:version.label` becomes the Bronze `app_version` column."""
+    for i, entry in enumerate(sample_appstore_reviews):
+        entry['im:version'] = {'label': f'3.{i}.0'}
+    crawler = _make_crawler(test_db_session, temp_bronze_dir)
+
+    _, count, parquet_path = crawler.save_crawl_batch(
+        '123456789', 'Test App', sample_appstore_reviews, crawler._build_parquet_records
+    )
+
+    assert count == len(sample_appstore_reviews)
+    records = read_parquet_to_schemas(parquet_path, AppReviewSchema)
+    assert {r.platform_review_id: r.app_version for r in records} == {
+        f'appstore_review_{i}': f'3.{i}.0' for i in range(len(sample_appstore_reviews))
+    }
+
+
+@pytest.mark.requires_db
+def test_playstore_review_created_version_written_to_parquet(test_db_session, temp_bronze_dir):
+    """Play `reviewCreatedVersion` becomes `app_version`; a review without one stays None.
+
+    google-play-scraper fills `reviewCreatedVersion` and `appVersion` from the same
+    payload element and returns None for both when the reviewer's version is unknown.
+    """
+    from datetime import datetime, timezone
+
+    reviewed_at = datetime(2026, 11, 24, 9, 0, 0, tzinfo=timezone.utc)
+    play_reviews = [
+        {
+            'reviewId': 'play_version_review_1',
+            'userName': 'PlayUser1',
+            'content': '업데이트 후 로그인이 빨라졌어요',
+            'score': 5,
+            'at': reviewed_at,
+            'replyContent': None,
+            'reviewCreatedVersion': '7.12.0',
+            'appVersion': '7.12.0',
+        },
+        {
+            'reviewId': 'play_version_review_2',
+            'userName': 'PlayUser2',
+            'content': '버전 정보가 없는 리뷰',
+            'score': 3,
+            'at': reviewed_at,
+            'replyContent': None,
+            'reviewCreatedVersion': None,
+            'appVersion': None,
+        },
+    ]
+    crawler = _make_crawler(test_db_session, temp_bronze_dir, crawler_cls=PlayStoreCrawler)
+
+    _, count, parquet_path = crawler.save_crawl_batch(
+        'com.example.bank', 'Test Play App', play_reviews, crawler._build_parquet_records
+    )
+
+    assert count == len(play_reviews)
+    records = read_parquet_to_schemas(parquet_path, AppReviewSchema)
+    assert {r.platform_review_id: r.app_version for r in records} == {
+        'play_version_review_1': '7.12.0',
+        'play_version_review_2': None,
+    }
+    assert all(r.platform_type == 'PLAYSTORE' for r in records)
 
 
 if __name__ == '__main__':

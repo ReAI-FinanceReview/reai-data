@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
 
 # src/schemas/parquet
 
@@ -13,7 +13,7 @@ written unvalidated from the dicts `src/processing/cleanse.py` builds (`src/proc
 
 | File | Description |
 |------|-------------|
-| `app_review.py` | `AppReviewSchema` (alias `AppReview`) — Bronze raw review. Full field contract: `review_id`, `app_id`, `platform_type`, `platform_review_id`, `reviewer_name`, `review_text`, `rating`, `reviewed_at`, `created_at`, `is_reply`, `reply_comment`. Mirrors `app_reviews` |
+| `app_review.py` | `AppReviewSchema` (alias `AppReview`) — Bronze raw review. Full field contract: `review_id`, `app_id`, `platform_type`, `platform_review_id`, `reviewer_name`, `review_text`, `rating`, `reviewed_at`, `created_at`, `is_reply`, `reply_comment`, `app_version` (optional: the store's app version for the review; Bronze files written before it was added lack the column and load as `NULL`). Mirrors `app_reviews` |
 | `review_preprocessed.py` | `ReviewPreprocessedSchema` (alias `ReviewPreprocessed`) — Silver cleansed review: `review_id`, `platform_review_id`, `refined_text`. Mirrors `reviews_preprocessed` |
 | `base.py` | Shared helpers: `generate_uuid_v7()` (time-sortable IDs for better index locality), `utc_now()`, `to_utc()` |
 | `__init__.py` | Layer-annotated re-exports plus a doctest-style usage example |
@@ -40,8 +40,9 @@ None.
 ```bash
 PYTHONPATH=. uv run pytest tests/test_parquet_schemas.py tests/test_parquet_writer.py -q
 ```
-No test checks that both stores emit this shape: `tests/test_crawler_consistency.py` uses stand-in
-records rather than `AppReviewSchema`.
+No test compares the two stores' records field by field: `tests/test_crawler_consistency.py` uses
+stand-in records rather than `AppReviewSchema`, and the only Play Store crawler test
+(`tests/test_bronze_loading.py`) checks its `app_version` mapping.
 
 ### Common Patterns
 Pydantic v2 `BaseModel` with `ConfigDict`, `Field(default_factory=...)` for generated values, and
