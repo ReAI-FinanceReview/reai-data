@@ -138,12 +138,18 @@ _NEGATED_FUNCTION_VERBS: Dict[str, str] = {
     "넘어가": "넘어가", "뜨": "뜨", "들어가": "들어가",
 }
 
-# 장형 부정('귀찮지 않아요')으로 보는 용언 표면형 어미
-_LONG_FORM_ENDINGS: Tuple[str, ...] = ("지", "진", "지는", "지도")
+# 장형 부정('귀찮지 않아요')으로 보는 용언 표면형 어미. Okt 는 보조사·조사를 용언 토큰에
+# 붙여 낸다('귀찮지가', '귀찮질', '귀찮지를').
+_LONG_FORM_ENDINGS: Tuple[str, ...] = ("지", "진", "지는", "지도", "지가", "질", "지를")
 
 # '않다' 가 바람·요청·목적·반문이면 지금 그렇다는 뜻이라 부정으로 보지 않는다
 # ('느려지지 않게 해주세요', '않았으면', '않도록', '귀찮지 않나요')
 _NOT_A_DENIAL: Tuple[str, ...] = ("않게", "않도록", "않으면", "않았으면", "않을까", "않나")
+# 그래도 부정인 형태: 동시('귀찮지 않으면서')
+_DENIAL_DESPITE: Tuple[str, ...] = ("않으면서",)
+# '않게/않도록' 뒤가 결과('않게 됐어요', '않도록 바뀌었어요')면 부정이다. Okt 어간(돼다, 되어다)은
+# 일정하지 않아 표면형으로 본다.
+_RESULT_VERB_PREFIXES: Tuple[str, ...] = ("되", "돼", "됐", "바뀌", "바뀐", "바꼈")
 
 # 용언 단계 전용 감성 어간 {어간: (기본점수, 카테고리)}. 사전 어간과 같이 부정 반전 대상이다.
 _PREDICATE_LEXICON: Dict[str, Tuple[float, Optional[CategoryType]]] = {
@@ -211,6 +217,28 @@ def _lemma_candidates(stem: str) -> List[str]:
         if base.endswith(suffix) and len(base) > len(suffix):
             candidates.append(base[: -len(suffix)])
     return candidates
+
+
+def _long_form_denies(
+    surface: List[Tuple[str, str]], stems: List[Tuple[str, str]], i: int
+) -> bool:
+    """i 번째 감성 용언 뒤의 장형 부정('귀찮지 않아요', '귀찮지 못해요')이 지금 상태를 부정하는지.
+
+    용언이 '-지' 꼴일 때만 본다('느려서 못 하겠어요' 의 못 하다는 그 용언의 부정이 아니다).
+    """
+    if not surface[i][0].endswith(_LONG_FORM_ENDINGS):
+        return False
+    next_stems = [s for s, _ in stems[i + 1:i + 3]]
+    if next_stems == ["못", "하다"]:
+        return True
+    if next_stems[:1] != ["않다"]:
+        return False
+    auxiliary = surface[i + 1][0]
+    if auxiliary.startswith(_DENIAL_DESPITE):
+        return True
+    if auxiliary.startswith(("않게", "않도록")):
+        return i + 2 < len(surface) and surface[i + 2][0].startswith(_RESULT_VERB_PREFIXES)
+    return not auxiliary.startswith(_NOT_A_DENIAL)
 
 
 class GoldABSAAnalyzer:
@@ -499,16 +527,8 @@ class GoldABSAAnalyzer:
                     ),
                     None,
                 )
-                # 장형 부정: Okt 는 '-지는/-진/-지도' 를 용언에 붙이고 '않다' 를 다음 토큰으로 낸다.
-                # 용언이 '-지' 꼴일 때만 본다('느려서 못 하겠어요' 의 못 하다는 부정이 아니다).
-                next_stems = [s for s, _ in stems[i + 1:i + 3]]
-                if keyword and surface[i][0].endswith(_LONG_FORM_ENDINGS) and (
-                    (
-                        next_stems[:1] == ["않다"]
-                        and not surface[i + 1][0].startswith(_NOT_A_DENIAL)
-                    )
-                    or next_stems == ["못", "하다"]
-                ):
+                # 장형 부정: Okt 는 '-지는/-진/-지도' 를 용언에 붙이고 '않다' 를 다음 토큰으로 낸다
+                if keyword and _long_form_denies(surface, stems, i):
                     is_negated = not is_negated
             if keyword:
                 add(keyword, start, end, is_negated and keyword not in _PHRASE_KEYWORDS)
