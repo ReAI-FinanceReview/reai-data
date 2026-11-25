@@ -378,6 +378,10 @@ class TestProcess:
         assert result is False
         session.add_all.assert_not_called()
 
+    def test_predicate_step_does_not_run_without_okt(self):
+        """Okt 가 없으면 정상이면 [로그인] 이었을 리뷰를 regex 의 [잘쓰] 로 굳히지 않는다."""
+        assert self.analyzer._extract("로그인 잘 쓰고 있어요").keywords == []
+
     def test_happy_path_adds_aspects(self):
         session = _make_session(already_analyzed=False)
         preprocessed = MagicMock()

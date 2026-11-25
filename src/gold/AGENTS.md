@@ -41,9 +41,9 @@ None.
   `FAILED`, and increments `retry_count`. Never swallow an analyzer error into a `True` return.
 - Raise `AnalysisSkipped` only when a retry would give the same answer (the input itself cannot be
   analyzed). A missing or failing dependency is not such a case: ABSA returns `False` on zero
-  aspects when Okt is unavailable or `Okt.nouns` raised, skips the predicate step after an
-  `Okt.nouns` error (a healthy run might have stopped at the noun step), and the predicate step
-  lets Okt errors propagate.
+  aspects when Okt is unavailable or `Okt.nouns` raised, skips the predicate step in both cases
+  (a healthy run might have stopped at the noun step), and the predicate step lets Okt errors
+  propagate.
 - `_MAX_RETRY = 3` in `orchestrator.py:28` is the retry ceiling; rows past it are the review-level
   dead letters queried by `src/pipeline/failures.py`.
 - Aggregation must stay idempotent (UPSERT) — Airflow retries and manual backfills re-run the same

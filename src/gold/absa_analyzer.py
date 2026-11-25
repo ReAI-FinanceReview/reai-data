@@ -416,10 +416,10 @@ class GoldABSAAnalyzer:
         dict_matches = self._dict_match_keywords_with_spans(text)
         if dict_matches:
             return _Extraction(dict_matches, noun_step_failed=noun_step_failed)
-        if noun_step_failed:
+        if noun_step_failed or not self._okt:
             # 정상이면 명사 단계에서 끝났을 리뷰일 수 있다. 용언 단계로 다른 키워드를 굳히지 않고
-            # 0건으로 돌려 재시도 가능한 실패로 남긴다.
-            return _Extraction([], noun_step_failed=True)
+            # 0건으로 돌려 재시도 가능한 실패로 남긴다 (Okt 가 없을 때도 같다).
+            return _Extraction([], noun_step_failed=noun_step_failed)
         keywords, negated = self._extract_predicate_keywords_with_spans(text)
         return _Extraction(keywords, negated, noun_step_failed)
 
