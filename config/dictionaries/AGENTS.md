@@ -27,10 +27,11 @@ None.
 - Keep them UTF-8 without a BOM; the review corpus is Korean and encoding damage is silent.
 - Profanity tags are replacement tokens: `ReviewCleaner` substitutes the JSON value verbatim into
   `refined_text` (`src/processing/cleanse.py:129-141`), and no code downstream branches on a
-  specific tag. The one generic consumer is Gold ABSA's skip check, which strips every `[A-Z_]+`
-  token before testing for Hangul (`_PLACEHOLDER_RE` in `src/gold/absa_analyzer.py`), so keep new
-  tags in that shape. A new tag string needs no code change, but it does change `refined_text` and
-  everything built on it.
+  specific tag. The one generic consumer is Gold ABSA's skip check, which strips every bracketed
+  upper-case tag (regex `\[[A-Z_]+\]`, e.g. `[PROFANITY]`) before testing for Hangul
+  (`_PLACEHOLDER_RE` in `src/gold/absa_analyzer.py`), so keep new tags in that shape: square
+  brackets around upper-case letters and underscores only. A new tag string needs no code change,
+  but it does change `refined_text` and everything built on it.
 - Synonym canonicalization affects ABSA keyword grouping and therefore `fact_service_aspect_daily`
   rows. A mapping change is an analytics change, not just a text change.
 - `stopwords.txt` is referenced only in prose (`src/schemas/parquet/review_preprocessed.py:24`
