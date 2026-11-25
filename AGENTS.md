@@ -81,7 +81,9 @@ tests/test_alembic_config.py`) and, in a separate DB-free job, the AGENTS.md gua
 - Pipeline steps return the `RunResult` dataclass (`src/pipeline/steps.py:19`); failures are values,
   not exceptions, and `run_steps` stops at the first non-success step.
 - Review lifecycle is tracked by `review_master_index.processing_status`:
-  `RAW → CLEANED → ANALYZED`, with `FAILED` + `retry_count < 3` eligible for retry.
+  `RAW → CLEANED → ANALYZED`, with `FAILED` + `retry_count < 3` eligible for retry. `SKIPPED`
+  is terminal: Gold could not analyze the review (reason in `error_message`, see
+  `docs/pipeline-failure-policy.md`), so it is never retried and never reaches the marts.
 
 ## Dependencies
 

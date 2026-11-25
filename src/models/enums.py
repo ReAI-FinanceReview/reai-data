@@ -22,11 +22,16 @@ class AppType(enum.Enum):
 
 
 class ProcessingStatusType(enum.Enum):
-    """Processing status for reviews in the pipeline."""
+    """Processing status for reviews in the pipeline.
+
+    SKIPPED is terminal: rule-based ABSA cannot analyze the review (empty text, no Hangul,
+    no aspect). It is not retried and, like FAILED, never reaches the marts (issue #94).
+    """
     RAW = "RAW"
     CLEANED = "CLEANED"
     ANALYZED = "ANALYZED"
     FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
 
 
 class AnalysisStatusType(enum.Enum):

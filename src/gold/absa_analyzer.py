@@ -24,7 +24,8 @@ Usage (via orchestrator):
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Tuple
+import re
+from typing import Dict, List, NamedTuple, Optional, Tuple
 from uuid import UUID
 
 try:
@@ -36,6 +37,12 @@ except ImportError:
 
 from sqlalchemy.exc import IntegrityError
 
+from src.gold.skip import (
+    SKIP_EMPTY,
+    SKIP_NO_ASPECT,
+    SKIP_NON_KOREAN,
+    AnalysisSkipped,
+)
 from src.models.enums import CategoryType, ProcessingStatusType
 from src.models.review_aspects import ReviewAspect
 from src.models.review_master_index import ReviewMasterIndex
@@ -111,6 +118,135 @@ _KEYWORD_TO_CATEGORY: Dict[str, CategoryType] = {
     for kw in keywords
 }
 
+# ----------------------------------------------------------------
+# 용언 단계 (issue #94)
+# 명사 추출과 표면 사전 매칭이 모두 빈 리뷰에만 적용한다. 그래서 두 단계로 키워드가
+# 나오는 리뷰의 결과는 바뀌지 않는다. 이 단계의 어휘는 표면 사전(_SENTIMENT_DICT,
+# _CATEGORY_KEYWORDS)에 넣지 않는다 — 넣으면 앞 단계 결과가 바뀐다. 어휘는 실패 66건 밖의
+# ANALYZED 리뷰에서 평점과 극성이 일치하는지 확인한 것만 넣었다 (PR #118 본문의 case 분석).
+# ----------------------------------------------------------------
+
+# Okt 가 르-불규칙 활용의 어간을 잘못 복원하는 경우 ('빨라요' → 빨르다)
+_STEM_ALIASES: Dict[str, str] = {"빨르": "빠르"}
+
+# 사전 어간을 찾기 위해 떼어 보는 파생 접미사 ('편리하다' → 편리, '짜증나다' → 짜증)
+_DERIVATIONAL_SUFFIXES: Tuple[str, ...] = ("하", "나", "스럽")
+
+# '안' + 기능동사 = 앱이 동작하지 않는다는 신고. {Okt 어간(다 제거): 키워드 어간}
+_NEGATED_FUNCTION_VERBS: Dict[str, str] = {
+    "되": "되", "돼": "되", "열리": "열리", "켜지": "켜지", "켜": "켜지",
+    "넘어가": "넘어가", "뜨": "뜨", "들어가": "들어가",
+}
+
+# 장형 부정('귀찮지 않아요')으로 보는 용언 표면형 어미. Okt 는 보조사·조사를 용언 토큰에
+# 붙여 낸다('귀찮지가', '귀찮질', '귀찮지를').
+_LONG_FORM_ENDINGS: Tuple[str, ...] = ("지", "진", "지는", "지도", "지가", "질", "지를")
+
+# '않다' 가 바람·요청·목적·반문이면 지금 그렇다는 뜻이라 부정으로 보지 않는다
+# ('느려지지 않게 해주세요', '않았으면', '않도록', '귀찮지 않나요')
+_NOT_A_DENIAL: Tuple[str, ...] = ("않게", "않도록", "않으면", "않았으면", "않을까", "않나")
+# 그래도 부정인 형태: 동시('귀찮지 않으면서')
+_DENIAL_DESPITE: Tuple[str, ...] = ("않으면서",)
+# '않게/않도록' 뒤가 결과('않게 됐어요', '않도록 바뀌었어요')면 부정이다. Okt 어간(돼다, 되어다)은
+# 일정하지 않아 표면형으로 본다. 그 결과가 바람·조건·의문('됐으면', '되길', '돼야', '되나요',
+# '될까요')이면 아직 이뤄지지 않은 것이라 부정이 아니다.
+_RESULT_VERB_PREFIXES: Tuple[str, ...] = ("되", "돼", "됐", "바뀌", "바뀐", "바꼈")
+_UNREALIZED_MARKERS: Tuple[str, ...] = ("면", "길", "기를", "야", "나", "까")
+
+# 용언 단계 전용 감성 어간 {어간: (기본점수, 카테고리)}. 사전 어간과 같이 부정 반전 대상이다.
+_PREDICATE_LEXICON: Dict[str, Tuple[float, Optional[CategoryType]]] = {
+    "귀찮": (0.20, CategoryType.USABILITY),
+}
+
+# 극성을 키워드 자체가 담고 있는 구문 키워드 {키워드: (기본점수, 카테고리)}.
+# 부정어가 이미 키워드에 들어 있으므로 문맥 부정 반전을 적용하지 않는다
+# (적용하면 '안 돼요' 의 '안' 때문에 0.10 이 0.90 으로 뒤집힌다).
+_PHRASE_KEYWORDS: Dict[str, Tuple[float, Optional[CategoryType]]] = {
+    **{
+        f"안{stem}": (0.10, CategoryType.STABILITY)
+        for stem in set(_NEGATED_FUNCTION_VERBS.values())
+    },
+    "못쓰": (0.15, None),
+    "잘쓰": (0.80, None),
+}
+
+# '잘 쓰고 있어요' 류. Okt 가 '잘' 을 '자다' 로 분석해 형태소로는 잡히지 않는다.
+# 과거형·대조형('잘 쓰고 있었는데 / 있던 / 있지만 / 있긴 한데 …')은 불만 리뷰의 도입부이고,
+# 부정형('있지는 않', '있진 않', '있지 못', '중이 아니')은 반대 뜻이라 제외한다. 구문 키워드는
+# 부정 반전을 하지 않으므로 여기서 걸러야 한다.
+_SATISFIED_USAGE_RE = re.compile(
+    r"잘\s?(?:쓰|사용하)고\s?있"
+    r"(?!었|던|는데|다가|지만|으나|긴|기는|지[는도]?\s?(?:않|못)|진\s?(?:않|못))"
+    r"|잘\s?사용\s?중(?!이\s?아니)"
+)
+
+# 분석 제외 판정용. 클렌징이 넣는 마스킹 토큰([PROFANITY], [EMAIL] 등)은 한글 판정에서 뺀다.
+_HANGUL_RE = re.compile(r"[가-힣ㄱ-ㅎㅏ-ㅣ]")
+_PLACEHOLDER_RE = re.compile(r"\[[A-Z_]+\]")
+_LETTER_RE = re.compile(r"[^\W\d_]")
+
+
+def _skip_reason_before_extraction(text: Optional[str]) -> Optional[str]:
+    """추출 전에 판정할 수 있는 분석 제외 사유. 없으면 None."""
+    if not text or not text.strip():
+        return SKIP_EMPTY
+    body = _PLACEHOLDER_RE.sub("", text)
+    if _LETTER_RE.search(body) and not _HANGUL_RE.search(body):
+        return SKIP_NON_KOREAN
+    return None
+
+
+class _Extraction(NamedTuple):
+    """키워드 추출 결과.
+
+    negated: 용언 단계가 Okt 토큰 인접성으로 정한 키워드별 부정 여부. 명사·표면 사전
+        단계의 결과면 None 이고, 그때는 기존 문맥 창 규칙(_has_negation)을 쓴다.
+    noun_step_failed: Okt.nouns 가 예외로 실패했는지. 그 상태에서 0건이면 분석 제외로
+        확정할 수 없다.
+    """
+
+    keywords: List[Tuple[str, int, int]]
+    negated: Optional[Dict[str, bool]] = None
+    noun_step_failed: bool = False
+
+
+def _lemma_candidates(stem: str) -> List[str]:
+    """Okt 어간('편리하다')을 사전 키 후보(['편리하', '편리'])로 바꾼다."""
+    base = stem[:-1] if stem.endswith("다") else stem
+    base = _STEM_ALIASES.get(base, base)
+    candidates = [base]
+    for suffix in _DERIVATIONAL_SUFFIXES:
+        if base.endswith(suffix) and len(base) > len(suffix):
+            candidates.append(base[: -len(suffix)])
+    return candidates
+
+
+def _long_form_denies(
+    surface: List[Tuple[str, str]], stems: List[Tuple[str, str]], i: int
+) -> bool:
+    """i 번째 감성 용언 뒤의 장형 부정('귀찮지 않아요', '귀찮지 못해요')이 지금 상태를 부정하는지.
+
+    용언이 '-지' 꼴일 때만 본다('느려서 못 하겠어요' 의 못 하다는 그 용언의 부정이 아니다).
+    """
+    if not surface[i][0].endswith(_LONG_FORM_ENDINGS):
+        return False
+    next_stems = [s for s, _ in stems[i + 1:i + 3]]
+    if next_stems == ["못", "하다"]:
+        return True
+    if next_stems[:1] != ["않다"]:
+        return False
+    auxiliary = surface[i + 1][0]
+    if auxiliary.startswith(_DENIAL_DESPITE):
+        return True
+    if auxiliary.startswith(("않게", "않도록")):
+        if i + 2 >= len(surface):
+            return False
+        result = surface[i + 2][0]
+        return result.startswith(_RESULT_VERB_PREFIXES) and not any(
+            marker in result for marker in _UNREALIZED_MARKERS
+        )
+    return not auxiliary.startswith(_NOT_A_DENIAL)
+
 
 class GoldABSAAnalyzer:
     """reviews_preprocessed → review_aspects 적재 (Gold Layer).
@@ -135,6 +271,11 @@ class GoldABSAAnalyzer:
         Returns:
             True: 성공(신규 적재 또는 이미 존재)
             False: 실패
+
+        Raises:
+            AnalysisSkipped: 규칙 기반으로 분석할 수 없는 리뷰(빈 텍스트, 한글 없음,
+                aspect 없음). 호출자가 종결 상태 SKIPPED 로 기록한다. aspect 가 없는
+                리뷰는 ANALYZED 로 두지 않는다 (orphan 무결성, #84).
         """
         try:
             if self._is_already_analyzed(session, review_id):
@@ -144,16 +285,26 @@ class GoldABSAAnalyzer:
             if preprocessed is None:
                 self.logger.warning(f"[{review_id}] No preprocessed record")
                 return False
-            if not preprocessed.refined_text:
-                self.logger.warning(f"[{review_id}] No refined_text")
-                return False
+            skip_reason = _skip_reason_before_extraction(preprocessed.refined_text)
+            if skip_reason is not None:
+                raise AnalysisSkipped(skip_reason)
 
             try:
                 with session.begin_nested():
-                    aspects = self._analyze(session, review_id, preprocessed.refined_text)
+                    extraction = self._extract(preprocessed.refined_text)
+                    aspects = self._analyze(
+                        session, review_id, preprocessed.refined_text, extraction
+                    )
                     if not aspects:
-                        self.logger.warning(f"[{review_id}] No ABSA aspects extracted")
-                        return False
+                        if self._okt is None or extraction.noun_step_failed:
+                            # 형태소 분석을 끝까지 돌리지 못한 채 0건이면 확정할 수 없다.
+                            # 종결(SKIPPED) 대신 재시도 가능한 실패로 남긴다.
+                            self.logger.warning(
+                                f"[{review_id}] No ABSA aspects extracted without a "
+                                "complete Okt analysis"
+                            )
+                            return False
+                        raise AnalysisSkipped(SKIP_NO_ASPECT)
                     session.add_all(aspects)
                     rmi = session.get(ReviewMasterIndex, review_id)
                     if rmi is not None:
@@ -165,6 +316,8 @@ class GoldABSAAnalyzer:
                 return True
 
             return True
+        except AnalysisSkipped:
+            raise
         except Exception:
             self.logger.exception(f"[{review_id}] ABSA analysis failed")
             return False
@@ -184,11 +337,18 @@ class GoldABSAAnalyzer:
 
             self.logger.info(f"Running ABSA for {len(review_ids)} reviews")
             success_count = 0
+            skipped_count = 0
 
             for i in range(0, len(review_ids), batch_size):
                 chunk = review_ids[i:i + batch_size]
                 for review_id in chunk:
-                    if self.process(session, review_id):
+                    try:
+                        ok = self.process(session, review_id)
+                    except AnalysisSkipped as skip:
+                        self._mark_skipped(session, review_id, skip)
+                        skipped_count += 1
+                        continue
+                    if ok:
                         success_count += 1
                     else:
                         self.logger.warning(f"[{review_id}] ABSA failed — skipping")
@@ -198,7 +358,10 @@ class GoldABSAAnalyzer:
                     f"Progress: {min(i + batch_size, len(review_ids))}/{len(review_ids)}"
                 )
 
-            self.logger.info(f"ABSA complete: {success_count}/{len(review_ids)} succeeded")
+            self.logger.info(
+                f"ABSA complete: {success_count}/{len(review_ids)} succeeded, "
+                f"{skipped_count} skipped"
+            )
             return success_count
 
         except Exception:
@@ -213,20 +376,31 @@ class GoldABSAAnalyzer:
     # ------------------------------------------------------------------
 
     def _analyze(
-        self, session, review_id: UUID, text: str
+        self, session, review_id: UUID, text: str, extraction: Optional[_Extraction] = None
     ) -> List[ReviewAspect]:
         """텍스트에서 aspect 목록을 추출하여 ReviewAspect 리스트 반환."""
-        keywords_with_spans = self._extract_keywords_with_spans(text)
-        if not keywords_with_spans:
+        if extraction is None:
+            extraction = self._extract(text)
+        if not extraction.keywords:
             return []
 
         aspects: List[ReviewAspect] = []
-        for keyword, kw_start, kw_end in keywords_with_spans:
+        for keyword, kw_start, kw_end in extraction.keywords:
             context = self._local_context(text, kw_start)
-            has_negation = self._has_negation(context, keyword=keyword)
+            phrase = _PHRASE_KEYWORDS.get(keyword)
+            # 구문 키워드는 극성을 이미 담고 있다. 용언 단계 키워드는 Okt 토큰 인접성으로 정한
+            # 부정을 쓴다 (문맥 창은 '안 열리고 느려요' 의 '안' 을 느리 에도 적용한다).
+            # 명사·표면 사전 단계 키워드는 기존 문맥 창 규칙 그대로다.
+            if phrase is not None:
+                has_negation = False
+            elif extraction.negated is not None:
+                has_negation = extraction.negated.get(keyword, False)
+            else:
+                has_negation = self._has_negation(context, keyword=keyword)
             adv_weight = self._get_adv_weight(context)
 
-            s_base = _SENTIMENT_DICT.get(keyword, 0.5)
+            lexicon = phrase or _PREDICATE_LEXICON.get(keyword)
+            s_base = lexicon[0] if lexicon else _SENTIMENT_DICT.get(keyword, 0.5)
             s_final = s_base * adv_weight
             if has_negation:
                 s_final = 1.0 - s_final
@@ -249,6 +423,11 @@ class GoldABSAAnalyzer:
 
     def _extract_keywords_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
         """키워드와 문자 단위 span (start, end)을 함께 반환."""
+        return self._extract(text).keywords
+
+    def _extract(self, text: str) -> _Extraction:
+        """명사 → 표면 사전 → 용언 단계. 앞 단계가 0건일 때만 다음 단계로 간다."""
+        noun_step_failed = False
         if self._okt:
             try:
                 nouns = self._okt.nouns(text)
@@ -263,12 +442,105 @@ class GoldABSAAnalyzer:
                     if idx != -1:
                         result.append((noun, idx, idx + len(noun)))
                 if result:
-                    return result
+                    return _Extraction(result)
                 self.logger.debug("Okt returned no usable keywords — fallback to dict match")
             except Exception as e:
                 self.logger.warning(f"Okt.nouns failed: {e} — fallback to dict match")
+                noun_step_failed = True
 
-        return self._dict_match_keywords_with_spans(text)
+        dict_matches = self._dict_match_keywords_with_spans(text)
+        if dict_matches:
+            return _Extraction(dict_matches, noun_step_failed=noun_step_failed)
+        if noun_step_failed or not self._okt:
+            # 정상이면 명사 단계에서 끝났을 리뷰일 수 있다. 용언 단계로 다른 키워드를 굳히지 않고
+            # 0건으로 돌려 재시도 가능한 실패로 남긴다 (Okt 가 없을 때도 같다).
+            return _Extraction([], noun_step_failed=noun_step_failed)
+        keywords, negated = self._extract_predicate_keywords_with_spans(text)
+        return _Extraction(keywords, negated, noun_step_failed)
+
+    def _extract_predicate_keywords_with_spans(
+        self, text: str
+    ) -> Tuple[List[Tuple[str, int, int]], Dict[str, bool]]:
+        """명사와 표면 사전이 모두 놓친 구어체 리뷰에서 용언·구문 키워드를 찾는다 (#94).
+
+        Okt ``pos(stem=True)`` 의 어간을 사전과 맞추고('빨라요' → 빠르, '너무조아요' → 좋),
+        '안'/'못' 바로 뒤의 기능동사를 부정 구문 키워드로 묶는다('안열리는데' → 안열리).
+        감성 용언의 부정은 바로 앞 토큰이 '안'/'못' 인지('안빨라요', '안 느려요'), 바로 뒤가
+        장형 부정 '않다' 또는 '못'+'하다' 인지('귀찮지 않아요', '느려지진 않네요')로 정한다.
+        Okt 오류는 잡지 않는다. 여기서 빈 결과는 분석 제외(종결)로 이어지므로, 일시적
+        오류가 재시도 가능한 실패로 남아야 한다.
+
+        Returns:
+            (키워드·span 목록, 키워드별 부정 여부)
+        """
+        found: List[Tuple[str, int, int]] = []
+        negated: Dict[str, bool] = {}
+
+        def add(keyword: str, start: int, end: int, is_negated: bool = False) -> None:
+            if keyword not in negated:
+                negated[keyword] = is_negated
+                found.append((keyword, start, end))
+
+        usage = _SATISFIED_USAGE_RE.search(text)
+        if usage:
+            add("잘쓰", usage.start(), usage.end())
+
+        if not self._okt:
+            return found, negated
+
+        surface = self._okt.pos(text)
+        stems = self._okt.pos(text, stem=True)
+        if len(surface) != len(stems):
+            raise ValueError("Okt surface/stem token counts differ — spans would misalign")
+        offsets: List[int] = []
+        cursor = 0
+        for token, _ in surface:
+            idx = text.find(token, cursor)
+            if idx == -1:
+                raise ValueError(f"Okt token {token!r} not found in text — spans would misalign")
+            offsets.append(idx)
+            cursor = idx + len(token)
+
+        i = 0
+        negate_next = False  # 바로 앞 토큰이 감성 용언을 꾸미는 '안'/'못' 이었는지
+        while i < len(stems):
+            stem, tag = stems[i]
+            start, end = offsets[i], offsets[i] + len(surface[i][0])
+            keyword: Optional[str] = None
+            is_negated, negate_next = negate_next, False
+            if stem == "안되다":
+                keyword = "안되"
+            elif (
+                stem in ("안", "못")
+                and tag in ("VerbPrefix", "Noun")
+                and i + 1 < len(stems)
+                and stems[i + 1][1] in ("Verb", "Adjective")
+            ):
+                verb = _lemma_candidates(stems[i + 1][0])[0]
+                if stem == "안" and verb in _NEGATED_FUNCTION_VERBS:
+                    keyword = f"안{_NEGATED_FUNCTION_VERBS[verb]}"
+                elif stem == "못" and verb == "쓰":
+                    keyword = "못쓰"
+                if keyword:
+                    end = offsets[i + 1] + len(surface[i + 1][0])
+                    i += 1
+                else:
+                    negate_next = True
+            elif tag in ("Verb", "Adjective"):
+                keyword = next(
+                    (
+                        c for c in _lemma_candidates(stem)
+                        if c in _SENTIMENT_DICT or c in _PREDICATE_LEXICON
+                    ),
+                    None,
+                )
+                # 장형 부정: Okt 는 '-지는/-진/-지도' 를 용언에 붙이고 '않다' 를 다음 토큰으로 낸다
+                if keyword and _long_form_denies(surface, stems, i):
+                    is_negated = not is_negated
+            if keyword:
+                add(keyword, start, end, is_negated and keyword not in _PHRASE_KEYWORDS)
+            i += 1
+        return found[:20], negated
 
     def _dict_match_keywords_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
         """사전 기반으로 키워드와 문자 span을 추출한다."""
@@ -346,6 +618,9 @@ class GoldABSAAnalyzer:
     ) -> Optional[CategoryType]:
         """키워드 → CategoryType 매핑 (1차: 규칙, 2차: 벡터 유사도)."""
         # 1차: 규칙 기반
+        lexicon = _PHRASE_KEYWORDS.get(keyword) or _PREDICATE_LEXICON.get(keyword)
+        if lexicon and lexicon[1] is not None:
+            return lexicon[1]
         for cat, keywords in _CATEGORY_KEYWORDS.items():
             if any(keyword.startswith(k) or k.startswith(keyword) for k in keywords):
                 return cat
@@ -386,6 +661,14 @@ class GoldABSAAnalyzer:
     # ------------------------------------------------------------------
     # DB helpers
     # ------------------------------------------------------------------
+
+    def _mark_skipped(self, session, review_id: UUID, skip: AnalysisSkipped) -> None:
+        """standalone 배치에서 분석 제외 리뷰를 종결 상태로 기록한다 (retry_count 유지)."""
+        self.logger.info(f"[{review_id}] ABSA skipped: {skip.error_message}")
+        rmi = session.get(ReviewMasterIndex, review_id)
+        if rmi is not None:
+            rmi.processing_status = ProcessingStatusType.SKIPPED
+            rmi.error_message = skip.error_message
 
     def _is_already_analyzed(self, session, review_id: UUID) -> bool:
         """review_aspects에 해당 review_id가 이미 존재하는지 확인."""
