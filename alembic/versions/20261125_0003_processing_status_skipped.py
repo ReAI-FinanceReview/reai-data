@@ -18,7 +18,6 @@ downgrade 는 enum 값을 뺄 수 없어 타입을 다시 만든다. ``SKIPPED``
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "20261125_0003"
@@ -53,18 +52,22 @@ def _comment_column(comment: str) -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    skipped = bind.execute(
-        sa.text(
-            "SELECT COUNT(*) FROM review_master_index "
-            f"WHERE processing_status = '{NEW_VALUE}'"
-        )
-    ).scalar_one()
-    if skipped:
-        raise RuntimeError(
-            f"{skipped} review_master_index rows are {NEW_VALUE}; move them to FAILED or "
-            "CLEANED before downgrading — the enum value cannot be dropped while in use"
-        )
+    # 거부 검사를 SQL 안에 둔다. Python 에서 COUNT 를 읽으면 offline(--sql) 모드에서
+    # 결과가 없어 깨진다. 이 블록은 online·offline 모두 같은 SQL 로 동작한다.
+    op.execute(
+        f"""
+        DO $$
+        DECLARE skipped bigint;
+        BEGIN
+            SELECT COUNT(*) INTO skipped
+            FROM review_master_index
+            WHERE processing_status = '{NEW_VALUE}';
+            IF skipped > 0 THEN
+                RAISE EXCEPTION '% review_master_index rows are {NEW_VALUE}; move them to FAILED or CLEANED before downgrading', skipped;
+            END IF;
+        END $$;
+        """
+    )
 
     values = ", ".join(f"'{v}'" for v in PREVIOUS_VALUES)
     op.execute(f"ALTER TYPE {TYPE_NAME} RENAME TO {TYPE_NAME}_old")

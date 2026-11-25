@@ -54,7 +54,7 @@ class ReviewMasterIndex(Base):
     )
     processing_status = Column(
         SQLEnum(ProcessingStatusType, name='processing_status_type', create_type=False),
-        comment='처리 상태 (RAW, CLEANED, ANALYZED, FAILED)'
+        comment='처리 상태 (RAW, CLEANED, ANALYZED, FAILED, SKIPPED)'
     )
     parquet_written_at = Column(
         DateTime(timezone=True),
