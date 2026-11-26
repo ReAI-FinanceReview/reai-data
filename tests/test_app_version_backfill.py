@@ -519,6 +519,19 @@ def test_apply_fills_only_null_rows_and_rerun_is_idempotent(test_db_session, rss
 
 
 @pytest.mark.requires_db
+def test_apply_stamps_updated_at_on_filled_rows_only(test_db_session, rss_review_entry):
+    app_id = _seed_appstore_app(test_db_session)
+    target = _target(test_db_session, app_id)
+    transaction_start = test_db_session.execute(text("SELECT NOW()")).scalar_one()
+
+    settle_app(test_db_session, target, _appstore_fetch(rss_review_entry, target, True), apply=True)
+
+    updated_at = _stored(test_db_session, app_id, column='updated_at')
+    assert updated_at['r1'] == updated_at['r2'] == transaction_start > OLD_UPDATED_AT
+    assert updated_at['r3'] == updated_at['r4'] == OLD_UPDATED_AT
+
+
+@pytest.mark.requires_db
 def test_play_matches_without_version_and_unmatched_are_counted_not_written(test_db_session):
     app_id = _seed_app(test_db_session, PLAYSTORE)
     for review_id in ('p1', 'p2', 'p3'):

@@ -3,7 +3,7 @@
 #120 이전에 적재된 행은 평소 수집으로 버전이 채워지지 않는다. 크롤러는 이미 아는 리뷰 id를
 레코드로 만들기 전에 거르고(BaseCrawler._filter_new_reviews), 로더는 app_reviews에 INSERT만
 한다. 이 모듈은 app_version IS NULL인 행을 앱별로 모아 스토어를 다시 조회하고,
-platform_review_id로 맞춘 행의 app_version만 UPDATE한다.
+platform_review_id로 맞춘 행의 app_version과 updated_at만 UPDATE한다.
 
 - 리뷰 id와 버전은 크롤러 레코드 빌더와 같은 정적 메서드로 읽는다
   (AppStoreCrawler / PlayStoreCrawler의 _extract_platform_review_id, _extract_app_version).
@@ -85,7 +85,7 @@ _TARGETS_WITHOUT_APP_SQL = text("""
 """)
 
 _UPDATE_SQL = text("""
-    UPDATE app_reviews SET app_version = :app_version
+    UPDATE app_reviews SET app_version = :app_version, updated_at = NOW()
     WHERE app_id = :app_id AND platform_review_id = :platform_review_id AND app_version IS NULL
 """)
 
@@ -406,8 +406,9 @@ _FETCHERS = {
 def settle_app(session, target: AppTargets, fetch: FetchResult, apply: bool) -> AppResult:
     """Write (``apply``) or count (dry-run) the versions ``fetch`` found for ``target``.
 
-    Only rows whose app_version is still NULL are touched. Matched reviews the store gave no
-    version for, and unmatched reviews, are counted but not written. Does not commit.
+    Only rows whose app_version is still NULL are touched, and their updated_at is set to the
+    time of the write. Matched reviews the store gave no version for, and unmatched reviews, are
+    counted but not written. Does not commit.
     """
     versions = {rid: version for rid, version in fetch.found.items() if version}
     if not versions:
