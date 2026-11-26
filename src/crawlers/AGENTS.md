@@ -16,7 +16,7 @@ already in `app_reviews` and UPDATEs only their NULL `app_version` (issue #125).
 | File | Description |
 |------|-------------|
 | `base_crawler.py` | `BaseCrawler(ABC)`: config/app-id loading, request pacing, `collect_app_records()`, `save_crawl_batch()`, `save_daily_batch()`, `run()` template. Owns Parquet format consistency for all stores |
-| `appstore_crawler.py` | `AppStoreCrawler`: App Store RSS/API via `requests` (URL template `APPSTORE_REVIEWS_RSS_URL`); app-id file from `config.app_ids.appstore`. Record `app_version` comes from the entry's `im:version.label` via the static `_extract_app_version` |
+| `appstore_crawler.py` | `AppStoreCrawler`: App Store RSS/API via `requests` (URL template from `appstore.reviews_rss_url`, no coded default); app-id file from `config.app_ids.appstore`. Record `app_version` comes from the entry's `im:version.label` via the static `_extract_app_version` |
 | `playstore_crawler.py` | `PlayStoreCrawler`: `google_play_scraper.reviews` + `app`; app-id file from `config.app_ids.playstore`. Record `app_version` comes from `reviewCreatedVersion` via the static `_extract_app_version` (google-play-scraper fills `appVersion` from the same payload element), `None` when the store omits it |
 | `unified_crawler.py` | `UnifiedCrawler`: runs both stores sequentially, catching each store's failure so one store cannot abort the other. Deliberately **not** a `BaseCrawler` subclass |
 | `app_version_backfill.py` | `backfill_app_versions()`: groups `app_reviews` rows with `app_version IS NULL` by app (`load_targets`, App Store first), re-fetches each app (`fetch_appstore_versions` / `fetch_playstore_versions`), and writes or, in dry-run, counts the matches (`settle_app`, `UPDATE ... AND app_version IS NULL`). Play paging stops by `play_stop_reason`. Settings come from `crawler_config.yml` (`load_settings`); `format_report` renders the per-app and per-platform report. Entry point: `scripts/backfill_app_version.py` |
@@ -40,8 +40,9 @@ None.
 - A `ParquetWriteError` must fail the crawl for that batch rather than silently continuing — a
   registered batch with no Parquet object would strand the loader.
 - Store field paths live once, in each store crawler's static `_extract_platform_review_id` /
-  `_extract_app_version` (and `APPSTORE_REVIEWS_RSS_URL` for the RSS). The record builders and
-  `app_version_backfill.match_versions` both call them; change a field there, not in a copy. The
+  `_extract_app_version`, and the RSS URL template once, in `appstore.reviews_rss_url`. The
+  record builders and `app_version_backfill.match_versions` both call the extractors, and both
+  App Store fetchers read that key; change a field there, not in a copy. The
   backfill calls them on the classes without an instance, because constructing a store crawler
   creates the `output.base_directory` folders (`BaseCrawler.__init__`) and a `DatabaseConnector`.
 - The App Store RSS can answer 200 with no entries for pages inside the range (on 2026-11-26 one

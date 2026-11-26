@@ -188,7 +188,7 @@ def test_load_settings_fails_on_missing_backfill_key(tmp_path):
     config = tmp_path / 'crawler_config.yml'
     config.write_text(
         'global: {delay_between_requests: 2, timeout: 30}\n'
-        'appstore: {country: kr, pages_to_crawl: 10}\n'
+        'appstore: {country: kr, pages_to_crawl: 10, reviews_rss_url: "http://127.0.0.1/{page}"}\n'
         'playstore: {language: ko, country: kr, backfill_page_size: 200}\n',
         encoding='utf-8',
     )

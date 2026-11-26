@@ -9,6 +9,8 @@ appstore:
   country: "kr"                    # 국가 코드
   pages_to_crawl: 10               # 크롤링할 페이지 수
   max_reviews_per_app: 10          # 앱당 최대 리뷰 수
+  # 고객 리뷰 RSS(최신순, 쪽 단위). AppStoreCrawler 와 app_version 백필이 함께 읽고, 코드 기본값은 없음
+  reviews_rss_url: "https://itunes.apple.com/{country}/rss/customerreviews/page={page}/id={app_id}/sortby=mostRecent/json"
   
 # Play Store 크롤러 설정
 playstore:

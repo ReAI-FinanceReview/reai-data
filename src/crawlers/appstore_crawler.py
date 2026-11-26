@@ -17,9 +17,6 @@ from src.models.base import Base
 from src.models.enums import PlatformType
 from src.schemas.parquet.app_review import AppReviewSchema
 
-# App Store 고객 리뷰 RSS (최신순, 페이지 단위). 이 URL을 쓰는 코드는 모두 이 템플릿을 쓴다.
-APPSTORE_REVIEWS_RSS_URL = "https://itunes.apple.com/{country}/rss/customerreviews/page={page}/id={app_id}/sortby=mostRecent/json"
-
 
 class AppStoreCrawler(BaseCrawler):
     """App Store 리뷰 크롤러 (Batch DLQ Architecture)
@@ -35,6 +32,8 @@ class AppStoreCrawler(BaseCrawler):
         self.country = self.config.get('appstore', {}).get('country', 'kr')
         self.pages_to_crawl = self.config.get('appstore', {}).get('pages_to_crawl', 10)
         self.max_reviews_per_app = self.config.get('appstore', {}).get('max_reviews_per_app', 500)
+        # 리뷰 RSS URL 템플릿: app_version 백필과 같은 키를 읽으며 기본값이 없다
+        self.reviews_rss_url = self.config['appstore']['reviews_rss_url']
 
         # 앱 ID 파일 경로
         self.app_ids_file = self.config.get('app_ids', {}).get('appstore', 'config/app_ids/appstore_app_ids.txt')
@@ -94,7 +93,7 @@ class AppStoreCrawler(BaseCrawler):
         self.logger.info(f"앱 ID {app_id}의 리뷰 크롤링 시작 (최대 {pages}페이지)")
 
         for page in range(1, pages + 1):
-            url = APPSTORE_REVIEWS_RSS_URL.format(country=country, page=page, app_id=app_id)
+            url = self.reviews_rss_url.format(country=country, page=page, app_id=app_id)
 
             try:
                 response = requests.get(url, timeout=self.timeout)

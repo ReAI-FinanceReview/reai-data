@@ -30,7 +30,7 @@ from sqlalchemy import text
 from src.models.enums import PlatformType
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
-from .appstore_crawler import APPSTORE_REVIEWS_RSS_URL, AppStoreCrawler
+from .appstore_crawler import AppStoreCrawler
 from .playstore_crawler import PlayStoreCrawler
 
 logger = get_logger('app_version_backfill')
@@ -94,6 +94,7 @@ class BackfillSettings:
 
     delay_seconds: float
     timeout_seconds: float
+    appstore_reviews_rss_url: str
     appstore_country: str
     appstore_pages: int
     playstore_language: str
@@ -113,6 +114,7 @@ def load_settings(config_path: str) -> BackfillSettings:
     return BackfillSettings(
         delay_seconds=config['global']['delay_between_requests'],
         timeout_seconds=config['global']['timeout'],
+        appstore_reviews_rss_url=config['appstore']['reviews_rss_url'],
         appstore_country=config['appstore']['country'],
         appstore_pages=config['appstore']['pages_to_crawl'],
         playstore_language=config['playstore']['language'],
@@ -267,7 +269,7 @@ def fetch_appstore_versions(target: AppTargets, settings: BackfillSettings) -> F
     for page in range(1, settings.appstore_pages + 1):
         if page > 1:
             time.sleep(settings.delay_seconds)
-        url = APPSTORE_REVIEWS_RSS_URL.format(
+        url = settings.appstore_reviews_rss_url.format(
             country=settings.appstore_country, page=page, app_id=target.platform_app_id
         )
         try:
