@@ -11,9 +11,8 @@ platform_review_id로 맞춘 행의 app_version만 UPDATE한다.
   DatabaseConnector 가 생긴다.
 - 기본은 dry-run이고 apply=True일 때만 쓴다. 이미 값이 있는 행은 건드리지 않으므로
   (AND app_version IS NULL) 다시 실행해도 결과가 같다. INSERT나 DELETE는 하지 않는다.
-- App Store 요청 실패는 그 앱의 결과(AppResult.error)에 남기고 다음 앱으로 넘어간다.
-  Play 는 google-play-scraper 가 요청 실패를 스스로 삼키므로 exhausted 로 끝난다
-  (fetch_playstore_versions 참고).
+- 못 맞춘 리뷰는 둘로 나눈다. unmatched_confirmed는 스토어 응답을 끝까지 정상으로 읽었는데도
+  없는 리뷰, unverified는 빈 응답이나 실패한 요청 때문에 없다고 단정할 수 없는 리뷰다.
 """
 
 import time
@@ -45,11 +44,20 @@ PLATFORM_CHOICES = {
 }
 
 STOP_ALL_MATCHED = 'all_matched'
-STOP_PASSED_OLDEST_TARGET = 'passed_oldest_target'
-STOP_EXHAUSTED = 'exhausted'
-STOP_CAP_REACHED = 'cap_reached'
-STOP_PAGE_LIMIT = 'page_limit'
+# App Store
+STOP_PAGE_LIMIT = 'page_limit'  # read every page up to pages_to_crawl
+STOP_FEED_EMPTY = 'feed_empty'  # every page empty (Play: the first page empty, no next page)
 STOP_ERROR = 'error'
+STOP_SKIPPED_AFTER_EMPTY_FEEDS = 'skipped_after_empty_feeds'  # not requested, see cutoff
+# Play
+STOP_PASSED_OLDEST_TARGET = 'passed_oldest_target'
+STOP_EXHAUSTED = 'exhausted'  # a page with reviews and no next-page token: the store's end
+STOP_EMPTY_PAGE = 'empty_page'  # an empty page after pages with reviews
+STOP_CAP_REACHED = 'cap_reached'
+
+# Play stops after which the unmatched targets are known to be absent from the store. An empty
+# page can be a request google-play-scraper failed and swallowed, and the cap stops early.
+PLAY_COMPLETE_STOPS = frozenset({STOP_ALL_MATCHED, STOP_PASSED_OLDEST_TARGET, STOP_EXHAUSTED})
 
 # PlayStoreCrawler._parse_reviewed_at labels google-play-scraper's local-time `at` as UTC, so a
 # stored reviewed_at can be later than the store's own timestamp by the crawl host's UTC offset.
@@ -97,6 +105,8 @@ class BackfillSettings:
     appstore_reviews_rss_url: str
     appstore_country: str
     appstore_pages: int
+    appstore_rss_page_size: int
+    appstore_max_consecutive_empty_feeds: int
     playstore_language: str
     playstore_country: str
     playstore_page_size: int
@@ -117,6 +127,8 @@ def load_settings(config_path: str) -> BackfillSettings:
         appstore_reviews_rss_url=config['appstore']['reviews_rss_url'],
         appstore_country=config['appstore']['country'],
         appstore_pages=config['appstore']['pages_to_crawl'],
+        appstore_rss_page_size=config['appstore']['rss_page_size'],
+        appstore_max_consecutive_empty_feeds=config['appstore']['backfill_max_consecutive_empty_feeds'],
         playstore_language=config['playstore']['language'],
         playstore_country=config['playstore']['country'],
         playstore_page_size=config['playstore']['backfill_page_size'],
@@ -136,21 +148,28 @@ class AppTargets:
 
 @dataclass
 class FetchResult:
-    """One app's re-fetch: {platform_review_id: store version or None} for the target ids seen."""
+    """One app's re-fetch: {platform_review_id: store version or None} for the target ids seen.
+
+    ``complete`` says the store's answer was read in full, so a target that was not seen is
+    really absent; otherwise the unseen targets are unverified.
+    """
 
     found: Dict[str, Optional[str]] = field(default_factory=dict)
     fetched: int = 0
     empty_pages: int = 0
     stop_reason: Optional[str] = None
+    complete: bool = False
     error: Optional[str] = None
+    oldest_fetched: Optional[datetime] = None
 
 
 @dataclass
 class AppResult:
     """Per-app report row. ``updated`` counts rows written, or rows a dry-run would write.
 
-    ``empty_pages`` counts App Store RSS pages inside ``pages_to_crawl`` that came back empty;
-    reviews on such a page show up as unmatched, and a later re-run may still fill them.
+    Targets that were not matched are either ``unmatched_confirmed`` (the store's answer was read
+    in full and they are not in it) or ``unverified`` (empty pages, a failed request, the Play cap
+    or the App Store cutoff may have hidden them; a later re-run may still fill them).
     """
 
     platform_type: PlatformType
@@ -161,12 +180,10 @@ class AppResult:
     matched: int
     matched_with_version: int
     updated: int
+    unmatched_confirmed: int
+    unverified: int
     stop_reason: Optional[str]
     error: Optional[str]
-
-    @property
-    def unmatched(self) -> int:
-        return self.targets - self.matched
 
 
 @dataclass
@@ -178,6 +195,10 @@ class BackfillReport:
     @property
     def has_errors(self) -> bool:
         return any(app.error for app in self.apps)
+
+    @property
+    def has_unverified(self) -> bool:
+        return any(app.unverified for app in self.apps)
 
 
 def load_targets(session, platforms: Sequence[PlatformType]) -> List[AppTargets]:
@@ -231,41 +252,95 @@ def appstore_review_entries(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [entry for entry in entries if 'im:rating' in entry]
 
 
+def appstore_feed_complete(page_counts: Sequence[int], page_size: int) -> bool:
+    """Whether RSS pages read in order, ``page_counts`` review entries each, show the whole feed.
+
+    The feed is complete when every page before the last non-empty one is full and the pages
+    after it, if any, are empty while it is partial: that is how the feed itself ends, so small
+    apps with a few dozen reviews come out complete. An empty page before a non-empty one, or
+    empty pages after a full page, is what the RSS outages observed on 2026-11-26 looked like
+    (every page empty; pages 1-2 and 5-10 empty with 3-4 full), so such a read is not complete.
+    """
+    non_empty = [index for index, count in enumerate(page_counts) if count]
+    if not non_empty:
+        return False
+    last = non_empty[-1]
+    if any(count < page_size for count in page_counts[:last]):
+        return False
+    if last < len(page_counts) - 1:
+        return page_counts[last] < page_size
+    return True
+
+
 def play_stop_reason(
     *,
-    targets: int,
+    target_times: Collection[datetime],
     matched: int,
     fetched: int,
     max_reviews: int,
     last_page_size: int,
     has_next_page: bool,
     oldest_fetched: Optional[datetime],
-    oldest_target: datetime,
 ) -> Optional[str]:
     """Whether to stop paging one Play app after a page; ``None`` means fetch the next page.
 
-    Pages come newest first, so once they reach further back than the oldest target (minus
-    REVIEWED_AT_SLACK) the next page would only hold reviews older than every target.
+    ``target_times`` are the targets' stored reviewed_at. Pages come newest first, so once they
+    reach further back than the oldest target (minus REVIEWED_AT_SLACK) the next page would only
+    hold reviews older than every target. google-play-scraper turns a failed request into an
+    empty page with no next-page token, so an empty page is ``feed_empty`` when it is the first
+    one and ``empty_page`` otherwise; neither proves the remaining targets are gone.
     """
-    if matched >= targets:
+    if matched >= len(target_times):
         return STOP_ALL_MATCHED
-    if oldest_fetched is not None and oldest_fetched < oldest_target - REVIEWED_AT_SLACK:
+    if oldest_fetched is not None and oldest_fetched < min(target_times) - REVIEWED_AT_SLACK:
         return STOP_PASSED_OLDEST_TARGET
-    if last_page_size == 0 or not has_next_page:
+    if last_page_size == 0:
+        return STOP_FEED_EMPTY if fetched == 0 else STOP_EMPTY_PAGE
+    if not has_next_page:
         return STOP_EXHAUSTED
     if fetched >= max_reviews:
         return STOP_CAP_REACHED
     return None
 
 
+def scan_play_page(
+    result: FetchResult,
+    page: List[Dict[str, Any]],
+    has_next_page: bool,
+    target: AppTargets,
+    max_reviews: int,
+) -> Optional[str]:
+    """Fold one google-play-scraper page into ``result``; return the stop reason, or ``None``."""
+    result.fetched += len(page)
+    result.empty_pages += not page
+    result.found.update(match_versions(PlatformType.PLAYSTORE, page, target.reviewed_at))
+    # `at` is naive local time (datetime.fromtimestamp); astimezone() reads it as such.
+    page_times = [review['at'].astimezone(timezone.utc) for review in page if review.get('at')]
+    if result.oldest_fetched is not None:
+        page_times.append(result.oldest_fetched)
+    if page_times:
+        result.oldest_fetched = min(page_times)
+    result.stop_reason = play_stop_reason(
+        target_times=target.reviewed_at.values(),
+        matched=len(result.found),
+        fetched=result.fetched,
+        max_reviews=max_reviews,
+        last_page_size=len(page),
+        has_next_page=has_next_page,
+        oldest_fetched=result.oldest_fetched,
+    )
+    result.complete = result.stop_reason in PLAY_COMPLETE_STOPS
+    return result.stop_reason
+
+
 def fetch_appstore_versions(target: AppTargets, settings: BackfillSettings) -> FetchResult:
     """Read every RSS page up to ``appstore.pages_to_crawl``, stopping early once all match.
 
-    An empty page does not end the read: the RSS intermittently answers 200 with no entries for
-    pages in the middle of the range (on 2026-11-26 one app returned pages 1-2 and 5-10 empty
-    and 3-4 full), so empty pages are counted instead.
+    An empty page does not end the read, because the RSS also answers 200 with no entries when
+    it is failing; appstore_feed_complete decides afterwards whether the read was complete.
     """
     result = FetchResult()
+    page_counts = []
     for page in range(1, settings.appstore_pages + 1):
         if page > 1:
             time.sleep(settings.delay_seconds)
@@ -280,28 +355,30 @@ def fetch_appstore_versions(target: AppTargets, settings: BackfillSettings) -> F
             result.stop_reason = STOP_ERROR
             result.error = f'page {page}: {exc!r}'
             return result
-        if not entries:
-            result.empty_pages += 1
-            continue
+        page_counts.append(len(entries))
+        result.empty_pages += not entries
         result.fetched += len(entries)
         result.found.update(match_versions(PlatformType.APPSTORE, entries, target.reviewed_at))
         if len(result.found) == len(target.reviewed_at):
             result.stop_reason = STOP_ALL_MATCHED
+            result.complete = True
             return result
-    result.stop_reason = STOP_PAGE_LIMIT
+    if result.fetched == 0:
+        result.stop_reason = STOP_FEED_EMPTY
+    else:
+        result.stop_reason = STOP_PAGE_LIMIT
+        result.complete = appstore_feed_complete(page_counts, settings.appstore_rss_page_size)
     return result
 
 
 def fetch_playstore_versions(target: AppTargets, settings: BackfillSettings) -> FetchResult:
-    """Page newest first with continuation tokens until play_stop_reason says stop.
+    """Page newest first with continuation tokens until scan_play_page says stop.
 
     google-play-scraper takes no timeout and does not raise on a failed request: reviews()
-    catches it and returns what it has with no next-page token. Such a failure therefore ends as
-    ``exhausted``, and it is not told apart from the real end of the reviews.
+    catches it and returns an empty page with no next-page token, which scan_play_page reports
+    as ``feed_empty`` or ``empty_page`` (unverified) rather than as the end of the reviews.
     """
     result = FetchResult()
-    oldest_target = min(target.reviewed_at.values())
-    oldest_fetched: Optional[datetime] = None
     token = None
     while True:
         if token is not None:
@@ -314,23 +391,9 @@ def fetch_playstore_versions(target: AppTargets, settings: BackfillSettings) -> 
             count=settings.playstore_page_size,
             continuation_token=token,
         )
-        result.fetched += len(page)
-        result.found.update(match_versions(PlatformType.PLAYSTORE, page, target.reviewed_at))
-        # `at` is naive local time (datetime.fromtimestamp); astimezone() reads it as such.
-        page_times = [review['at'].astimezone(timezone.utc) for review in page if review.get('at')]
-        if page_times:
-            oldest_fetched = min(page_times + ([oldest_fetched] if oldest_fetched else []))
-        result.stop_reason = play_stop_reason(
-            targets=len(target.reviewed_at),
-            matched=len(result.found),
-            fetched=result.fetched,
-            max_reviews=settings.playstore_max_reviews_per_app,
-            last_page_size=len(page),
-            has_next_page=token.token is not None,
-            oldest_fetched=oldest_fetched,
-            oldest_target=oldest_target,
-        )
-        if result.stop_reason:
+        if scan_play_page(
+            result, page, token.token is not None, target, settings.playstore_max_reviews_per_app
+        ):
             return result
 
 
@@ -362,6 +425,7 @@ def settle_app(session, target: AppTargets, fetch: FetchResult, apply: bool) -> 
             _WOULD_UPDATE_SQL,
             {'app_id': target.app_id, 'platform_review_ids': list(versions)},
         ).scalar_one()
+    unmatched = len(target.reviewed_at) - len(fetch.found)
     return AppResult(
         platform_type=target.platform_type,
         platform_app_id=target.platform_app_id,
@@ -371,6 +435,8 @@ def settle_app(session, target: AppTargets, fetch: FetchResult, apply: bool) -> 
         matched=len(fetch.found),
         matched_with_version=len(versions),
         updated=updated,
+        unmatched_confirmed=unmatched if fetch.complete else 0,
+        unverified=0 if fetch.complete else unmatched,
         stop_reason=fetch.stop_reason,
         error=fetch.error,
     )
@@ -383,6 +449,10 @@ def backfill_app_versions(
 
     With ``apply`` each app's updates are committed before the next app is fetched; a dry-run
     never commits.
+
+    Once ``appstore.backfill_max_consecutive_empty_feeds`` App Store apps in a row come back
+    ``feed_empty`` the RSS is treated as down: the remaining App Store apps are not requested
+    and end as ``skipped_after_empty_feeds`` with every target unverified. Play still runs.
     """
     settings = load_settings(config_path)
     session = DatabaseConnector(config_path).get_session()
@@ -390,18 +460,28 @@ def backfill_app_versions(
         targets = load_targets(session, platforms)
         targets_without_app = count_targets_without_app(session, platforms)
         results = []
+        empty_feeds_in_a_row = 0
         for index, target in enumerate(targets):
-            if index:
-                time.sleep(settings.delay_seconds)
-            fetch = _FETCHERS[target.platform_type](target, settings)
+            appstore = target.platform_type is PlatformType.APPSTORE
+            if appstore and empty_feeds_in_a_row >= settings.appstore_max_consecutive_empty_feeds:
+                fetch = FetchResult(stop_reason=STOP_SKIPPED_AFTER_EMPTY_FEEDS)
+            else:
+                if index:
+                    time.sleep(settings.delay_seconds)
+                fetch = _FETCHERS[target.platform_type](target, settings)
+                if appstore:
+                    empty_feeds_in_a_row = (
+                        empty_feeds_in_a_row + 1 if fetch.stop_reason == STOP_FEED_EMPTY else 0
+                    )
             result = settle_app(session, target, fetch, apply)
             if apply:
                 session.commit()
             logger.info(
                 f"[{index + 1}/{len(targets)}] {target.platform_type.value} {target.platform_app_id}: "
                 f"대상 {result.targets}, 조회 {result.fetched}, 빈 페이지 {result.empty_pages}, "
-                f"맞춤 {result.matched}, "
-                f"{'갱신' if apply else '갱신 예정'} {result.updated}, 중단 {result.stop_reason}"
+                f"맞춤 {result.matched}, {'갱신' if apply else '갱신 예정'} {result.updated}, "
+                f"확정 누락 {result.unmatched_confirmed}, 미확인 {result.unverified}, "
+                f"중단 {result.stop_reason}"
                 + (f", 오류 {result.error}" if result.error else "")
             )
             results.append(result)
@@ -411,7 +491,8 @@ def backfill_app_versions(
 
 
 _COUNT_COLUMNS = (
-    'targets', 'fetched', 'empty_pages', 'matched', 'matched_with_version', 'updated', 'unmatched',
+    'targets', 'fetched', 'empty_pages', 'matched', 'matched_with_version', 'updated',
+    'unmatched_confirmed', 'unverified',
 )
 
 

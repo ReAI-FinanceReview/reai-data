@@ -19,12 +19,17 @@ import pytest
 import tempfile
 import shutil
 import os
+import json
+import re
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from uuid6 import uuid7
 
-from sqlalchemy import create_engine
+import yaml
+from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool
 
@@ -670,3 +675,213 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "requires_db: marks tests requiring real PostgreSQL database"
     )
+
+
+# ========================================
+# APP VERSION BACKFILL (Issue #125)
+# ========================================
+
+def _rss_review_entry(review_id: str, version: Optional[str] = None) -> Dict[str, Any]:
+    """One review entry of the App Store customerreviews RSS JSON (keys copied from a live page)."""
+    entry = {
+        'author': {
+            'uri': {'label': 'https://itunes.apple.com/kr/reviews/id1335187572'},
+            'name': {'label': '리뷰어'},
+            'label': '',
+        },
+        'updated': {'label': '2026-11-18T21:37:26-07:00'},
+        'im:rating': {'label': '1'},
+        'id': {'label': review_id},
+        'title': {'label': '로그인 오류'},
+        'content': {'label': '로그인이 자꾸 풀려요', 'attributes': {'type': 'text'}},
+        'link': {'attributes': {
+            'rel': 'related',
+            'href': 'https://itunes.apple.com/kr/review?id=1067748687&type=Purple%20Software',
+        }},
+        'im:voteSum': {'label': '0'},
+        'im:contentType': {'attributes': {'term': 'Application', 'label': '앱'}},
+        'im:voteCount': {'label': '0'},
+    }
+    if version is not None:
+        entry['im:version'] = {'label': version}
+    return entry
+
+
+@pytest.fixture
+def rss_review_entry():
+    """Builder for App Store RSS review entries: ``rss_review_entry(review_id, version=None)``."""
+    return _rss_review_entry
+
+
+class AppStoreRssServer:
+    """A real HTTP server on 127.0.0.1 that answers App Store customerreviews RSS URLs.
+
+    A page that was not set answers 200 with a feed that has no ``entry``, which is what the
+    RSS returns past its last review and also, intermittently, inside the page range.
+    """
+
+    PATH = re.compile(
+        r'^/(?P<country>[^/]+)/rss/customerreviews/page=(?P<page>\d+)/id=(?P<app_id>[^/]+)'
+        r'/sortby=mostRecent/json$'
+    )
+
+    def __init__(self):
+        self.pages: Dict[tuple, List[Dict[str, Any]]] = {}
+        self.statuses: Dict[tuple, int] = {}
+        self.requests: List[tuple] = []
+        self.on_request = None  # called with (app_id, page) inside the handler, before answering
+        rss = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                match = rss.PATH.match(self.path)
+                if match is None:
+                    self.send_error(404)
+                    return
+                key = (match['app_id'], int(match['page']))
+                rss.requests.append(key)
+                if rss.on_request is not None:
+                    rss.on_request(key)
+                status = rss.statuses.get(key, 200)
+                if status != 200:
+                    self.send_error(status)
+                    return
+                feed = {'author': {'name': {'label': 'iTunes Store'}}, 'title': {'label': 'iTunes Store:사용자 후기'}}
+                if rss.pages.get(key):
+                    feed['entry'] = rss.pages[key]
+                body = json.dumps({'feed': feed}).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self._httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True
+        )
+        self._thread.start()
+        port = self._httpd.server_address[1]
+        self.url_template = (
+            f'http://127.0.0.1:{port}/{{country}}/rss/customerreviews/page={{page}}'
+            f'/id={{app_id}}/sortby=mostRecent/json'
+        )
+
+    def set_pages(self, app_id: str, *pages: List[Dict[str, Any]]) -> None:
+        """Serve ``pages[0]`` as page 1 of ``app_id``, ``pages[1]`` as page 2, and so on."""
+        for number, entries in enumerate(pages, start=1):
+            self.pages[(app_id, number)] = entries
+
+    def fail(self, app_id: str, page: int, status: int = 500) -> None:
+        self.statuses[(app_id, page)] = status
+
+    def requested_pages(self, app_id: str) -> List[int]:
+        return [page for requested_app, page in self.requests if requested_app == app_id]
+
+    def close(self) -> None:
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join()
+
+
+@pytest.fixture
+def appstore_rss_server(monkeypatch):
+    """AppStoreRssServer for the test; requests to it bypass any configured HTTP proxy."""
+    no_proxy = os.environ.get('NO_PROXY', '')
+    monkeypatch.setenv('NO_PROXY', ','.join(filter(None, [no_proxy, '127.0.0.1'])))
+    server = AppStoreRssServer()
+    yield server
+    server.close()
+
+
+@pytest.fixture
+def backfill_config(tmp_path, appstore_rss_server) -> str:
+    """config/crawler_config.yml with the RSS URL pointed at appstore_rss_server and no delay."""
+    config = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / 'config' / 'crawler_config.yml').read_text(encoding='utf-8')
+    )
+    config['global']['delay_between_requests'] = 0
+    config['appstore']['reviews_rss_url'] = appstore_rss_server.url_template
+    path = tmp_path / 'crawler_config.yml'
+    path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding='utf-8')
+    return str(path)
+
+
+class BackfillDb:
+    """Committed apps / app_reviews rows for tests that run the backfill on its own connection.
+
+    The backfill opens its own DatabaseConnector session, so rows seeded through the rollback-only
+    ``test_db_session`` would be invisible to it; these are committed and deleted afterwards.
+    """
+
+    APPLICATION_NAME = 'reai-backfill-under-test'  # application_name of the backfill's connection
+    OLD_UPDATED_AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def __init__(self, engine):
+        self.engine = engine
+        self.app_ids: List[Any] = []
+
+    def seed_app(self, platform_type: PlatformType, platform_app_id: str, reviews) -> Any:
+        """Commit one app and its reviews, given as (platform_review_id, app_version) pairs."""
+        app_id = uuid7()
+        self.app_ids.append(app_id)
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO apps (app_id, platform_app_id, platform_type, name) "
+                     "VALUES (:app_id, :platform_app_id, :platform_type, 'Backfill App')"),
+                {'app_id': app_id, 'platform_app_id': platform_app_id, 'platform_type': platform_type.value},
+            )
+            for platform_review_id, app_version in reviews:
+                conn.execute(
+                    text("""
+                        INSERT INTO app_reviews (
+                            review_id, app_id, platform_type, platform_review_id, review_text,
+                            rating, app_version, reviewed_at, updated_at
+                        ) VALUES (
+                            :review_id, :app_id, :platform_type, :platform_review_id, '리뷰 본문',
+                            4, :app_version, :reviewed_at, :updated_at
+                        )
+                    """),
+                    {
+                        'review_id': uuid7(), 'app_id': app_id, 'platform_type': platform_type.value,
+                        'platform_review_id': platform_review_id, 'app_version': app_version,
+                        'reviewed_at': datetime(2026, 8, 10, 9, 0, tzinfo=timezone.utc),
+                        'updated_at': self.OLD_UPDATED_AT,
+                    },
+                )
+        return app_id
+
+    def versions(self, app_id) -> Dict[str, Optional[str]]:
+        """{platform_review_id: app_version} as a separate connection sees it."""
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT platform_review_id, app_version FROM app_reviews WHERE app_id = :app_id"),
+                {'app_id': app_id},
+            ).all()
+        return dict(rows)
+
+    def cleanup(self) -> None:
+        with self.engine.begin() as conn:
+            for app_id in self.app_ids:
+                conn.execute(text("DELETE FROM app_reviews WHERE app_id = :app_id"), {'app_id': app_id})
+                conn.execute(text("DELETE FROM apps WHERE app_id = :app_id"), {'app_id': app_id})
+
+
+@pytest.fixture
+def backfill_db(test_db_engine, test_db_schema, test_db_url, monkeypatch):
+    """BackfillDb on the test database; the backfill's DatabaseConnector is pointed at it.
+
+    Fails up front if the database already holds rows without app_version: the backfill would
+    fetch those apps too, and for Play that means the live store.
+    """
+    with test_db_engine.connect() as conn:
+        stray = conn.execute(text("SELECT count(*) FROM app_reviews WHERE app_version IS NULL")).scalar_one()
+    assert stray == 0, f'{stray} app_reviews rows without app_version left in the test database'
+    url = make_url(test_db_url).update_query_dict({'application_name': BackfillDb.APPLICATION_NAME})
+    monkeypatch.setenv('DATABASE_URL', url.render_as_string(hide_password=False))
+    db = BackfillDb(test_db_engine)
+    yield db
+    db.cleanup()

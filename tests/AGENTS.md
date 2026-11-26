@@ -54,7 +54,7 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
 ## For AI Agents
 
 ### Working In This Directory
-- `test_db_url` (`tests/conftest.py:58-60`) uses `TEST_DATABASE_URL` when it is set; otherwise it
+- `test_db_url` (`tests/conftest.py:63-65`) uses `TEST_DATABASE_URL` when it is set; otherwise it
   connects to the `docker-compose.test.yml` database on `localhost:${TEST_POSTGRES_PORT:-5433}`.
   The schema fixture runs `DROP SCHEMA public CASCADE` — **never** point it at a production database.
 - The image must be `pgvector/pgvector:pg17` (or equivalent); `schema_v4.sql` requires the `vector`
@@ -65,7 +65,7 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
 - Do not introduce database mocks or in-memory substitutes to make a test pass — the suite's value
   is that it runs against the real schema.
 - There is no `[tool.pytest.ini_options]` section in `pyproject.toml`; markers are registered in
-  `pytest_configure` at `conftest.py:662`.
+  `pytest_configure` at `conftest.py:667`.
 
 ### Testing Requirements
 This is the one canonical way to run the suite; other `AGENTS.md` files only name the modules to
