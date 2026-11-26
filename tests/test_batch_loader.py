@@ -542,5 +542,102 @@ def test_service_id_none_when_no_app_metadata(test_db_session):
     loader.logger.warning.assert_called_once()
 
 
+# ========================================
+# D. APP VERSION (Issue #120)
+# ========================================
+
+def _version_review(app_id, platform_review_id, app_version=None):
+    return AppReviewSchema(
+        review_id=str(uuid7()),
+        app_id=str(app_id),
+        platform_type='PLAYSTORE',
+        platform_review_id=platform_review_id,
+        reviewer_name='User1',
+        review_text='버전 확인용 리뷰',
+        rating=4,
+        reviewed_at=datetime(2026, 11, 24, 9, 0, tzinfo=timezone.utc),
+        is_reply=False,
+        reply_comment=None,
+        app_version=app_version,
+    )
+
+
+def _load_local_bronze_file(test_db_session, app_id, parquet_path, record_count):
+    """Load one local Bronze file as a PENDING batch; return app_reviews.app_version by review."""
+    now = datetime.now(timezone.utc)
+    app = App(
+        app_id=app_id,
+        platform_app_id='com.example.version',
+        platform_type=PlatformType.PLAYSTORE,
+        name='Version App',
+    )
+    batch = IngestionBatch(
+        batch_id=uuid7(),
+        source_type=PlatformType.PLAYSTORE,
+        platform_app_id='com.example.version',
+        app_name='Version App',
+        storage_path=str(parquet_path),
+        file_format='parquet',
+        record_count=record_count,
+        status=IngestionBatchStatusType.PENDING,
+        retry_count=0,
+        max_retries=3,
+        created_at=now,
+        updated_at=now,
+    )
+    test_db_session.add_all([app, batch])
+    test_db_session.commit()
+
+    loaded = _make_loader(test_db_session).load_pending_batches(limit=100)
+
+    assert loaded == 1
+    assert batch.status == IngestionBatchStatusType.LOADED
+    assert batch.error_message is None
+    rows = test_db_session.execute(
+        text("SELECT platform_review_id, app_version FROM app_reviews WHERE app_id = :app_id"),
+        {"app_id": app_id},
+    ).all()
+    return dict(rows)
+
+
+@pytest.mark.requires_db
+def test_load_writes_record_app_version(test_db_session, temp_bronze_dir):
+    """Each record's app_version lands in app_reviews; a record without one stays NULL."""
+    from src.utils.parquet_writer import ParquetWriter
+
+    app_id = uuid7()
+    records = [
+        _version_review(app_id, 'versioned_review_001', '5.3.1'),
+        _version_review(app_id, 'versioned_review_002', None),
+    ]
+    writer = ParquetWriter(base_path=str(temp_bronze_dir), partition_by='year_month')
+    parquet_path = writer.write_batch(records)
+
+    stored = _load_local_bronze_file(test_db_session, app_id, parquet_path, len(records))
+
+    assert stored == {'versioned_review_001': '5.3.1', 'versioned_review_002': None}
+
+
+@pytest.mark.requires_db
+def test_load_bronze_file_without_app_version_column(test_db_session, temp_bronze_dir):
+    """Bronze files written before issue #120 have no app_version column; they load as NULL."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    app_id = uuid7()
+    legacy_rows = []
+    for platform_review_id in ('legacy_review_001', 'legacy_review_002'):
+        row = _version_review(app_id, platform_review_id).model_dump()
+        del row['app_version']
+        legacy_rows.append(row)
+    parquet_path = temp_bronze_dir / 'legacy_before_app_version.parquet'
+    pq.write_table(pa.Table.from_pylist(legacy_rows), parquet_path)
+    assert 'app_version' not in pq.read_schema(parquet_path).names
+
+    stored = _load_local_bronze_file(test_db_session, app_id, parquet_path, len(legacy_rows))
+
+    assert stored == {'legacy_review_001': None, 'legacy_review_002': None}
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

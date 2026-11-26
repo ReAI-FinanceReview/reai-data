@@ -198,6 +198,7 @@ class BatchLoader:
                     "reviewer_name": record.reviewer_name,
                     "review_text": record.review_text,
                     "rating": record.rating,
+                    "app_version": record.app_version,
                     "reviewed_at": record.reviewed_at,
                     "is_reply": record.is_reply or False,
                     "reply_comment": record.reply_comment,
@@ -218,7 +219,7 @@ class BatchLoader:
                     VALUES (
                         :review_id, :app_id, :platform_type, 'kr',
                         :platform_review_id, :reviewer_name, :review_text, :rating,
-                        NULL, :reviewed_at, :is_reply, :reply_comment
+                        :app_version, :reviewed_at, :is_reply, :reply_comment
                     )
                     """
                 ),

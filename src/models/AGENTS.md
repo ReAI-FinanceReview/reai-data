@@ -49,7 +49,7 @@ None.
 - Adding a model means adding the import **and** the `__all__` entry in `__init__.py`; several
   modules rely on `from src.models import X`.
 - `Review` (`app_reviews`) and `ReviewPreprocessed` (`reviews_preprocessed`) rows live in
-  PostgreSQL and are queried: the loader inserts `app_reviews` (`src/loaders/batch_loader.py:213`),
+  PostgreSQL and are queried: the loader inserts `app_reviews` (`src/loaders/batch_loader.py:214`),
   cleansing upserts `reviews_preprocessed` (`src/processing/cleanse.py:426`), and Gold reads both
   (`src/gold/absa_analyzer.py:239,635`, `src/gold/action_analyzer.py:228`). The Parquet files are
   copies, so a column change goes into the model and `src/schemas/parquet/` together, and for Silver

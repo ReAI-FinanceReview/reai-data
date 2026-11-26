@@ -169,7 +169,8 @@ class AppStoreCrawler(BaseCrawler):
                 rating=max(1, min(5, int(review_data.get('im:rating', {}).get('label', 1) or 1))),
                 reviewed_at=reviewed_at_cache[platform_review_id],
                 is_reply=False,
-                reply_comment=None
+                reply_comment=None,
+                app_version=review_data.get('im:version', {}).get('label')
             ))
         return parquet_records
 

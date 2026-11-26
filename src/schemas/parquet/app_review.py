@@ -30,6 +30,8 @@ class AppReviewSchema(BaseModel):
         created_at: When the review was ingested into our system
         is_reply: Whether this is a developer reply
         reply_comment: Developer's reply text (if applicable)
+        app_version: Store app version the review was written against (optional;
+            Bronze files written before this field existed have no such column)
 
     Example:
         >>> review = AppReviewSchema(
@@ -87,6 +89,10 @@ class AppReviewSchema(BaseModel):
     reply_comment: Optional[str] = Field(
         None,
         description="Developer's reply text"
+    )
+    app_version: Optional[str] = Field(
+        None,
+        description="Store app version the review was written against"
     )
 
     @field_validator('platform_type')
