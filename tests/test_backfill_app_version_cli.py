@@ -1,7 +1,8 @@
 """Tests for scripts/backfill_app_version.py (Issue #125)
 
 The script decides two things on its own: which stores ``--platform`` selects, and the exit code
-(0 everything confirmed, 1 a store request failed, 2 some targets unverified). ``main()`` runs
+(0 everything confirmed, 1 an app failed, 3 some targets unverified; 2 stays argparse's usage
+error). ``main()`` runs
 against the real test database and the local RSS server from conftest; no Play rows are seeded,
 so no request reaches the live Play store.
 
@@ -66,10 +67,10 @@ def test_apply_flag_writes(cli, backfill_db, backfill_config, appstore_rss_serve
 
 
 @pytest.mark.requires_db
-def test_exit_2_when_targets_stay_unverified(cli, backfill_db, backfill_config, appstore_rss_server):
+def test_exit_3_when_targets_stay_unverified(cli, backfill_db, backfill_config, appstore_rss_server):
     backfill_db.seed_app(APPSTORE, "3000001", [("a", None)])  # the RSS serves only empty pages
 
-    assert cli.main(["--config", backfill_config]) == cli.EXIT_UNVERIFIED == 2
+    assert cli.main(["--config", backfill_config]) == cli.EXIT_UNVERIFIED == 3
 
 
 @pytest.mark.requires_db
@@ -121,13 +122,17 @@ def test_platform_selects_the_stores(
     assert bool(appstore_rss_server.requested_pages("3000001")) is appstore_requested
 
 
-def test_rejects_an_unknown_platform(cli):
-    with pytest.raises(SystemExit):
-        cli.build_arg_parser().parse_args(["--platform", "web"])
+def test_rejects_an_unknown_platform_with_a_code_of_its_own(cli):
+    """argparse exits 2 on a bad argument, so no backfill outcome may use 2."""
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--platform", "web"])
+
+    assert excinfo.value.code == cli.EXIT_USAGE == 2
+    assert excinfo.value.code not in (cli.EXIT_CONFIRMED, cli.EXIT_ERROR, cli.EXIT_UNVERIFIED)
 
 
 def test_help_documents_the_exit_codes(cli):
     help_text = cli.build_arg_parser().format_help()
 
-    for code in (cli.EXIT_CONFIRMED, cli.EXIT_ERROR, cli.EXIT_UNVERIFIED):
+    for code in (cli.EXIT_CONFIRMED, cli.EXIT_ERROR, cli.EXIT_USAGE, cli.EXIT_UNVERIFIED):
         assert f"\n  {code}  " in help_text

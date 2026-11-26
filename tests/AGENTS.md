@@ -31,7 +31,7 @@ passing mock-based test says nothing about the real database. The HTTP stub fixt
 | `test_batch_loader.py` | Pending/failed batch consumption into `review_master_index` |
 | `test_bronze_loading.py` | Bronze Parquet → DB load integration |
 | `test_app_version_backfill.py` | `app_version` backfill (issue #125): shared id/version extraction, App Store fetch over HTTP against the local RSS server (gaps, early stop, HTTP error, empty feed, feed end), confirmed vs unverified misses, Play paging decisions, `updated_at`, dry-run / apply / re-run, per-app commits, an app whose UPDATE fails on a held row lock being rolled back alone, no open transaction while waiting, the empty-feed cutoff |
-| `test_backfill_app_version_cli.py` | `scripts/backfill_app_version.py` `main()`: exit codes 0/1/2 and the `--platform` mapping, against the test database and the local RSS server |
+| `test_backfill_app_version_cli.py` | `scripts/backfill_app_version.py` `main()`: exit codes 0/1/3 (and 2 left to argparse) and the `--platform` mapping, against the test database and the local RSS server |
 | `test_crawler_consistency.py` | `save_daily_batch` upload → PENDING registration order and failure cleanup (App Store crawler only; no cross-store parity check) |
 | `test_database_schema.py` | Schema objects created by `schema_v4.sql` |
 | `test_parquet_schemas.py` / `test_parquet_writer.py` | Pydantic Parquet schemas and writer partitioning |
