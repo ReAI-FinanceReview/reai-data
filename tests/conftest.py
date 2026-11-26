@@ -945,3 +945,39 @@ def crawl_config(tmp_path, appstore_rss_server, test_db_schema, test_db_url, mon
     monkeypatch.setenv('ENABLE_PARQUET_WRITE', 'false')
     return CrawlConfig(tmp_path, appstore_rss_server.url_template)
 
+
+@pytest.fixture
+def minio_bucket(monkeypatch):
+    """A new bucket on the test MinIO, exported as ``MINIO_*`` for MinIOClient; removed afterwards.
+
+    The server is docker-compose.test.yml's ``test-minio`` (``TEST_MINIO_API_PORT``, default 9002)
+    unless ``TEST_MINIO_ENDPOINT`` names another; the credentials default to that compose file's.
+    The test is skipped when no MinIO answers there.
+    """
+    import boto3
+    from botocore.config import Config
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    endpoint = os.getenv('TEST_MINIO_ENDPOINT', f"http://127.0.0.1:{os.getenv('TEST_MINIO_API_PORT', '9002')}")
+    access_key = os.getenv('TEST_MINIO_ACCESS_KEY', 'minio')
+    secret_key = os.getenv('TEST_MINIO_SECRET_KEY', 'minio123')
+    bucket = f'reai-test-{uuid7().hex}'
+    no_proxy = os.environ.get('NO_PROXY', '')
+    monkeypatch.setenv('NO_PROXY', ','.join(filter(None, [no_proxy, '127.0.0.1', 'localhost'])))
+    s3 = boto3.client(
+        's3', endpoint_url=endpoint, aws_access_key_id=access_key, aws_secret_access_key=secret_key,
+        config=Config(connect_timeout=2, retries={'max_attempts': 1}),
+    )
+    try:
+        s3.create_bucket(Bucket=bucket)
+    except (BotoCoreError, ClientError) as exc:
+        pytest.skip(f'test MinIO not reachable at {endpoint}: {exc!r}')
+    for name, value in {
+        'MINIO_ENDPOINT': endpoint, 'MINIO_ACCESS_KEY': access_key,
+        'MINIO_SECRET_KEY': secret_key, 'MINIO_BUCKET': bucket,
+    }.items():
+        monkeypatch.setenv(name, value)
+    yield s3, bucket
+    for obj in s3.list_objects_v2(Bucket=bucket).get('Contents', []):
+        s3.delete_object(Bucket=bucket, Key=obj['Key'])
+    s3.delete_bucket(Bucket=bucket)

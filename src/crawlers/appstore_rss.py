@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import requests
 
+from .crawl_outcome import OUTCOME_ERROR, OUTCOME_FEED_EMPTY, OUTCOME_GAP, OUTCOME_OK
 
 
 def _feed_entries(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -125,3 +126,19 @@ def read_feed(
             return read
     return read
 
+
+def read_outcome(read: FeedRead, page_size: int) -> str:
+    """The crawl outcome of one app's read: ``error``, ``feed_empty``, ``gap`` or ``ok``.
+
+    ``gap`` is a read with reviews that appstore_feed_complete does not accept: an empty or
+    partial page came before the last page read, so reviews the feed should have shown there
+    may be missing. A read that ``on_page`` stopped ends on a page with reviews, so it is ``ok``
+    exactly when every page before that one was full.
+    """
+    if read.error:
+        return OUTCOME_ERROR
+    if read.feed_empty:
+        return OUTCOME_FEED_EMPTY
+    if not appstore_feed_complete(read.page_counts, page_size):
+        return OUTCOME_GAP
+    return OUTCOME_OK

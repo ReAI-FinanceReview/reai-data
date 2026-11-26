@@ -39,11 +39,39 @@ def _handle_step(step: str, func: Callable[[], object]) -> RunResult:
         return RunResult(step=step, status="failed", message=str(exc))
 
 
-def run_crawl(config_path: str | None = None) -> RunResult:
-    """Run unified crawl step."""
-    from src.crawlers.unified_crawler import UnifiedCrawler
-    crawler = UnifiedCrawler(config_path) if config_path is not None else UnifiedCrawler()
-    return _handle_step("crawl", lambda: crawler.run())
+def run_crawl(config_path: str | None = None, store: str = "all") -> RunResult:
+    """Run the crawl step for ``store``: appstore, playstore, or all (both, App Store first).
+
+    A store fails when its crawler raises or reports a store-level failure
+    (``StoreCrawlSummary.failure``: the App Store empty-feed cutoff, or every Play app empty).
+    With ``all`` both stores run and the step fails if either failed, naming it. Each store's
+    summary, with its per-app warnings (``feed_empty``, ``gap``, ``error``), is in ``validations``.
+    """
+    from src.crawlers.unified_crawler import CRAWL_STORE_CHOICES, UnifiedCrawler
+
+    if store not in CRAWL_STORE_CHOICES:
+        return RunResult(
+            step="crawl",
+            status="failed",
+            message=f"unknown store: {store!r} (choose from {', '.join(CRAWL_STORE_CHOICES)})",
+        )
+
+    summaries = []
+
+    def _run():
+        summaries.extend(UnifiedCrawler(config_path, CRAWL_STORE_CHOICES[store]).run())
+        failed = [summary for summary in summaries if summary.failure]
+        if failed:
+            raise RuntimeError(
+                "crawl failed: " + "; ".join(f"{summary.store}: {summary.failure}" for summary in failed)
+            )
+
+    result = _handle_step("crawl", _run)
+    if summaries:
+        result.validations = {summary.store: summary.as_dict() for summary in summaries}
+        result.input_count = sum(app.fetched for summary in summaries for app in summary.apps)
+        result.output_count = sum(app.new for summary in summaries for app in summary.apps)
+    return result
 
 
 def run_preprocess(batch_size: int = 100, limit: int | None = None, config_path: str | None = None) -> RunResult:

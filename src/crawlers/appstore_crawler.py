@@ -8,8 +8,16 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional
 from uuid import UUID
 
-from .appstore_rss import FeedRead, read_feed
+from .appstore_rss import FeedRead, read_feed, read_outcome
 from .base_crawler import BaseCrawler
+from .crawl_outcome import (
+    OUTCOME_ERROR,
+    OUTCOME_FEED_EMPTY,
+    OUTCOME_OK,
+    OUTCOME_SKIPPED_AFTER_EMPTY_FEEDS,
+    AppCrawlResult,
+    StoreCrawlSummary,
+)
 from .exceptions import ParquetWriteError
 from src.utils.db_connector import DatabaseConnector
 from src.models.base import Base
@@ -31,8 +39,10 @@ class AppStoreCrawler(BaseCrawler):
         self.country = self.config.get('appstore', {}).get('country', 'kr')
         self.pages_to_crawl = self.config.get('appstore', {}).get('pages_to_crawl', 10)
         self.max_reviews_per_app = self.config.get('appstore', {}).get('max_reviews_per_app', 500)
-        # 리뷰 RSS URL 템플릿: app_version 백필과 같은 키를 읽으며 기본값이 없다
+        # RSS 읽기 설정: app_version 백필과 같은 키를 읽으며 기본값이 없다
         self.reviews_rss_url = self.config['appstore']['reviews_rss_url']
+        self.rss_page_size = self.config['appstore']['rss_page_size']
+        self.max_consecutive_empty_feeds = self.config['appstore']['max_consecutive_empty_feeds']
 
         # 앱 ID 파일 경로
         self.app_ids_file = self.config.get('app_ids', {}).get('appstore', 'config/app_ids/appstore_app_ids.txt')
@@ -139,8 +149,47 @@ class AppStoreCrawler(BaseCrawler):
             ))
         return parquet_records
 
-    def run(self) -> None:
-        """크롤러 실행: 모든 앱 순회 후 하루치 단일 파일을 MinIO에 업로드"""
+    def _crawl_app(self, app_id: str, all_records: List[AppReviewSchema]) -> AppCrawlResult:
+        """앱 하나를 읽고 신규 레코드를 all_records에 더한 뒤, 그 앱의 결과를 돌려준다.
+
+        읽은 뒤 레코드를 만드는 중의 예외(DB)는 읽은 건수와 함께 error로 남긴다. 읽는 중의
+        예외는 호출자(run)가 error로 남긴다.
+        """
+        read = self.read_reviews(app_id)
+        reviews_data = read.entries[:self.max_reviews_per_app]
+        outcome = read_outcome(read, self.rss_page_size)
+        detail = None
+        if outcome == OUTCOME_ERROR:
+            detail = read.error
+        elif outcome != OUTCOME_OK:
+            detail = f'쪽별 리뷰 수 {read.page_counts}'
+        self.logger.info(
+            f"앱 ID {app_id}: 리뷰 {len(reviews_data)}건, 읽은 쪽 {len(read.page_counts)}, "
+            f"빈 쪽 {read.empty_pages}, 결과 {outcome}"
+        )
+        new = 0
+        if reviews_data:
+            app_name = read.app_name or f'app_{app_id}'
+            try:
+                records = self.collect_app_records(
+                    app_id, app_name, reviews_data, self._build_parquet_records
+                )
+            except Exception as e:
+                self.logger.exception(f"앱 ID {app_id} 신규 리뷰 확인 실패: {e}")
+                return AppCrawlResult(app_id, OUTCOME_ERROR, fetched=len(reviews_data), detail=repr(e))
+            all_records.extend(records)
+            new = len(records)
+            self.logger.info(f"앱 ID {app_id}: 신규 리뷰 {new}건")
+        return AppCrawlResult(app_id, outcome, fetched=len(reviews_data), new=new, detail=detail)
+
+    def run(self) -> StoreCrawlSummary:
+        """크롤러 실행: 모든 앱 순회 후 하루치 단일 파일을 MinIO에 업로드하고 결과를 돌려준다.
+
+        앱 하나가 비거나(feed_empty) 중간 쪽이 빠지거나(gap) 실패한(error) 것은 경고다. 리뷰를
+        하나도 못 읽은 앱(빈 피드, 또는 첫 리뷰 전에 실패한 요청)이 appstore.max_consecutive_empty_feeds
+        개 연달아 나오면 RSS 장애로 보고 남은 앱은 조회하지 않으며(skipped_after_empty_feeds),
+        그때까지 모은 리뷰는 올린 뒤 ``failure``를 채워 돌려준다.
+        """
         self.logger.info("App Store 크롤러 실행 시작")
 
         self.db_connector.create_tables(Base)
@@ -151,46 +200,49 @@ class AppStoreCrawler(BaseCrawler):
 
         self.logger.info(f"총 {len(app_ids)}개 앱의 리뷰를 크롤링합니다.")
 
+        summary = StoreCrawlSummary(store='appstore')
         all_records = []
-        successful_apps = 0
+        nothing_read_in_a_row = 0
 
         for i, app_id in enumerate(app_ids, 1):
-            self.logger.info(f"[{i}/{len(app_ids)}] 앱 ID: {app_id} 크롤링 시작...")
-
-            try:
-                app_name, reviews_data = self.get_app_store_reviews_and_appname(app_id)
-
-                if not app_name:
-                    self.logger.warning(f"앱 ID {app_id}의 이름을 찾을 수 없습니다. 건너뜁니다.")
-                    continue
-
-                if not reviews_data:
-                    self.logger.warning(f"앱 ID {app_id}: 수집된 리뷰 없음")
-                    continue
-
-                records = self.collect_app_records(
-                    app_id, app_name, reviews_data, self._build_parquet_records
-                )
-
-                if records:
-                    self.logger.info(f"앱 ID {app_id}: {len(records)}개 신규 리뷰 수집")
-                    all_records.extend(records)
-                    successful_apps += 1
-                else:
-                    self.logger.info(f"앱 ID {app_id}: 새로운 리뷰 없음")
-
-            except Exception as e:
-                self.logger.error(f"앱 ID {app_id} 크롤링 실패: {e}")
+            if nothing_read_in_a_row >= self.max_consecutive_empty_feeds:
+                summary.apps.append(AppCrawlResult(app_id, OUTCOME_SKIPPED_AFTER_EMPTY_FEEDS))
                 continue
+
+            self.logger.info(f"[{i}/{len(app_ids)}] 앱 ID: {app_id} 크롤링 시작...")
+            try:
+                result = self._crawl_app(app_id, all_records)
+            except Exception as e:  # 읽는 중의 예외: 리뷰를 하나도 못 읽은 앱으로 센다
+                self.logger.exception(f"앱 ID {app_id} 크롤링 실패: {e}")
+                result = AppCrawlResult(app_id, OUTCOME_ERROR, detail=repr(e))
+            summary.apps.append(result)
+
+            nothing_read = result.fetched == 0 and result.outcome in (OUTCOME_FEED_EMPTY, OUTCOME_ERROR)
+            nothing_read_in_a_row = nothing_read_in_a_row + 1 if nothing_read else 0
 
             if i < len(app_ids):
                 self.wait_between_requests()
 
-        self.logger.info(f"크롤링 완료 - 성공: {successful_apps}/{len(app_ids)}개 앱, 총 {len(all_records)}개 리뷰")
+        if nothing_read_in_a_row >= self.max_consecutive_empty_feeds:
+            skipped = sum(1 for app in summary.apps if app.outcome == OUTCOME_SKIPPED_AFTER_EMPTY_FEEDS)
+            summary.failure = (
+                f"App Store RSS: 리뷰를 하나도 못 읽은 앱이 {nothing_read_in_a_row}개 연달아 나와 "
+                f"장애로 보고 남은 {skipped}개 앱은 조회하지 않음"
+            )
+
+        for app in summary.warnings:
+            self.logger.warning(
+                f"앱 ID {app.app_id}: {app.outcome}" + (f" ({app.detail})" if app.detail else "")
+            )
+        self.logger.info(
+            f"크롤링 완료 - 앱 {len(app_ids)}개 중 경고 {len(summary.warnings)}개, "
+            f"신규 리뷰 {len(all_records)}건"
+        )
 
         if all_records:
             try:
                 _, count, s3_key = self.save_daily_batch(all_records, self._get_platform_type())
+                summary.storage_path = s3_key
                 if s3_key:
                     self.logger.info(f"MinIO 업로드 완료: {count}개 리뷰 → {s3_key}")
                 else:
@@ -200,3 +252,7 @@ class AppStoreCrawler(BaseCrawler):
                 raise
         else:
             self.logger.info("업로드할 신규 리뷰 없음")
+
+        if summary.failure:
+            self.logger.error(f"❌ {summary.failure}")
+        return summary

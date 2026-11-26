@@ -18,6 +18,7 @@ except ImportError:
 from ..utils.logger import get_logger
 from ..utils.file_manager import FileManager
 from ..utils.data_processor import DataProcessor
+from .crawl_outcome import StoreCrawlSummary
 
 
 class BaseCrawler(ABC):
@@ -109,8 +110,8 @@ class BaseCrawler(ABC):
         pass
     
     @abstractmethod
-    def run(self) -> str:
-        """크롤러 실행 (하위 클래스에서 구현)"""
+    def run(self) -> StoreCrawlSummary:
+        """크롤러 실행 (하위 클래스에서 구현): 앱별 결과와 스토어 단위 실패를 담은 요약을 돌려준다"""
         pass
 
     # ========================================

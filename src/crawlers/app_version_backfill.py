@@ -141,7 +141,7 @@ def load_settings(config_path: str) -> BackfillSettings:
         appstore_country=config['appstore']['country'],
         appstore_pages=config['appstore']['pages_to_crawl'],
         appstore_rss_page_size=config['appstore']['rss_page_size'],
-        appstore_max_consecutive_empty_feeds=config['appstore']['backfill_max_consecutive_empty_feeds'],
+        appstore_max_consecutive_empty_feeds=config['appstore']['max_consecutive_empty_feeds'],
         playstore_language=config['playstore']['language'],
         playstore_country=config['playstore']['country'],
         playstore_page_size=config['playstore']['backfill_page_size'],
@@ -506,7 +506,7 @@ def backfill_app_versions(
     No transaction stays open while a store is being asked: the target query is closed before
     the first request, and each app ends with a commit (``apply``) or a rollback (dry-run).
 
-    Once ``appstore.backfill_max_consecutive_empty_feeds`` App Store apps in a row come back
+    Once ``appstore.max_consecutive_empty_feeds`` App Store apps in a row come back
     ``feed_empty`` the RSS is treated as down: the remaining App Store apps are not requested
     and end as ``skipped_after_empty_feeds`` with every target unverified. Play still runs.
 

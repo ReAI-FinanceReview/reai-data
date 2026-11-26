@@ -10,6 +10,14 @@ from typing import List, Dict, Any, Tuple, Optional
 from uuid import UUID
 
 from .base_crawler import BaseCrawler
+from .crawl_outcome import (
+    OUTCOME_ERROR,
+    OUTCOME_FEED_EMPTY,
+    OUTCOME_OK,
+    AppCrawlResult,
+    StoreCrawlSummary,
+    playstore_failure,
+)
 from .exceptions import ParquetWriteError
 from src.utils.db_connector import DatabaseConnector
 from src.models.base import Base
@@ -149,8 +157,12 @@ class PlayStoreCrawler(BaseCrawler):
             ))
         return parquet_records
 
-    def run(self) -> None:
-        """크롤러 실행: 모든 앱 순회 후 하루치 단일 파일을 MinIO에 업로드"""
+    def run(self) -> StoreCrawlSummary:
+        """크롤러 실행: 모든 앱 순회 후 하루치 단일 파일을 MinIO에 업로드하고 결과를 돌려준다.
+
+        앱 하나가 리뷰 0건(feed_empty)이거나 실패한(error) 것은 경고다. 모든 앱이 0건이면
+        (playstore_failure) 모은 것이 없으니 ``failure``를 채워 돌려준다.
+        """
         self.logger.info("Play Store 크롤러 실행 시작")
 
         self.db_connector.create_tables(Base)
@@ -161,12 +173,13 @@ class PlayStoreCrawler(BaseCrawler):
 
         self.logger.info(f"총 {len(app_ids)}개 앱의 리뷰를 크롤링합니다.")
 
+        summary = StoreCrawlSummary(store='playstore')
         all_records = []
-        successful_apps = 0
 
         for i, app_id in enumerate(app_ids, 1):
             self.logger.info(f"[{i}/{len(app_ids)}] 앱 ID: {app_id} 크롤링 시작...")
 
+            reviews_data = []
             try:
                 app_details = self.get_app_details(app_id)
                 app_name = app_details.get('title') if app_details else f'app_{app_id}'
@@ -174,32 +187,40 @@ class PlayStoreCrawler(BaseCrawler):
                 reviews_data = self.get_playstore_reviews(app_id)
 
                 if not reviews_data:
-                    self.logger.warning(f"앱 ID {app_id}: 수집된 리뷰 없음")
-                    continue
-
-                records = self.collect_app_records(
-                    app_id, app_name, reviews_data, self._build_parquet_records
-                )
-
-                if records:
-                    self.logger.info(f"앱 ID {app_id}: {len(records)}개 신규 리뷰 수집")
-                    all_records.extend(records)
-                    successful_apps += 1
+                    result = AppCrawlResult(app_id, OUTCOME_FEED_EMPTY)
                 else:
-                    self.logger.info(f"앱 ID {app_id}: 새로운 리뷰 없음")
+                    records = self.collect_app_records(
+                        app_id, app_name, reviews_data, self._build_parquet_records
+                    )
+                    all_records.extend(records)
+                    self.logger.info(f"앱 ID {app_id}: 리뷰 {len(reviews_data)}건, 신규 {len(records)}건")
+                    result = AppCrawlResult(
+                        app_id, OUTCOME_OK, fetched=len(reviews_data), new=len(records)
+                    )
 
             except Exception as e:
-                self.logger.error(f"앱 ID {app_id} 크롤링 실패: {e}")
-                continue
+                self.logger.exception(f"앱 ID {app_id} 크롤링 실패: {e}")
+                result = AppCrawlResult(app_id, OUTCOME_ERROR, fetched=len(reviews_data), detail=repr(e))
+            summary.apps.append(result)
 
             if i < len(app_ids):
                 self.wait_between_requests()
 
-        self.logger.info(f"크롤링 완료 - 성공: {successful_apps}/{len(app_ids)}개 앱, 총 {len(all_records)}개 리뷰")
+        summary.failure = playstore_failure(summary.apps)
+
+        for app in summary.warnings:
+            self.logger.warning(
+                f"앱 ID {app.app_id}: {app.outcome}" + (f" ({app.detail})" if app.detail else "")
+            )
+        self.logger.info(
+            f"크롤링 완료 - 앱 {len(app_ids)}개 중 경고 {len(summary.warnings)}개, "
+            f"신규 리뷰 {len(all_records)}건"
+        )
 
         if all_records:
             try:
                 _, count, s3_key = self.save_daily_batch(all_records, self._get_platform_type())
+                summary.storage_path = s3_key
                 if s3_key:
                     self.logger.info(f"MinIO 업로드 완료: {count}개 리뷰 → {s3_key}")
                 else:
@@ -209,3 +230,7 @@ class PlayStoreCrawler(BaseCrawler):
                 raise
         else:
             self.logger.info("업로드할 신규 리뷰 없음")
+
+        if summary.failure:
+            self.logger.error(f"❌ {summary.failure}")
+        return summary
