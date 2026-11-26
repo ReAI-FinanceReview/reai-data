@@ -5,6 +5,11 @@
 `financial_review_etl_pipeline`의 운영 성공 기준은 Airflow task 실행 성공에 더해
 `gold_aggregate` 이후 `post_aggregate_validate` DB 검증 task 성공까지 포함한다.
 
+크롤은 스토어별 task(`crawl_appstore`, `crawl_playstore`)로 나뉘어 따로 실패하고 따로 재시도한다
+(#127). `load_reviews`는 `trigger_rule="all_done"`이라 한 스토어가 재시도 끝에 실패해도 다른 스토어의
+배치를 적재하고, leaf task `crawl_watcher`(`one_failed`)가 실패해 DAG 실행은 실패로 남는다. Airflow는
+DAG 실행 상태를 leaf task로만 정하므로 이 task가 없으면 뒤 단계가 성공했을 때 크롤 실패가 묻힌다.
+
 검증 task는 target date(`{{ ds }}`) 기준으로 기존 DB 테이블을 조회한다. 1차 범위에서는
 신규 모니터링 테이블, Slack/Email/PagerDuty, live App Store/Play Store API gate,
 Metabase/Grafana dashboard 구현을 추가하지 않는다.
@@ -13,6 +18,9 @@ Metabase/Grafana dashboard 구현을 추가하지 않는다.
 
 | 판정 | 의미 | Airflow 결과 |
 |---|---|---|
+| 크롤 앱 warning (`feed_empty`, `gap`, `error`) | 앱 하나가 리뷰 0건이거나, 빈 쪽 뒤에서 리뷰를 읽었거나, 요청이 실패함 | 그 스토어 task 성공, task 로그의 WARNING과 `RunResult.validations[store].warnings`로 확인 |
+| App Store 크롤 failure | 크롤러 예외, 또는 리뷰를 하나도 못 읽은 앱이 `appstore.max_consecutive_empty_feeds`개 연속(남은 앱은 조회 안 함, 읽은 리뷰는 업로드) | `crawl_appstore` 실패(재시도 후), `crawl_watcher` 실패, DAG 실패. 적재는 진행 |
+| Play 크롤 failure | 크롤러 예외, 또는 모든 앱이 리뷰 0건 | `crawl_playstore` 실패(재시도 후), `crawl_watcher` 실패, DAG 실패. 적재는 진행 |
 | `fresh_ingestion` warning | target date 신규 batch/review count가 0건 | 성공 가능, report 확인 |
 | `batch_state` failure | `PENDING`, `FAILED`, `RETRYING`, `DEAD_LETTER` batch가 남음 | task 실패 |
 | `review_state` failure | `RAW`, `CLEANED`, retry-exhausted `FAILED` review가 남음 (`SKIPPED` 는 종결 상태라 `skipped_count` 로 보고만 함) | task 실패 |
@@ -30,6 +38,13 @@ Airflow task와 동일한 검증은 아래 명령으로 재현한다.
 PYTHONPATH=. uv run python -m src.pipeline.cli \
   --steps post_aggregate_validate \
   --target-date YYYY-MM-DD
+```
+
+스토어 하나의 크롤 task는 아래 명령으로 재현한다. 마지막 줄에 `RunResult` JSON을 출력하고, 실패면
+exit 1이다.
+
+```bash
+PYTHONPATH=. uv run python scripts/crawl_reviews.py --store appstore
 ```
 
 집계까지 포함한 로컬 검증은 아래 순서로 실행한다.
@@ -58,7 +73,9 @@ PYTHONPATH=. uv run pytest \
   tests/test_post_aggregate_validation.py \
   tests/test_pipeline_cli_validation.py \
   tests/test_airflow_dag_validation_wiring.py \
-  tests/test_airflow_readiness_docs.py
+  tests/test_airflow_readiness_docs.py \
+  tests/test_crawl_outcome.py \
+  tests/test_crawl_reviews_cli.py
 
 PYTHONPATH=. uv run pytest \
   tests/test_backend_datamart_contract.py \

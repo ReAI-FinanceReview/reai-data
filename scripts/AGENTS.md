@@ -14,7 +14,7 @@ humans share the same code paths as the step CLI. No business logic belongs here
 | File | Description |
 |------|-------------|
 | `run_pipeline.py` | Unified entrypoint; delegates to `src.pipeline.cli.main` (`--steps`, `--target-date`, ...) |
-| `crawl_reviews.py` | Crawl step only → Bronze Parquet in MinIO + `ingestion_batch` PENDING rows, via `run_crawl`. `--store appstore\|playstore\|all` (default `all`, the old no-argument behavior: both stores, exit 1 if either failed; choices from `CRAWL_STORE_CHOICES` in `src.crawlers.unified_crawler`), `--config`. Prints the `RunResult` as one JSON line (per-store summary and per-app warnings) and exits `0` on success, `1` on failure; `2` is argparse's usage error |
+| `crawl_reviews.py` | Crawl step only → Bronze Parquet in MinIO + `ingestion_batch` PENDING rows, via `run_crawl`. `--store appstore\|playstore\|all` (default `all`, the old no-argument behavior: both stores, exit 1 if either failed; choices from `CRAWL_STORE_CHOICES` in `src.crawlers.unified_crawler`), `--config`. Prints the `RunResult` as one JSON line (per-store summary and per-app warnings) and exits `0` on success, `1` on failure; `2` is argparse's usage error. The DAG runs it once per store |
 | `load_reviews.py` | Load step only → pending Parquet batches into `review_master_index` (RAW) |
 | `cleanse_reviews.py` | Bronze → Silver cleansing CLI; `--date YYYY-MM-DD`, wires `config/dictionaries/{synonyms,profanity}.json` |
 | `assign_dept.py` | Department assignment step only; `--date YYYY-MM-DD` for one day, `--backfill` for the explicit full sweep, `--assigner rule\|llm`, `--limit` |
@@ -34,8 +34,9 @@ None.
 - Always invoke with the repo root as CWD: `PYTHONPATH=. uv run python scripts/<name>.py`.
 - Scripts must stay thin. New behavior goes into `src/pipeline/steps.py` or the owning module, and
   the script only parses arguments and maps the `RunResult` status to an exit code.
-- `dags/financial_review_pipeline.py` invokes `crawl_reviews.py`, `load_reviews.py`,
-  `cleanse_reviews.py`, and `assign_dept.py` by path — renaming or moving a script breaks the DAG.
+- `dags/financial_review_pipeline.py` invokes `crawl_reviews.py` (twice: `--store appstore`,
+  `--store playstore`), `load_reviews.py`, `cleanse_reviews.py`, and `assign_dept.py` by path —
+  renaming or moving a script, or renaming the `--store` values, breaks the DAG.
 - Dictionary paths are defined once, as `SYNONYMS_PATH` / `PROFANITY_PATH` in
   `src/processing/cleanse.py:24-28`. `cleanse_reviews.py` imports them and uses `_PROJECT_ROOT`
   only to put the repo on `sys.path`. Add a new dictionary path there as well, so the script and

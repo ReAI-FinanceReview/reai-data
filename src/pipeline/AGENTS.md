@@ -36,7 +36,8 @@ None.
   decides. `validations` holds each store's `as_dict()` (per-app outcomes and the `warnings` list
   of apps that are empty, have a gap, or failed); `input_count` / `output_count` are reviews
   fetched / new. An unknown `store` fails without crawling. The `crawl` entry of `run_steps` (and
-  so the CLI's `--steps crawl`) keeps the default `all`.
+  so the CLI's `--steps crawl`) keeps the default `all`; the DAG runs one store per task through
+  `scripts/crawl_reviews.py --store`.
 - Registering a new step means adding it to the `step_funcs` dict in `run_steps()` **and** to the
   `--steps` help text in `cli.py`. An unrecognized step yields `"unknown step"` and halts the run.
 - `post_aggregate_validate` and `validate` are aliases for the same validator. Both require
