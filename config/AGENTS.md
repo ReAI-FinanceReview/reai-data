@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
 
 # config
 
@@ -12,7 +12,7 @@ environment variables, and `paths.yml` only references them via `${VARIABLE}` pl
 
 | File | Description |
 |------|-------------|
-| `crawler_config.yml` | Default config for every component (`config_path` default). Global delay/retry/timeout, per-store country/language/page counts, output settings, and app-id file locations |
+| `crawler_config.yml` | Default config for every component (`config_path` default). Global delay/retry/timeout, per-store country/language/page counts, output settings, and app-id file locations. `playstore.backfill_page_size` / `backfill_max_reviews_per_app` are read only by the `app_version` backfill (`src/crawlers/app_version_backfill.py`) |
 | `paths.yml` | Medallion storage layout (`bronze_dir`, `silver_dir`, `gold_dir`, `embeddings_dir`, `logs_dir`) built from `${PARQUET_BASE_PATH}`; read by `src/utils/path_resolver.py`, which no production code imports |
 | `logging_config.yml` | Logging dictConfig actually loaded by `src/utils/logger.py:30`: console + rotating `logs/crawler/info.log` and `logs/error/error.log` (10 MB × 5) |
 | `logging.yml` | Near-identical logging config that no code references; `logging_config.yml` is the live one |
@@ -31,7 +31,10 @@ environment variables, and `paths.yml` only references them via `${VARIABLE}` pl
   CLI (`--config`). Removing a key can break several components at once — check
   `self.config.get(...)` call sites in `src/crawlers/` before pruning.
 - Review-volume knobs are currently set for testing (`appstore.max_reviews_per_app: 10`,
-  `playstore.reviews_per_app: 10`); raise them deliberately, not incidentally.
+  `playstore.reviews_per_app: 10`); raise them deliberately, not incidentally. The
+  `app_version` backfill ignores `appstore.max_reviews_per_app` and reads every page up to
+  `appstore.pages_to_crawl`; its `load_settings` reads keys without coded fallbacks, so a missing
+  key fails with `KeyError`.
 - `output.*` in `crawler_config.yml` describes the legacy CSV dump path. The production Bronze and
   Silver locations are not configured in this directory: their MinIO object keys are built in code
   (`src/crawlers/base_crawler.py:433-436` writes `bronze/app_reviews/...`;

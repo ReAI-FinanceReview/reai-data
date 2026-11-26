@@ -8,6 +8,8 @@ Bronze-layer ingestion. Each crawler pulls reviews for its store's app-id list, 
 payload into `AppReviewSchema` records, writes them as Parquet to MinIO, and registers an
 `ingestion_batch` row in `PENDING`. Crawlers never write `review_master_index` — that is the load
 stage's job (`src/loaders/`), which keeps crawl failures isolated from DB state.
+`app_version_backfill.py` is a one-off maintenance module, not a crawler: it re-fetches reviews
+already in `app_reviews` and UPDATEs only their NULL `app_version` (issue #125).
 
 ## Key Files
 
@@ -17,6 +19,7 @@ stage's job (`src/loaders/`), which keeps crawl failures isolated from DB state.
 | `appstore_crawler.py` | `AppStoreCrawler`: App Store RSS/API via `requests` (URL template `APPSTORE_REVIEWS_RSS_URL`); app-id file from `config.app_ids.appstore`. Record `app_version` comes from the entry's `im:version.label` via the static `_extract_app_version` |
 | `playstore_crawler.py` | `PlayStoreCrawler`: `google_play_scraper.reviews` + `app`; app-id file from `config.app_ids.playstore`. Record `app_version` comes from `reviewCreatedVersion` via the static `_extract_app_version` (google-play-scraper fills `appVersion` from the same payload element), `None` when the store omits it |
 | `unified_crawler.py` | `UnifiedCrawler`: runs both stores sequentially, catching each store's failure so one store cannot abort the other. Deliberately **not** a `BaseCrawler` subclass |
+| `app_version_backfill.py` | `backfill_app_versions()`: groups `app_reviews` rows with `app_version IS NULL` by app (`load_targets`, App Store first), re-fetches each app (`fetch_appstore_versions` / `fetch_playstore_versions`), and writes or, in dry-run, counts the matches (`settle_app`, `UPDATE ... AND app_version IS NULL`). Play paging stops by `play_stop_reason`. Settings come from `crawler_config.yml` (`load_settings`); `format_report` renders the per-app and per-platform report. Entry point: `scripts/backfill_app_version.py` |
 | `exceptions.py` | `ParquetWriteError` — Parquet write failure during the crawl stage |
 | `__init__.py` | `Store` enum (`appstore` / `playstore` / `unified`) and the `get_crawler(store, config_path)` factory |
 
@@ -36,6 +39,18 @@ None.
   `max_retries` / `timeout`. Never hardcode sleeps or retry counts.
 - A `ParquetWriteError` must fail the crawl for that batch rather than silently continuing — a
   registered batch with no Parquet object would strand the loader.
+- Store field paths live once, in each store crawler's static `_extract_platform_review_id` /
+  `_extract_app_version` (and `APPSTORE_REVIEWS_RSS_URL` for the RSS). The record builders and
+  `app_version_backfill.match_versions` both call them; change a field there, not in a copy. The
+  backfill calls them on the classes without an instance, because constructing a store crawler
+  creates the `output.base_directory` folders (`BaseCrawler.__init__`) and a `DatabaseConnector`.
+- The App Store RSS can answer 200 with no entries for pages inside the range (on 2026-11-26 one
+  app returned pages 1-2 and 5-10 empty and 3-4 full). `fetch_appstore_versions` counts such
+  pages as `empty_pages` and keeps reading; `AppStoreCrawler.get_app_store_reviews_and_appname`
+  still stops at the first empty page.
+- `google_play_scraper.reviews()` takes no timeout and swallows request errors, returning what it
+  has with no next-page token. A failed Play request therefore looks like the end of the reviews
+  (`exhausted` in the backfill), and `global.timeout` does not apply to Play.
 - Logs in this package are Korean and use emoji markers (🍎 / 🤖 / ✅ / ❌); match that style.
 
 ### Testing Requirements
@@ -43,14 +58,18 @@ None.
 the `ingestion_batch` PENDING row, a failed upload opens no DB session, and a failed commit deletes
 the uploaded object. It drives `AppStoreCrawler` with stand-in records, so no test compares App
 Store and Play Store output. `tests/test_bronze_loading.py` covers the Parquet → DB handoff and
-each store's `app_version` mapping into Bronze.
+each store's `app_version` mapping into Bronze. `tests/test_app_version_backfill.py` covers the
+backfill: the shared id/version extraction on both payload shapes, `play_stop_reason`, and
+dry-run / apply / re-run against the real test database with store-shaped payloads. The network
+fetchers themselves are not under test; check them with a dry-run of the script.
 `tests/conftest.py` still defines `mock_appstore_api` and `mock_playstore_api`, but no test uses
 them, and `mock_appstore_api` cannot run: it depends on the `requests_mock` fixture of the
 requests-mock plugin, which is in neither `pyproject.toml` nor `uv.lock`. Using it means adding that
 dev dependency first.
 
 ```bash
-PYTHONPATH=. uv run pytest tests/test_crawler_consistency.py tests/test_bronze_loading.py -q
+PYTHONPATH=. uv run pytest tests/test_crawler_consistency.py tests/test_bronze_loading.py \
+  tests/test_app_version_backfill.py -q
 ```
 Database-backed tests need the Docker test database; start and connect it as described in
 `tests/AGENTS.md` (Testing Requirements).
@@ -65,7 +84,8 @@ Database-backed tests need the Docker test database; start and connect it as des
 ### Internal
 `src/utils/logger.py`, `src/utils/db_connector.py`, `src/utils/minio_client.py`,
 `src/utils/parquet_writer.py`, `src/schemas/parquet/app_review.py`,
-`src/models/ingestion_batch.py`, `config/app_ids/`, `config/crawler_config.yml`.
+`src/models/ingestion_batch.py`, `src/models/enums.py`, `config/app_ids/`,
+`config/crawler_config.yml`.
 
 ### External
 `requests`, `google-play-scraper`, `pyarrow`, `boto3`, `uuid6`, `pyyaml`.

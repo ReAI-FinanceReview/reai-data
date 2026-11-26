@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
 
 # tests
 
@@ -30,6 +30,7 @@ passing mock-based test says nothing about the real database. The HTTP stub fixt
 | `test_assign_dept_cli.py` / `test_eval_assignment_cli.py` | Argument contracts for `scripts/assign_dept.py` and `scripts/eval_assignment.py` |
 | `test_batch_loader.py` | Pending/failed batch consumption into `review_master_index` |
 | `test_bronze_loading.py` | Bronze Parquet → DB load integration |
+| `test_app_version_backfill.py` | `app_version` backfill (issue #125): shared id/version extraction, RSS entry handling, Play stop rule, settings, and dry-run / apply / re-run against the real database with store-shaped payloads |
 | `test_crawler_consistency.py` | `save_daily_batch` upload → PENDING registration order and failure cleanup (App Store crawler only; no cross-store parity check) |
 | `test_database_schema.py` | Schema objects created by `schema_v4.sql` |
 | `test_parquet_schemas.py` / `test_parquet_writer.py` | Pydantic Parquet schemas and writer partitioning |

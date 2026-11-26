@@ -1,13 +1,13 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
 
 # scripts
 
 ## Purpose
 Thin executable entrypoints. Every script inserts the repository root into `sys.path` and then
-delegates to `src.pipeline.steps` (or `src.bootstrap_db` / `src.processing.cleanse`). They exist so
-Airflow `BashOperator` tasks, CI jobs, and humans share the same code paths as the step CLI. No
-business logic belongs here.
+delegates to `src.pipeline.steps` (or `src.bootstrap_db` / `src.processing.cleanse` /
+`src.crawlers.app_version_backfill`). They exist so Airflow `BashOperator` tasks, CI jobs, and
+humans share the same code paths as the step CLI. No business logic belongs here.
 
 ## Key Files
 
@@ -23,6 +23,7 @@ business logic belongs here.
 | `extract_features.py` | ABSA feature extraction step only (Gold) |
 | `generate_embeddings.py` | Embedding generation step only (Gold); optional model name argument |
 | `bootstrap_db.py` | Local DB reset/seed wrapper around `src.bootstrap_db.main` |
+| `backfill_app_version.py` | One-off fill of `app_reviews.app_version` from a store re-fetch (issue #125) via `backfill_app_versions` in `src.crawlers.app_version_backfill`. Dry-run by default, `--apply` to write, `--platform appstore\|playstore\|all`, `--config`. Prints a per-app report and exits `1` when any app had a fetch error (`BackfillReport.has_errors`). Not part of the DAG |
 
 ## Subdirectories
 None.
@@ -43,7 +44,8 @@ None.
 ### Testing Requirements
 No dedicated per-script tests; coverage comes from the step layer
 (`tests/test_pipeline_steps.py`, `tests/test_cli_parsing.py`, `tests/test_cleanse.py`) and from
-`tests/test_bootstrap_db.py` / `tests/test_local_dev_setup.py` for the bootstrap path. After
+`tests/test_bootstrap_db.py` / `tests/test_local_dev_setup.py` for the bootstrap path, and from
+`tests/test_app_version_backfill.py` for the module behind `backfill_app_version.py`. After
 changing a script, run the corresponding step test plus a manual smoke run against the local stack.
 
 ### Common Patterns
@@ -58,7 +60,7 @@ from src.pipeline.steps import run_x  # noqa: E402
 
 ### Internal
 `src.pipeline.steps`, `src.pipeline.cli`, `src.processing.cleanse`, `src.bootstrap_db`,
-`config/dictionaries/`.
+`src.crawlers.app_version_backfill`, `config/dictionaries/`.
 
 ### External
 `python-dotenv`: `.env` is loaded when a `DatabaseConnector` resolves its URL
