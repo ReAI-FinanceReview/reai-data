@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
 
 # config/app_ids
 
@@ -35,7 +35,7 @@ None.
 - App Store entries are numeric IDs; Play Store entries are package names. Mixing them silently
   yields empty crawls.
 - File locations are configurable via `config/crawler_config.yml`; do not hardcode these paths in
-  new code — read them from config as `src/crawlers/appstore_crawler.py:37` /
+  new code — read them from config as `src/crawlers/appstore_crawler.py:39` /
   `src/crawlers/playstore_crawler.py:36` do.
 
 ### Testing Requirements

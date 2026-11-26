@@ -32,6 +32,8 @@ class AppStoreCrawler(BaseCrawler):
         self.country = self.config.get('appstore', {}).get('country', 'kr')
         self.pages_to_crawl = self.config.get('appstore', {}).get('pages_to_crawl', 10)
         self.max_reviews_per_app = self.config.get('appstore', {}).get('max_reviews_per_app', 500)
+        # 리뷰 RSS URL 템플릿: app_version 백필과 같은 키를 읽으며 기본값이 없다
+        self.reviews_rss_url = self.config['appstore']['reviews_rss_url']
 
         # 앱 ID 파일 경로
         self.app_ids_file = self.config.get('app_ids', {}).get('appstore', 'config/app_ids/appstore_app_ids.txt')
@@ -49,9 +51,15 @@ class AppStoreCrawler(BaseCrawler):
         """Get platform type for AppStore."""
         return PlatformType.APPSTORE
 
-    def _extract_platform_review_id(self, review_data: Dict[str, Any]) -> str:
+    @staticmethod
+    def _extract_platform_review_id(review_data: Dict[str, Any]) -> str:
         """Extract review ID from App Store review data."""
         return review_data.get('id', {}).get('label', '')
+
+    @staticmethod
+    def _extract_app_version(review_data: Dict[str, Any]) -> Optional[str]:
+        """Extract the app version the review was written against (RSS `im:version.label`)."""
+        return review_data.get('im:version', {}).get('label')
 
     def _parse_reviewed_at(self, review_data: Dict[str, Any]) -> datetime:
         """Parse reviewed_at timestamp from App Store review data."""
@@ -85,7 +93,7 @@ class AppStoreCrawler(BaseCrawler):
         self.logger.info(f"앱 ID {app_id}의 리뷰 크롤링 시작 (최대 {pages}페이지)")
 
         for page in range(1, pages + 1):
-            url = f"https://itunes.apple.com/{country}/rss/customerreviews/page={page}/id={app_id}/sortby=mostRecent/json"
+            url = self.reviews_rss_url.format(country=country, page=page, app_id=app_id)
 
             try:
                 response = requests.get(url, timeout=self.timeout)
@@ -170,7 +178,7 @@ class AppStoreCrawler(BaseCrawler):
                 reviewed_at=reviewed_at_cache[platform_review_id],
                 is_reply=False,
                 reply_comment=None,
-                app_version=review_data.get('im:version', {}).get('label')
+                app_version=self._extract_app_version(review_data)
             ))
         return parquet_records
 

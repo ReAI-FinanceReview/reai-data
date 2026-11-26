@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
 
 # src
 
@@ -20,7 +20,7 @@ aggregation) with `pipeline/` providing the step dispatcher, CLI, and post-aggre
 
 | Directory | Purpose |
 |-----------|---------|
-| `crawlers/` | App Store / Play Store crawling → Bronze Parquet + `ingestion_batch` PENDING (see `crawlers/AGENTS.md`) |
+| `crawlers/` | App Store / Play Store crawling → Bronze Parquet + `ingestion_batch` PENDING, plus the one-off `app_reviews.app_version` backfill (see `crawlers/AGENTS.md`) |
 | `loaders/` | Pending Parquet batches → `review_master_index` RAW rows (see `loaders/AGENTS.md`) |
 | `processing/` | Bronze → Silver text cleansing pipeline (see `processing/AGENTS.md`) |
 | `gold/` | Embedding, ABSA, action analysis, orchestration, and daily aggregation (see `gold/AGENTS.md`) |

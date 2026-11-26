@@ -9,6 +9,11 @@ appstore:
   country: "kr"                    # 국가 코드
   pages_to_crawl: 10               # 크롤링할 페이지 수
   max_reviews_per_app: 10          # 앱당 최대 리뷰 수
+  # 고객 리뷰 RSS(최신순, 쪽 단위). AppStoreCrawler 와 app_version 백필이 함께 읽고, 코드 기본값은 없음
+  reviews_rss_url: "https://itunes.apple.com/{country}/rss/customerreviews/page={page}/id={app_id}/sortby=mostRecent/json"
+  # app_version 백필(scripts/backfill_app_version.py) 전용. 평소 수집에는 쓰지 않고 코드 기본값도 없음
+  rss_page_size: 50                # RSS 한 쪽의 리뷰 수. 덜 찬 쪽 뒤가 모두 비면 피드의 정상 끝으로 봄
+  backfill_max_consecutive_empty_feeds: 3  # 피드가 통째로 빈 앱이 연달아 이 수에 닿으면 남은 App Store 앱은 조회하지 않음
   
 # Play Store 크롤러 설정
 playstore:
@@ -16,6 +21,9 @@ playstore:
   country: "kr"                    # 국가 코드
   reviews_per_app: 10              # 앱당 리뷰 수 (테스트용)
   sort_order: "newest"             # 정렬 순서
+  # app_version 백필(scripts/backfill_app_version.py) 전용. 평소 수집에는 쓰지 않고 코드 기본값도 없음
+  backfill_page_size: 200          # 요청 1회(continuation token 1쪽)에 받는 리뷰 수
+  backfill_max_reviews_per_app: 3000  # 앱당 조회 상한. 조회한 리뷰 수가 이 값에 닿으면 cap_reached 로 멈춤
 
 # 출력 설정
 output:

@@ -1,4 +1,4 @@
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
 
 # reai-data
 
@@ -67,7 +67,7 @@ The suite tests against real PostgreSQL — SQLite substitutes and mocked databa
 (Testing Requirements) describes; that file holds the one canonical command, and the other
 `AGENTS.md` files only name the modules to pass to it.
 
-Markers registered in `tests/conftest.py:662`: `slow`, `integration`, `requires_db`.
+Markers registered in `tests/conftest.py:667`: `slow`, `integration`, `requires_db`.
 CI (`.github/workflows/bootstrap-db.yml`) runs only the bootstrap-focused subset
 (`tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py
 tests/test_alembic_config.py`) and, in a separate DB-free job, the AGENTS.md guard
