@@ -863,6 +863,14 @@ class BackfillDb:
             ).all()
         return dict(rows)
 
+    def connection_states(self) -> List[str]:
+        """pg_stat_activity states of the backfill's connections, read from a separate connection."""
+        with self.engine.connect() as conn:
+            return list(conn.execute(
+                text("SELECT state FROM pg_stat_activity WHERE application_name = :name"),
+                {'name': self.APPLICATION_NAME},
+            ).scalars())
+
     def cleanup(self) -> None:
         with self.engine.begin() as conn:
             for app_id in self.app_ids:

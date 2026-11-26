@@ -13,6 +13,8 @@ platform_review_id로 맞춘 행의 app_version과 updated_at만 UPDATE한다.
   (AND app_version IS NULL) 다시 실행해도 결과가 같다. INSERT나 DELETE는 하지 않는다.
 - 못 맞춘 리뷰는 둘로 나눈다. unmatched_confirmed는 스토어 응답을 끝까지 정상으로 읽었는데도
   없는 리뷰, unverified는 빈 응답이나 실패한 요청 때문에 없다고 단정할 수 없는 리뷰다.
+- 스토어를 기다리는 동안 DB 트랜잭션을 열어 두지 않는다. 대상을 읽은 뒤 바로 닫고, 앱마다
+  apply는 commit, dry-run은 rollback으로 닫는다.
 """
 
 import time
@@ -448,8 +450,8 @@ def backfill_app_versions(
 ) -> BackfillReport:
     """Re-fetch every app that has rows without app_version and fill what the store still serves.
 
-    With ``apply`` each app's updates are committed before the next app is fetched; a dry-run
-    never commits.
+    No transaction stays open while a store is being asked: the target query is closed before
+    the first request, and each app ends with a commit (``apply``) or a rollback (dry-run).
 
     Once ``appstore.backfill_max_consecutive_empty_feeds`` App Store apps in a row come back
     ``feed_empty`` the RSS is treated as down: the remaining App Store apps are not requested
@@ -460,6 +462,7 @@ def backfill_app_versions(
     try:
         targets = load_targets(session, platforms)
         targets_without_app = count_targets_without_app(session, platforms)
+        session.rollback()
         results = []
         empty_feeds_in_a_row = 0
         for index, target in enumerate(targets):
@@ -477,6 +480,8 @@ def backfill_app_versions(
             result = settle_app(session, target, fetch, apply)
             if apply:
                 session.commit()
+            else:
+                session.rollback()
             logger.info(
                 f"[{index + 1}/{len(targets)}] {target.platform_type.value} {target.platform_app_id}: "
                 f"대상 {result.targets}, 조회 {result.fetched}, 빈 페이지 {result.empty_pages}, "

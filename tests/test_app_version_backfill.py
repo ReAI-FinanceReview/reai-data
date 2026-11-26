@@ -7,6 +7,7 @@ google-play-scraper returns (naive ``at``). The App Store fetcher is driven over
 covered through ``scan_play_page``, the decision step of its loop, because the loop's only other
 line is the live google-play-scraper call.
 """
+import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -618,6 +619,33 @@ def test_backfill_apply_commits_each_app_before_a_later_app_fails(
     assert (report.apps[1].error or '').startswith('page 1:')
     assert backfill_db.versions(first) == {'a': '7.3.16'}
     assert backfill_db.versions(later) == {'z': None}
+
+
+@pytest.mark.requires_db
+@pytest.mark.parametrize('apply', [False, True])
+def test_backfill_holds_no_transaction_while_waiting_on_the_store(
+    apply, backfill_db, backfill_config, appstore_rss_server, rss_review_entry
+):
+    backfill_db.seed_app(APPSTORE, '1000001', [('a', None), ('b', None)])
+    backfill_db.seed_app(APPSTORE, '1000002', [('c', None)])
+    appstore_rss_server.set_pages('1000001', _full_page(rss_review_entry, 'p1', ('a', '7.3.16')))
+    appstore_rss_server.set_pages('1000002', _full_page(rss_review_entry, 'q1', ('c', '7.3.16')))
+    states_seen = []
+    lock = threading.Lock()
+
+    def record_states(_request):
+        states = backfill_db.connection_states()
+        with lock:
+            states_seen.append(states)
+
+    appstore_rss_server.on_request = record_states
+
+    report = backfill_app_versions(backfill_config, (APPSTORE,), apply=apply)
+
+    assert [a.matched for a in report.apps] == [1, 1]
+    assert len(states_seen) == len(appstore_rss_server.requests) > 1
+    assert all(states for states in states_seen), 'the backfill connection was not found'
+    assert not [s for states in states_seen for s in states if s == 'idle in transaction']
 
 
 @pytest.mark.requires_db
