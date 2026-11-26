@@ -32,8 +32,6 @@ from src.crawlers.app_version_backfill import (
     STOP_SKIPPED_AFTER_EMPTY_FEEDS,
     AppTargets,
     FetchResult,
-    appstore_feed_complete,
-    appstore_review_entries,
     confirm_play_end,
     backfill_app_versions,
     count_targets_without_app,
@@ -47,6 +45,7 @@ from src.crawlers.app_version_backfill import (
     settle_app,
 )
 from src.crawlers.appstore_crawler import AppStoreCrawler
+from src.crawlers.appstore_rss import appstore_feed_complete, appstore_review_entries
 from src.crawlers.playstore_crawler import PlayStoreCrawler
 from src.models.apps import App
 from src.models.enums import PlatformType
@@ -58,7 +57,7 @@ CONFIG_PATH = str(Path(__file__).resolve().parents[1] / 'config' / 'crawler_conf
 SETTINGS = load_settings(CONFIG_PATH)
 PAGE_SIZE = SETTINGS.appstore_rss_page_size
 
-# App-metadata entry the RSS has put first on page 1 (AppStoreCrawler skips it by `im:name`).
+# App-metadata entry the RSS has put first on page 1 (appstore_review_entries drops it: no `im:rating`).
 RSS_APP_METADATA_ENTRY = {
     'im:name': {'label': '테스트 뱅킹'},
     'title': {'label': '테스트 뱅킹 - 테스트은행'},

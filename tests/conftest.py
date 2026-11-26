@@ -900,3 +900,48 @@ def backfill_db(test_db_engine, test_db_schema, test_db_url, monkeypatch):
     db = BackfillDb(test_db_engine)
     yield db
     db.cleanup()
+
+
+# ========================================
+# CRAWL STEP (Issue #127)
+# ========================================
+
+class CrawlConfig:
+    """config/crawler_config.yml for a crawl test, written under ``tmp_path``.
+
+    The App Store RSS URL points at ``appstore_rss_server``, there is no delay, the crawler's
+    output directories live under ``tmp_path``, and each store reads its app ids from a file of
+    its own that starts empty, so that store's crawler raises before any request (Play never
+    reaches the live store) until set_app_ids fills it.
+    """
+
+    def __init__(self, tmp_path: Path, rss_url_template: str):
+        config = yaml.safe_load(
+            (Path(__file__).resolve().parents[1] / 'config' / 'crawler_config.yml').read_text(encoding='utf-8')
+        )
+        config['global']['delay_between_requests'] = 0
+        config['appstore']['reviews_rss_url'] = rss_url_template
+        config['output']['base_directory'] = str(tmp_path / 'crawler_output')
+        self.app_id_files = {store: tmp_path / f'{store}_app_ids.txt' for store in ('appstore', 'playstore')}
+        for store, path in self.app_id_files.items():
+            path.write_text('', encoding='utf-8')
+            config['app_ids'][store] = str(path)
+        self.config = config
+        self.path = str(tmp_path / 'crawler_config.yml')
+        Path(self.path).write_text(yaml.safe_dump(config, allow_unicode=True), encoding='utf-8')
+
+    def set_app_ids(self, store: str, *app_ids: str) -> None:
+        self.app_id_files[store].write_text(''.join(f'{app_id}\n' for app_id in app_ids), encoding='utf-8')
+
+
+@pytest.fixture
+def crawl_config(tmp_path, appstore_rss_server, test_db_schema, test_db_url, monkeypatch) -> CrawlConfig:
+    """CrawlConfig on the test database with Parquet writes off (no object store, no DB rows).
+
+    The crawlers' DatabaseConnector is pointed at the test database through ``DATABASE_URL``;
+    with ``ENABLE_PARQUET_WRITE=false`` a crawl only reads the store and touches no table.
+    """
+    monkeypatch.setenv('DATABASE_URL', test_db_url)
+    monkeypatch.setenv('ENABLE_PARQUET_WRITE', 'false')
+    return CrawlConfig(tmp_path, appstore_rss_server.url_template)
+

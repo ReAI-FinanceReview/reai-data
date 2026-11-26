@@ -4,12 +4,11 @@ Crawl 단계: API → Parquet 쓰기 + ingestion_batch PENDING 등록
 Load 단계(BatchLoader)에서 Parquet → ReviewMasterIndex 적재
 """
 
-import requests
-import json
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional
 from uuid import UUID
 
+from .appstore_rss import FeedRead, read_feed
 from .base_crawler import BaseCrawler
 from .exceptions import ParquetWriteError
 from src.utils.db_connector import DatabaseConnector
@@ -75,79 +74,37 @@ class AppStoreCrawler(BaseCrawler):
             reviewed_at = datetime.now(timezone.utc)
         return reviewed_at
 
+    def read_reviews(self, app_id: str, country: Optional[str] = None, pages: Optional[int] = None) -> FeedRead:
+        """앱 하나의 RSS를 appstore_rss.read_feed로 읽는다. 빈 쪽에서 멈추지 않고, 리뷰가
+        max_reviews_per_app건 모이면 멈춘다."""
+        return read_feed(
+            app_id,
+            url_template=self.reviews_rss_url,
+            country=country or self.country,
+            pages=pages or self.pages_to_crawl,
+            timeout=self.timeout,
+            delay=self.delay,
+            on_page=lambda read, _entries: read.fetched >= self.max_reviews_per_app,
+        )
+
     def get_app_store_reviews_and_appname(
         self,
         app_id: str,
         country: str = None,
         pages: int = None
     ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
-        """지정된 앱 ID와 국가 코드로 App Store 리뷰와 앱 이름을 가져옵니다."""
-        if country is None:
-            country = self.country
-        if pages is None:
-            pages = self.pages_to_crawl
+        """지정된 앱 ID와 국가 코드로 App Store 리뷰와 앱 이름을 가져옵니다.
 
-        all_reviews = []
-        app_name = None
-
-        self.logger.info(f"앱 ID {app_id}의 리뷰 크롤링 시작 (최대 {pages}페이지)")
-
-        for page in range(1, pages + 1):
-            url = self.reviews_rss_url.format(country=country, page=page, app_id=app_id)
-
-            try:
-                response = requests.get(url, timeout=self.timeout)
-                response.raise_for_status()
-                data = response.json()
-
-                entries = data.get('feed', {}).get('entry')
-                if not entries:
-                    self.logger.info(f"{page} 페이지에서 더 이상 리뷰를 찾을 수 없어 중단합니다.")
-                    break
-
-                if isinstance(entries, dict):
-                    entries = [entries]
-                elif not isinstance(entries, list):
-                    self.logger.warning(f"{page} 페이지에서 유효하지 않은 데이터 구조입니다.")
-                    break
-
-                if page == 1:
-                    if len(entries) > 0 and 'im:name' in entries[0]:
-                        app_name = entries[0].get('im:name', {}).get('label', f'app_{app_id}')
-                        self.logger.info(f"앱 이름: {app_name}")
-                    else:
-                        app_name = f'app_{app_id}'
-                        for entry in entries:
-                            all_reviews.append(entry)
-                        self.logger.info(f"{page} 페이지의 리뷰를 성공적으로 가져왔습니다. (리뷰 수: {len(entries)})")
-                        continue
-
-                for entry in entries[1:]:
-                    all_reviews.append(entry)
-
-                review_count = len(entries) - 1 if page == 1 else len(entries)
-                self.logger.info(f"{page} 페이지의 리뷰를 성공적으로 가져왔습니다. (리뷰 수: {review_count})")
-
-                if len(all_reviews) >= self.max_reviews_per_app:
-                    self.logger.info(f"최대 리뷰 수({self.max_reviews_per_app})에 도달하여 중단합니다.")
-                    all_reviews = all_reviews[:self.max_reviews_per_app]
-                    break
-
-            except requests.exceptions.RequestException as e:
-                self.logger.error(f"HTTP 요청 중 에러 발생: {e}")
-                break
-            except json.JSONDecodeError:
-                self.logger.error("JSON 파싱 중 에러 발생. 응답이 올바른 JSON 형식이 아닙니다.")
-                break
-            except Exception as e:
-                self.logger.error(f"앱 ID {app_id}, 페이지 {page} 처리 중 예상치 못한 오류 발생: {e}")
-                break
-
-            if page < pages:
-                self.wait_between_requests()
-
-        self.logger.info(f"앱 ID {app_id}: 총 {len(all_reviews)}개 리뷰 수집 완료")
-        return app_name, all_reviews
+        앱 이름은 RSS 앱 메타 항목의 im:name이고, 메타 항목 없이 리뷰만 왔으면 app_{app_id}다.
+        리뷰가 하나도 없으면 None이다.
+        """
+        read = self.read_reviews(app_id, country, pages)
+        reviews = read.entries[:self.max_reviews_per_app]
+        if read.app_name:
+            app_name = read.app_name
+        else:
+            app_name = f'app_{app_id}' if reviews else None
+        return app_name, reviews
 
     def _build_parquet_records(
         self,

@@ -5,8 +5,8 @@
 
 ## Purpose
 Pydantic validation layer for Parquet payloads on MinIO/NAS. Only Bronze is actually validated:
-the crawlers build `AppReviewSchema` records before writing (`src/crawlers/appstore_crawler.py:170`,
-`src/crawlers/playstore_crawler.py:137`) and the loader re-validates them on read
+the crawlers build `AppReviewSchema` records before writing (`_build_parquet_records` in
+`src/crawlers/appstore_crawler.py` and `src/crawlers/playstore_crawler.py`) and the loader re-validates them on read
 (`src/loaders/batch_loader.py:127`). Silver is written straight from dicts
 (`src/processing/cleanse.py:203`) and no production code uses `ReviewPreprocessedSchema`.
 

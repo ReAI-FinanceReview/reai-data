@@ -35,8 +35,8 @@ None.
 - App Store entries are numeric IDs; Play Store entries are package names. Mixing them silently
   yields empty crawls.
 - File locations are configurable via `config/crawler_config.yml`; do not hardcode these paths in
-  new code — read them from config as `src/crawlers/appstore_crawler.py:39` /
-  `src/crawlers/playstore_crawler.py:36` do.
+  new code — read them from config as `AppStoreCrawler.__init__` /
+  `PlayStoreCrawler.__init__` do.
 
 ### Testing Requirements
 No test reads these files directly (`tests/conftest.py` defines a `sample_app_id_file` fixture, but

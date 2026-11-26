@@ -16,10 +16,11 @@ already in `app_reviews` and UPDATEs only their NULL `app_version`, plus `update
 | File | Description |
 |------|-------------|
 | `base_crawler.py` | `BaseCrawler(ABC)`: config/app-id loading, request pacing, `collect_app_records()`, `save_crawl_batch()`, `save_daily_batch()`, `run()` template. Owns Parquet format consistency for all stores |
-| `appstore_crawler.py` | `AppStoreCrawler`: App Store RSS/API via `requests` (URL template from `appstore.reviews_rss_url`, no coded default); app-id file from `config.app_ids.appstore`. Record `app_version` comes from the entry's `im:version.label` via the static `_extract_app_version` |
+| `appstore_crawler.py` | `AppStoreCrawler`: reads each app through `appstore_rss.read_feed` (`read_reviews`: stops once `appstore.max_reviews_per_app` reviews are in, never at an empty page); app-id file from `config.app_ids.appstore`. App name: the RSS app-metadata entry's `im:name`, else `app_{app_id}`. Record `app_version` comes from the entry's `im:version.label` via the static `_extract_app_version` |
 | `playstore_crawler.py` | `PlayStoreCrawler`: `google_play_scraper.reviews` + `app`; app-id file from `config.app_ids.playstore`. Record `app_version` comes from `reviewCreatedVersion` via the static `_extract_app_version` (google-play-scraper fills `appVersion` from the same payload element), `None` when the store omits it |
 | `unified_crawler.py` | `UnifiedCrawler`: runs both stores sequentially, catching each store's failure so one store cannot abort the other. Deliberately **not** a `BaseCrawler` subclass |
-| `app_version_backfill.py` | `backfill_app_versions()`: groups `app_reviews` rows with `app_version IS NULL` by app (`load_targets`, App Store first), re-fetches each app (`fetch_appstore_versions` / `fetch_playstore_versions`), and writes or, in dry-run, counts the matches (`settle_app`, `UPDATE ... SET app_version, updated_at = NOW() ... AND app_version IS NULL`). Misses are split into `unmatched_confirmed` (the store's answer was read in full: `appstore_feed_complete`, or a Play stop in `PLAY_COMPLETE_STOPS`) and `unverified`. Play paging decisions live in `scan_play_page` / `play_stop_reason`. Settings come from `crawler_config.yml` (`load_settings`); `format_report` renders the per-app and per-platform report. Entry point: `scripts/backfill_app_version.py` |
+| `appstore_rss.py` | The one App Store RSS reader, shared by `AppStoreCrawler` and the backfill (issue #127): `read_feed` (URL from the `reviews_rss_url` template; reads up to `pages` without stopping at an empty page; `on_page` may stop it; a failed request ends it with `error` naming the page), `appstore_review_entries` (keeps entries with `im:rating`, dropping the app-metadata entry), `appstore_app_name`, `appstore_feed_complete` and `FeedRead` (`fetched`, `empty_pages`, `feed_empty`) |
+| `app_version_backfill.py` | `backfill_app_versions()`: groups `app_reviews` rows with `app_version IS NULL` by app (`load_targets`, App Store first), re-fetches each app (`fetch_appstore_versions`, which reads through `appstore_rss.read_feed`, / `fetch_playstore_versions`), and writes or, in dry-run, counts the matches (`settle_app`, `UPDATE ... SET app_version, updated_at = NOW() ... AND app_version IS NULL`). Misses are split into `unmatched_confirmed` (the store's answer was read in full: `appstore_feed_complete`, or a Play stop in `PLAY_COMPLETE_STOPS`) and `unverified`. Play paging decisions live in `scan_play_page` / `play_stop_reason`. Settings come from `crawler_config.yml` (`load_settings`); `format_report` renders the per-app and per-platform report. Entry point: `scripts/backfill_app_version.py` |
 | `exceptions.py` | `ParquetWriteError` — Parquet write failure during the crawl stage |
 | `__init__.py` | `Store` enum (`appstore` / `playstore` / `unified`) and the `get_crawler(store, config_path)` factory |
 
@@ -42,19 +43,23 @@ None.
 - Store field paths live once, in each store crawler's static `_extract_platform_review_id` /
   `_extract_app_version`, and the RSS URL template once, in `appstore.reviews_rss_url`. The
   record builders and `app_version_backfill.match_versions` both call the extractors, and both
-  App Store fetchers read that key; change a field there, not in a copy. The
+  App Store fetchers read the RSS through `appstore_rss.read_feed`, which formats that template;
+  change a field or the page handling there, not in a copy. The
   backfill calls them on the classes without an instance, because constructing a store crawler
   creates the `output.base_directory` folders (`BaseCrawler.__init__`) and a `DatabaseConnector`.
 - The App Store RSS can answer 200 with no entries for pages inside the range (on 2026-11-26 one
   app returned pages 1-2 and 5-10 empty and 3-4 full; a full local dry-run that day got 325
-  empty pages out of 340).
-  `fetch_appstore_versions` counts such pages as `empty_pages` and keeps reading; an all-empty
-  read is `feed_empty`. `appstore_feed_complete` confirms misses only when the pages are full up
-  to the last non-empty one and, if empty pages follow, that one is partial
-  (`appstore.rss_page_size`), which is how the feed ends for small apps. After
-  `appstore.backfill_max_consecutive_empty_feeds` `feed_empty` apps in a row the remaining App
-  Store apps are skipped (`skipped_after_empty_feeds`).
-  `AppStoreCrawler.get_app_store_reviews_and_appname` still stops at the first empty page.
+  empty pages out of 340; from 05:23 UTC every page of every app came back empty).
+  `appstore_rss.read_feed` therefore never ends a read at an empty page: it counts it in
+  `page_counts` and keeps reading up to `appstore.pages_to_crawl` (or until `on_page` stops it).
+  An all-empty read is `feed_empty`. `appstore_feed_complete` accepts a read only when the pages
+  are full up to the last non-empty one and, if empty pages follow, that one is partial
+  (`appstore.rss_page_size`), which is how the feed ends for small apps.
+  - Backfill: `fetch_appstore_versions` confirms misses only for a complete read. After
+    `appstore.backfill_max_consecutive_empty_feeds` `feed_empty` apps in a row the remaining App
+    Store apps are skipped (`skipped_after_empty_feeds`).
+  - Crawl: `AppStoreCrawler.read_reviews` stops only once `appstore.max_reviews_per_app` reviews
+    are in, so reviews behind empty pages are still collected.
 - `google_play_scraper.reviews()` takes no timeout and swallows request errors, returning an
   empty page with no next-page token. The backfill therefore never treats an empty Play page as
   the end: the first one is `feed_empty`, a later one `empty_page`, both unverified.
@@ -79,6 +84,9 @@ None.
 - Logs in this package are Korean and use emoji markers (🍎 / 🤖 / ✅ / ❌); match that style.
 
 ### Testing Requirements
+`tests/test_appstore_rss.py` covers `read_feed` and `AppStoreCrawler` over real HTTP against the
+local `appstore_rss_server` (empty pages read past, `on_page` stop, failed request, app-metadata
+entry, `max_reviews_per_app` stop) with Parquet writes off (`crawl_config`).
 `tests/test_crawler_consistency.py` covers `save_daily_batch` only: the MinIO upload happens before
 the `ingestion_batch` PENDING row, a failed upload opens no DB session, and a failed commit deletes
 the uploaded object. It drives `AppStoreCrawler` with stand-in records, so no test compares App
@@ -95,7 +103,8 @@ dev dependency first.
 
 ```bash
 PYTHONPATH=. uv run pytest tests/test_crawler_consistency.py tests/test_bronze_loading.py \
-  tests/test_app_version_backfill.py tests/test_backfill_app_version_cli.py -q
+  tests/test_app_version_backfill.py tests/test_backfill_app_version_cli.py \
+  tests/test_appstore_rss.py -q
 ```
 Database-backed tests need the Docker test database; start and connect it as described in
 `tests/AGENTS.md` (Testing Requirements).

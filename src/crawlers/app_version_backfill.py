@@ -32,7 +32,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Collection, Dict, Iterable, List, Optional, Sequence
 from uuid import UUID
 
-import requests
 import yaml
 from google_play_scraper import Sort, reviews as play_reviews
 from sqlalchemy import text
@@ -41,6 +40,7 @@ from src.models.enums import PlatformType
 from src.utils.db_connector import DatabaseConnector
 from src.utils.logger import get_logger
 from .appstore_crawler import AppStoreCrawler
+from .appstore_rss import appstore_feed_complete, read_feed
 from .playstore_crawler import PlayStoreCrawler
 
 logger = get_logger('app_version_backfill')
@@ -257,34 +257,6 @@ def match_versions(
     return found
 
 
-def appstore_review_entries(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Review entries of one RSS page; an app-metadata entry (no ``im:rating``) is dropped."""
-    entries = payload.get('feed', {}).get('entry') or []
-    if isinstance(entries, dict):
-        entries = [entries]
-    return [entry for entry in entries if 'im:rating' in entry]
-
-
-def appstore_feed_complete(page_counts: Sequence[int], page_size: int) -> bool:
-    """Whether RSS pages read in order, ``page_counts`` review entries each, show the whole feed.
-
-    The feed is complete when every page before the last non-empty one is full and the pages
-    after it, if any, are empty while it is partial: that is how the feed itself ends, so small
-    apps with a few dozen reviews come out complete. An empty page before a non-empty one, or
-    empty pages after a full page, is what the RSS outages observed on 2026-11-26 looked like
-    (every page empty; pages 1-2 and 5-10 empty with 3-4 full), so such a read is not complete.
-    """
-    non_empty = [index for index, count in enumerate(page_counts) if count]
-    if not non_empty:
-        return False
-    last = non_empty[-1]
-    if any(count < page_size for count in page_counts[:last]):
-        return False
-    if last < len(page_counts) - 1:
-        return page_counts[last] < page_size
-    return True
-
-
 def play_stop_reason(
     *,
     target_times: Collection[datetime],
@@ -401,38 +373,38 @@ def confirm_play_end(
 def fetch_appstore_versions(target: AppTargets, settings: BackfillSettings) -> FetchResult:
     """Read every RSS page up to ``appstore.pages_to_crawl``, stopping early once all match.
 
-    An empty page does not end the read, because the RSS also answers 200 with no entries when
-    it is failing; appstore_feed_complete decides afterwards whether the read was complete.
+    The pages are read by appstore_rss.read_feed, the reader the routine crawl uses: an empty page
+    does not end the read, because the RSS also answers 200 with no entries when it is failing,
+    and appstore_feed_complete decides afterwards whether the read was complete.
     """
     result = FetchResult()
-    page_counts = []
-    for page in range(1, settings.appstore_pages + 1):
-        if page > 1:
-            time.sleep(settings.delay_seconds)
-        url = settings.appstore_reviews_rss_url.format(
-            country=settings.appstore_country, page=page, app_id=target.platform_app_id
-        )
-        try:
-            response = requests.get(url, timeout=settings.timeout_seconds)
-            response.raise_for_status()
-            entries = appstore_review_entries(response.json())
-        except requests.RequestException as exc:  # HTTP, network and JSON decode errors
-            result.stop_reason = STOP_ERROR
-            result.error = f'page {page}: {exc!r}'
-            return result
-        page_counts.append(len(entries))
-        result.empty_pages += not entries
-        result.fetched += len(entries)
+
+    def all_matched(_read, entries) -> bool:
         result.found.update(match_versions(PlatformType.APPSTORE, entries, target.reviewed_at))
-        if len(result.found) == len(target.reviewed_at):
-            result.stop_reason = STOP_ALL_MATCHED
-            result.complete = True
-            return result
-    if result.fetched == 0:
+        return len(result.found) == len(target.reviewed_at)
+
+    read = read_feed(
+        target.platform_app_id,
+        url_template=settings.appstore_reviews_rss_url,
+        country=settings.appstore_country,
+        pages=settings.appstore_pages,
+        timeout=settings.timeout_seconds,
+        delay=settings.delay_seconds,
+        on_page=all_matched,
+    )
+    result.fetched = read.fetched
+    result.empty_pages = read.empty_pages
+    if read.error:
+        result.stop_reason = STOP_ERROR
+        result.error = read.error
+    elif read.stopped:
+        result.stop_reason = STOP_ALL_MATCHED
+        result.complete = True
+    elif read.feed_empty:
         result.stop_reason = STOP_FEED_EMPTY
     else:
         result.stop_reason = STOP_PAGE_LIMIT
-        result.complete = appstore_feed_complete(page_counts, settings.appstore_rss_page_size)
+        result.complete = appstore_feed_complete(read.page_counts, settings.appstore_rss_page_size)
     return result
 
 
