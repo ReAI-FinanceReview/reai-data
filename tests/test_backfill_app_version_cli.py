@@ -13,6 +13,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from sqlalchemy import text
 
 from src.crawlers.app_version_backfill import load_settings
 from src.models.enums import PlatformType
@@ -80,6 +81,27 @@ def test_exit_1_when_a_request_failed_even_with_unverified_left(
     appstore_rss_server.fail("3000001", 1, status=500)
 
     assert cli.main(["--config", backfill_config]) == cli.EXIT_ERROR == 1
+
+
+@pytest.mark.requires_db
+def test_exit_1_when_one_app_fails_in_the_database(
+    cli, backfill_db, backfill_config, appstore_rss_server, rss_review_entry
+):
+    """Another transaction holds the first app's rows; the second app is still written."""
+    locked = backfill_db.seed_app(APPSTORE, "3000001", [("a", None)])
+    written = backfill_db.seed_app(APPSTORE, "3000002", [("b", None)])
+    _serve_versions(appstore_rss_server, rss_review_entry, "3000001", ("a", "7.3.16"))
+    _serve_versions(appstore_rss_server, rss_review_entry, "3000002", ("b", "7.3.15"))
+
+    with backfill_db.engine.begin() as other_writer:
+        other_writer.execute(
+            text("SELECT 1 FROM app_reviews WHERE app_id = :app_id FOR UPDATE"), {"app_id": locked}
+        )
+        exit_code = cli.main(["--config", backfill_config, "--apply"])
+
+    assert exit_code == cli.EXIT_ERROR == 1
+    assert backfill_db.versions(locked) == {"a": None}
+    assert backfill_db.versions(written) == {"b": "7.3.15"}
 
 
 @pytest.mark.requires_db

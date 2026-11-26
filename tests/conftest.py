@@ -818,6 +818,9 @@ class BackfillDb:
     """
 
     APPLICATION_NAME = 'reai-backfill-under-test'  # application_name of the backfill's connection
+    # The backfill's connection gives up on a row lock after this long instead of waiting forever,
+    # so a test can make one app's UPDATE fail by holding that app's rows from another transaction.
+    LOCK_TIMEOUT = '500ms'
     OLD_UPDATED_AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     def __init__(self, engine):
@@ -880,7 +883,8 @@ class BackfillDb:
 
 @pytest.fixture
 def backfill_db(test_db_engine, test_db_schema, test_db_url, monkeypatch):
-    """BackfillDb on the test database; the backfill's DatabaseConnector is pointed at it.
+    """BackfillDb on the test database; the backfill's DatabaseConnector is pointed at it,
+    with BackfillDb.APPLICATION_NAME and BackfillDb.LOCK_TIMEOUT set on its connections.
 
     Fails up front if the database already holds rows without app_version: the backfill would
     fetch those apps too, and for Play that means the live store.
@@ -888,7 +892,10 @@ def backfill_db(test_db_engine, test_db_schema, test_db_url, monkeypatch):
     with test_db_engine.connect() as conn:
         stray = conn.execute(text("SELECT count(*) FROM app_reviews WHERE app_version IS NULL")).scalar_one()
     assert stray == 0, f'{stray} app_reviews rows without app_version left in the test database'
-    url = make_url(test_db_url).update_query_dict({'application_name': BackfillDb.APPLICATION_NAME})
+    url = make_url(test_db_url).update_query_dict({
+        'application_name': BackfillDb.APPLICATION_NAME,
+        'options': f'-c lock_timeout={BackfillDb.LOCK_TIMEOUT}',
+    })
     monkeypatch.setenv('DATABASE_URL', url.render_as_string(hide_password=False))
     db = BackfillDb(test_db_engine)
     yield db

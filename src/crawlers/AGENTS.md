@@ -61,6 +61,10 @@ None.
   with reviews and no token (`exhausted`) confirms misses. `global.timeout` does not apply to Play.
 - The backfill holds no DB transaction while a store is being asked: it rolls back after
   loading targets and ends each app with a commit (`--apply`) or a rollback (dry-run).
+- One app's failure does not end the backfill: an exception in its fetch or write rolls back
+  that app only, is logged with `logger.exception`, and becomes an `error` row with every
+  target unverified (`try/except → rollback` per app, as `src/AGENTS.md` prescribes). Apps
+  committed earlier stay committed; the script then exits 1.
 - Logs in this package are Korean and use emoji markers (🍎 / 🤖 / ✅ / ❌); match that style.
 
 ### Testing Requirements

@@ -15,6 +15,8 @@ platform_review_id로 맞춘 행의 app_version과 updated_at만 UPDATE한다.
   없는 리뷰, unverified는 빈 응답이나 실패한 요청 때문에 없다고 단정할 수 없는 리뷰다.
 - 스토어를 기다리는 동안 DB 트랜잭션을 열어 두지 않는다. 대상을 읽은 뒤 바로 닫고, 앱마다
   apply는 commit, dry-run은 rollback으로 닫는다.
+- 한 앱의 조회나 쓰기에서 예외가 나면 그 앱의 변경만 rollback하고 traceback을 로그에 남긴 뒤,
+  그 앱을 error(대상 전부 unverified)로 기록하고 다음 앱으로 넘어간다. 앞서 commit한 앱은 남는다.
 """
 
 import time
@@ -456,6 +458,10 @@ def backfill_app_versions(
     Once ``appstore.backfill_max_consecutive_empty_feeds`` App Store apps in a row come back
     ``feed_empty`` the RSS is treated as down: the remaining App Store apps are not requested
     and end as ``skipped_after_empty_feeds`` with every target unverified. Play still runs.
+
+    An exception while one app is fetched or written rolls back that app only, is logged with
+    its traceback, and makes that app an ``error`` row with every target unverified; the run
+    goes on with the next app, and apps committed before it stay committed.
     """
     settings = load_settings(config_path)
     session = DatabaseConnector(config_path).get_session()
@@ -466,24 +472,44 @@ def backfill_app_versions(
         results = []
         empty_feeds_in_a_row = 0
         for index, target in enumerate(targets):
-            appstore = target.platform_type is PlatformType.APPSTORE
-            if appstore and empty_feeds_in_a_row >= settings.appstore_max_consecutive_empty_feeds:
-                fetch = FetchResult(stop_reason=STOP_SKIPPED_AFTER_EMPTY_FEEDS)
-            else:
-                if index:
-                    time.sleep(settings.delay_seconds)
-                fetch = _FETCHERS[target.platform_type](target, settings)
-                if appstore:
-                    empty_feeds_in_a_row = (
-                        empty_feeds_in_a_row + 1 if fetch.stop_reason == STOP_FEED_EMPTY else 0
-                    )
-            result = settle_app(session, target, fetch, apply)
-            if apply:
-                session.commit()
-            else:
+            label = f"[{index + 1}/{len(targets)}] {target.platform_type.value} {target.platform_app_id}"
+            fetch = None
+            try:
+                appstore = target.platform_type is PlatformType.APPSTORE
+                if appstore and empty_feeds_in_a_row >= settings.appstore_max_consecutive_empty_feeds:
+                    fetch = FetchResult(stop_reason=STOP_SKIPPED_AFTER_EMPTY_FEEDS)
+                else:
+                    if index:
+                        time.sleep(settings.delay_seconds)
+                    fetch = _FETCHERS[target.platform_type](target, settings)
+                    if appstore:
+                        empty_feeds_in_a_row = (
+                            empty_feeds_in_a_row + 1 if fetch.stop_reason == STOP_FEED_EMPTY else 0
+                        )
+                result = settle_app(session, target, fetch, apply)
+                if apply:
+                    session.commit()
+                else:
+                    session.rollback()
+            except Exception as exc:  # noqa: BLE001 - one app's failure is recorded, not fatal
                 session.rollback()
+                logger.exception(f"{label}: 실패, 이 앱의 변경은 되돌림")
+                result = AppResult(
+                    platform_type=target.platform_type,
+                    platform_app_id=target.platform_app_id,
+                    targets=len(target.reviewed_at),
+                    fetched=fetch.fetched if fetch else 0,
+                    empty_pages=fetch.empty_pages if fetch else 0,
+                    matched=0,
+                    matched_with_version=0,
+                    updated=0,
+                    unmatched_confirmed=0,
+                    unverified=len(target.reviewed_at),
+                    stop_reason=STOP_ERROR,
+                    error=repr(exc),
+                )
             logger.info(
-                f"[{index + 1}/{len(targets)}] {target.platform_type.value} {target.platform_app_id}: "
+                f"{label}: "
                 f"대상 {result.targets}, 조회 {result.fetched}, 빈 페이지 {result.empty_pages}, "
                 f"맞춤 {result.matched}, {'갱신' if apply else '갱신 예정'} {result.updated}, "
                 f"확정 누락 {result.unmatched_confirmed}, 미확인 {result.unverified}, "

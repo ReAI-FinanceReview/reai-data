@@ -622,6 +622,36 @@ def test_backfill_apply_commits_each_app_before_a_later_app_fails(
 
 
 @pytest.mark.requires_db
+def test_backfill_isolates_an_app_whose_update_fails(
+    backfill_db, backfill_config, appstore_rss_server, rss_review_entry
+):
+    """Another transaction holds the middle app's rows, so its UPDATE hits lock_timeout."""
+    first = backfill_db.seed_app(APPSTORE, '1000001', [('a', None)])
+    failing = backfill_db.seed_app(APPSTORE, '1000002', [('b1', None), ('b2', None)])
+    later = backfill_db.seed_app(APPSTORE, '1000003', [('c', None)])
+    appstore_rss_server.set_pages('1000001', _full_page(rss_review_entry, 'p1', ('a', '7.3.16')))
+    appstore_rss_server.set_pages('1000002', _full_page(rss_review_entry, 'q1', ('b1', '7.3.16'), ('b2', '7.3.15')))
+    appstore_rss_server.set_pages('1000003', _full_page(rss_review_entry, 'r1', ('c', '7.3.14')))
+
+    with backfill_db.engine.begin() as other_writer:
+        other_writer.execute(
+            text("SELECT 1 FROM app_reviews WHERE app_id = :app_id FOR UPDATE"), {'app_id': failing}
+        )
+        report = backfill_app_versions(backfill_config, (APPSTORE,), apply=True)
+
+    assert [(a.platform_app_id, a.updated, a.stop_reason) for a in report.apps] == [
+        ('1000001', 1, STOP_ALL_MATCHED), ('1000002', 0, STOP_ERROR), ('1000003', 1, STOP_ALL_MATCHED),
+    ]
+    failed = report.apps[1]
+    assert 'lock timeout' in (failed.error or '')
+    assert (failed.matched, failed.unmatched_confirmed, failed.unverified) == (0, 0, 2)
+    assert report.has_errors
+    assert backfill_db.versions(first) == {'a': '7.3.16'}
+    assert backfill_db.versions(failing) == {'b1': None, 'b2': None}
+    assert backfill_db.versions(later) == {'c': '7.3.14'}
+
+
+@pytest.mark.requires_db
 @pytest.mark.parametrize('apply', [False, True])
 def test_backfill_holds_no_transaction_while_waiting_on_the_store(
     apply, backfill_db, backfill_config, appstore_rss_server, rss_review_entry
