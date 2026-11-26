@@ -59,6 +59,11 @@ None.
   empty page with no next-page token. The backfill therefore never treats an empty Play page as
   the end: the first one is `feed_empty`, a later one `empty_page`, both unverified. Only a page
   with reviews and no token (`exhausted`) confirms misses. `global.timeout` does not apply to Play.
+- Residual Play limitation (google-play-scraper 1.2.7): one `reviews()` call sends further
+  requests itself when a response holds fewer reviews than requested together with a next-page
+  token. If one of those later requests fails, the call returns the reviews collected so far with
+  a `None` token, which the public API cannot tell apart from the store's real end. The backfill
+  then reports `exhausted` and counts the remaining targets as `unmatched_confirmed`.
 - The backfill holds no DB transaction while a store is being asked: it rolls back after
   loading targets and ends each app with a commit (`--apply`) or a rollback (dry-run).
 - One app's failure does not end the backfill: an exception in its fetch or write rolls back

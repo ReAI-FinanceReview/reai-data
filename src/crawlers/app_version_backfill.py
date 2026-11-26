@@ -13,6 +13,10 @@ platform_review_id로 맞춘 행의 app_version과 updated_at만 UPDATE한다.
   (AND app_version IS NULL) 다시 실행해도 결과가 같다. INSERT나 DELETE는 하지 않는다.
 - 못 맞춘 리뷰는 둘로 나눈다. unmatched_confirmed는 스토어 응답을 끝까지 정상으로 읽었는데도
   없는 리뷰, unverified는 빈 응답이나 실패한 요청 때문에 없다고 단정할 수 없는 리뷰다.
+- 남은 한계(Play): google-play-scraper 1.2.7의 reviews()는 서버가 요청보다 적은 리뷰와 다음
+  token을 주면 같은 호출 안에서 요청을 더 보낸다. 그 뒤쪽 요청이 실패하면 예외를 삼키고 그때까지
+  모은 리뷰를 token None과 함께 돌려준다. 공개 API로는 이것을 진짜 끝(리뷰가 있고 token이 없는
+  쪽)과 구별할 수 없어 exhausted로 보고, 남은 대상을 unmatched_confirmed로 센다.
 - 스토어를 기다리는 동안 DB 트랜잭션을 열어 두지 않는다. 대상을 읽은 뒤 바로 닫고, 앱마다
   apply는 commit, dry-run은 rollback으로 닫는다.
 - 한 앱의 조회나 쓰기에서 예외가 나면 그 앱의 변경만 rollback하고 traceback을 로그에 남긴 뒤,
@@ -381,6 +385,12 @@ def fetch_playstore_versions(target: AppTargets, settings: BackfillSettings) -> 
     google-play-scraper takes no timeout and does not raise on a failed request: reviews()
     catches it and returns an empty page with no next-page token, which scan_play_page reports
     as ``feed_empty`` or ``empty_page`` (unverified) rather than as the end of the reviews.
+
+    One case stays undetectable. When a response holds fewer reviews than requested together
+    with a next-page token, reviews() sends further requests within the same call; if one of
+    those fails it returns the reviews collected so far with a None token. Through the public
+    API that equals the store's real end (reviews and no token), so it is reported as
+    ``exhausted`` and the unmatched targets count as confirmed.
     """
     result = FetchResult()
     token = None
