@@ -23,7 +23,7 @@ humans share the same code paths as the step CLI. No business logic belongs here
 | `extract_features.py` | ABSA feature extraction step only (Gold) |
 | `generate_embeddings.py` | Embedding generation step only (Gold); optional model name argument |
 | `bootstrap_db.py` | Local DB reset/seed wrapper around `src.bootstrap_db.main` |
-| `backfill_app_version.py` | One-off fill of `app_reviews.app_version` from a store re-fetch (issue #125) via `backfill_app_versions` in `src.crawlers.app_version_backfill`. Dry-run by default, `--apply` to write, `--platform appstore\|playstore\|all`, `--config`. Prints a per-app report and exits `1` when any app had a fetch error (`BackfillReport.has_errors`). Not part of the DAG |
+| `backfill_app_version.py` | One-off fill of `app_reviews.app_version` from a store re-fetch (issue #125) via `backfill_app_versions` in `src.crawlers.app_version_backfill`. Dry-run by default, `--apply` to write, `--platform appstore\|playstore\|all`, `--config`. Prints a per-app report. Exit codes (`EXIT_CONFIRMED` / `EXIT_ERROR` / `EXIT_UNVERIFIED`, also in `--help`): `0` every miss is `unmatched_confirmed`; `1` a store request failed (`BackfillReport.has_errors`), which wins over `2`; `2` no errors but `unverified` targets remain (`BackfillReport.has_unverified`), so a later re-run may fill more. Not part of the DAG |
 
 ## Subdirectories
 None.
@@ -42,10 +42,13 @@ None.
   the pipeline cleanse step cannot diverge.
 
 ### Testing Requirements
-No dedicated per-script tests; coverage comes from the step layer
+Most scripts have no dedicated tests; their coverage comes from the step layer
 (`tests/test_pipeline_steps.py`, `tests/test_cli_parsing.py`, `tests/test_cleanse.py`) and from
-`tests/test_bootstrap_db.py` / `tests/test_local_dev_setup.py` for the bootstrap path, and from
-`tests/test_app_version_backfill.py` for the module behind `backfill_app_version.py`. After
+`tests/test_bootstrap_db.py` / `tests/test_local_dev_setup.py` for the bootstrap path. Scripts
+that decide something themselves have a `tests/test_<script>_cli.py` that loads the file by path:
+`tests/test_assign_dept_cli.py`, `tests/test_eval_assignment_cli.py`, and
+`tests/test_backfill_app_version_cli.py`, which runs `main()` against the test database and a
+local RSS server for exit codes 0/1/2 and the `--platform` mapping. After
 changing a script, run the corresponding step test plus a manual smoke run against the local stack.
 
 ### Common Patterns

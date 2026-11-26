@@ -9,7 +9,7 @@ payload into `AppReviewSchema` records, writes them as Parquet to MinIO, and reg
 `ingestion_batch` row in `PENDING`. Crawlers never write `review_master_index` — that is the load
 stage's job (`src/loaders/`), which keeps crawl failures isolated from DB state.
 `app_version_backfill.py` is a one-off maintenance module, not a crawler: it re-fetches reviews
-already in `app_reviews` and UPDATEs only their NULL `app_version` (issue #125).
+already in `app_reviews` and UPDATEs only their NULL `app_version`, plus `updated_at` (issue #125).
 
 ## Key Files
 
@@ -19,7 +19,7 @@ already in `app_reviews` and UPDATEs only their NULL `app_version` (issue #125).
 | `appstore_crawler.py` | `AppStoreCrawler`: App Store RSS/API via `requests` (URL template from `appstore.reviews_rss_url`, no coded default); app-id file from `config.app_ids.appstore`. Record `app_version` comes from the entry's `im:version.label` via the static `_extract_app_version` |
 | `playstore_crawler.py` | `PlayStoreCrawler`: `google_play_scraper.reviews` + `app`; app-id file from `config.app_ids.playstore`. Record `app_version` comes from `reviewCreatedVersion` via the static `_extract_app_version` (google-play-scraper fills `appVersion` from the same payload element), `None` when the store omits it |
 | `unified_crawler.py` | `UnifiedCrawler`: runs both stores sequentially, catching each store's failure so one store cannot abort the other. Deliberately **not** a `BaseCrawler` subclass |
-| `app_version_backfill.py` | `backfill_app_versions()`: groups `app_reviews` rows with `app_version IS NULL` by app (`load_targets`, App Store first), re-fetches each app (`fetch_appstore_versions` / `fetch_playstore_versions`), and writes or, in dry-run, counts the matches (`settle_app`, `UPDATE ... AND app_version IS NULL`). Play paging stops by `play_stop_reason`. Settings come from `crawler_config.yml` (`load_settings`); `format_report` renders the per-app and per-platform report. Entry point: `scripts/backfill_app_version.py` |
+| `app_version_backfill.py` | `backfill_app_versions()`: groups `app_reviews` rows with `app_version IS NULL` by app (`load_targets`, App Store first), re-fetches each app (`fetch_appstore_versions` / `fetch_playstore_versions`), and writes or, in dry-run, counts the matches (`settle_app`, `UPDATE ... SET app_version, updated_at = NOW() ... AND app_version IS NULL`). Misses are split into `unmatched_confirmed` (the store's answer was read in full: `appstore_feed_complete`, or a Play stop in `PLAY_COMPLETE_STOPS`) and `unverified`. Play paging decisions live in `scan_play_page` / `play_stop_reason`. Settings come from `crawler_config.yml` (`load_settings`); `format_report` renders the per-app and per-platform report. Entry point: `scripts/backfill_app_version.py` |
 | `exceptions.py` | `ParquetWriteError` — Parquet write failure during the crawl stage |
 | `__init__.py` | `Store` enum (`appstore` / `playstore` / `unified`) and the `get_crawler(store, config_path)` factory |
 
@@ -46,12 +46,21 @@ None.
   backfill calls them on the classes without an instance, because constructing a store crawler
   creates the `output.base_directory` folders (`BaseCrawler.__init__`) and a `DatabaseConnector`.
 - The App Store RSS can answer 200 with no entries for pages inside the range (on 2026-11-26 one
-  app returned pages 1-2 and 5-10 empty and 3-4 full). `fetch_appstore_versions` counts such
-  pages as `empty_pages` and keeps reading; `AppStoreCrawler.get_app_store_reviews_and_appname`
-  still stops at the first empty page.
-- `google_play_scraper.reviews()` takes no timeout and swallows request errors, returning what it
-  has with no next-page token. A failed Play request therefore looks like the end of the reviews
-  (`exhausted` in the backfill), and `global.timeout` does not apply to Play.
+  app returned pages 1-2 and 5-10 empty and 3-4 full; a full local dry-run that day got 325
+  empty pages out of 340).
+  `fetch_appstore_versions` counts such pages as `empty_pages` and keeps reading; an all-empty
+  read is `feed_empty`. `appstore_feed_complete` confirms misses only when the pages are full up
+  to the last non-empty one and, if empty pages follow, that one is partial
+  (`appstore.rss_page_size`), which is how the feed ends for small apps. After
+  `appstore.backfill_max_consecutive_empty_feeds` `feed_empty` apps in a row the remaining App
+  Store apps are skipped (`skipped_after_empty_feeds`).
+  `AppStoreCrawler.get_app_store_reviews_and_appname` still stops at the first empty page.
+- `google_play_scraper.reviews()` takes no timeout and swallows request errors, returning an
+  empty page with no next-page token. The backfill therefore never treats an empty Play page as
+  the end: the first one is `feed_empty`, a later one `empty_page`, both unverified. Only a page
+  with reviews and no token (`exhausted`) confirms misses. `global.timeout` does not apply to Play.
+- The backfill holds no DB transaction while a store is being asked: it rolls back after
+  loading targets and ends each app with a commit (`--apply`) or a rollback (dry-run).
 - Logs in this package are Korean and use emoji markers (🍎 / 🤖 / ✅ / ❌); match that style.
 
 ### Testing Requirements
@@ -60,9 +69,10 @@ the `ingestion_batch` PENDING row, a failed upload opens no DB session, and a fa
 the uploaded object. It drives `AppStoreCrawler` with stand-in records, so no test compares App
 Store and Play Store output. `tests/test_bronze_loading.py` covers the Parquet → DB handoff and
 each store's `app_version` mapping into Bronze. `tests/test_app_version_backfill.py` covers the
-backfill: the shared id/version extraction on both payload shapes, `play_stop_reason`, and
-dry-run / apply / re-run against the real test database with store-shaped payloads. The network
-fetchers themselves are not under test; check them with a dry-run of the script.
+backfill: `fetch_appstore_versions` and `backfill_app_versions` run over real HTTP against the
+local `appstore_rss_server` (conftest) and against committed rows (`backfill_db`); Play paging
+is covered through `scan_play_page` with real-shaped pages, since the rest of its loop is the
+live google-play-scraper call. `tests/test_backfill_app_version_cli.py` covers the script.
 `tests/conftest.py` still defines `mock_appstore_api` and `mock_playstore_api`, but no test uses
 them, and `mock_appstore_api` cannot run: it depends on the `requests_mock` fixture of the
 requests-mock plugin, which is in neither `pyproject.toml` nor `uv.lock`. Using it means adding that
@@ -70,7 +80,7 @@ dev dependency first.
 
 ```bash
 PYTHONPATH=. uv run pytest tests/test_crawler_consistency.py tests/test_bronze_loading.py \
-  tests/test_app_version_backfill.py -q
+  tests/test_app_version_backfill.py tests/test_backfill_app_version_cli.py -q
 ```
 Database-backed tests need the Docker test database; start and connect it as described in
 `tests/AGENTS.md` (Testing Requirements).

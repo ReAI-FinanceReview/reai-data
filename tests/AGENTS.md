@@ -16,7 +16,7 @@ passing mock-based test says nothing about the real database. The HTTP stub fixt
 
 | File | Description |
 |------|-------------|
-| `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration |
+| `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration, and for the `app_version` backfill a real local App Store RSS HTTP server (`appstore_rss_server`), a config pointed at it (`backfill_config`), and committed seed rows (`backfill_db`) |
 | `test_backend_datamart_contract.py` | Backend-facing mart contract for the four Gold tables |
 | `test_backend_datamart_serving_readiness.py` | Serving-readiness evidence checks for the mart |
 | `test_post_aggregate_validation.py` | `PostAggregateValidator` checks, severities, and report shape |
@@ -30,7 +30,8 @@ passing mock-based test says nothing about the real database. The HTTP stub fixt
 | `test_assign_dept_cli.py` / `test_eval_assignment_cli.py` | Argument contracts for `scripts/assign_dept.py` and `scripts/eval_assignment.py` |
 | `test_batch_loader.py` | Pending/failed batch consumption into `review_master_index` |
 | `test_bronze_loading.py` | Bronze Parquet → DB load integration |
-| `test_app_version_backfill.py` | `app_version` backfill (issue #125): shared id/version extraction, RSS entry handling, Play stop rule, settings, and dry-run / apply / re-run against the real database with store-shaped payloads |
+| `test_app_version_backfill.py` | `app_version` backfill (issue #125): shared id/version extraction, App Store fetch over HTTP against the local RSS server (gaps, early stop, HTTP error, empty feed, feed end), confirmed vs unverified misses, Play paging decisions, `updated_at`, dry-run / apply / re-run, per-app commits, no open transaction while waiting, the empty-feed cutoff |
+| `test_backfill_app_version_cli.py` | `scripts/backfill_app_version.py` `main()`: exit codes 0/1/2 and the `--platform` mapping, against the test database and the local RSS server |
 | `test_crawler_consistency.py` | `save_daily_batch` upload → PENDING registration order and failure cleanup (App Store crawler only; no cross-store parity check) |
 | `test_database_schema.py` | Schema objects created by `schema_v4.sql` |
 | `test_parquet_schemas.py` / `test_parquet_writer.py` | Pydantic Parquet schemas and writer partitioning |
@@ -64,6 +65,10 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
   `db_with_failed_batches` to seed.
 - Do not introduce database mocks or in-memory substitutes to make a test pass — the suite's value
   is that it runs against the real schema.
+- `backfill_db` commits its rows (the backfill opens its own connection) and deletes them
+  afterwards. It points the backfill at the test database by setting `DATABASE_URL`, and fails up
+  front if any `app_reviews` row without `app_version` is already there, because the backfill
+  would fetch that app too, and for Play that means the live store.
 - There is no `[tool.pytest.ini_options]` section in `pyproject.toml`; markers are registered in
   `pytest_configure` at `conftest.py:667`.
 
