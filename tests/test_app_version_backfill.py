@@ -23,6 +23,7 @@ from src.crawlers.app_version_backfill import (
     STOP_ALL_MATCHED,
     STOP_CAP_REACHED,
     STOP_EMPTY_PAGE,
+    STOP_END_NOT_CONFIRMED,
     STOP_ERROR,
     STOP_EXHAUSTED,
     STOP_FEED_EMPTY,
@@ -33,12 +34,14 @@ from src.crawlers.app_version_backfill import (
     FetchResult,
     appstore_feed_complete,
     appstore_review_entries,
+    confirm_play_end,
     backfill_app_versions,
     count_targets_without_app,
     fetch_appstore_versions,
     load_settings,
     load_targets,
     match_versions,
+    play_end_stop_reason,
     play_stop_reason,
     scan_play_page,
     settle_app,
@@ -306,8 +309,8 @@ def test_scan_play_empty_page_after_reviews_is_unverified():
     assert (result.found, result.complete) == ({'a': '2.3.1'}, False)
 
 
-def test_scan_play_last_page_with_reviews_confirms_missing():
-    """The store's own end: a page with reviews and no next-page token."""
+def test_scan_play_last_page_is_only_provisionally_exhausted():
+    """A page with reviews and no next-page token is not taken as the end before a re-request."""
     result = FetchResult()
 
     stop = scan_play_page(
@@ -315,7 +318,78 @@ def test_scan_play_last_page_with_reviews_confirms_missing():
         _play_target(a=REVIEWED_AT, deleted=REVIEWED_AT), max_reviews=3000,
     )
 
-    assert (stop, result.complete, result.found) == (STOP_EXHAUSTED, True, {'a': '2.3.1'})
+    assert (stop, result.complete, result.found) == (STOP_EXHAUSTED, False, {'a': '2.3.1'})
+
+
+@pytest.mark.parametrize('first_ids, first_has_next_page, second_ids, second_has_next_page, expected', [
+    (['r1', 'r2', 'r3'], False, ['r1', 'r2', 'r3'], False, STOP_EXHAUSTED),
+    (['r1', 'r2', 'r3'], False, ['r3', 'r1', 'r2'], False, STOP_EXHAUSTED),
+    # The first answer was cut short by a failed request inside reviews(); the second is whole.
+    (['r1', 'r2'], False, ['r1', 'r2', 'r3'], False, STOP_END_NOT_CONFIRMED),
+    (['r1', 'r2', 'r3'], False, ['r1', 'r2'], False, STOP_END_NOT_CONFIRMED),
+    (['r1', 'r2', 'r3'], False, ['r1', 'r2', 'r9'], False, STOP_END_NOT_CONFIRMED),
+    (['r1', 'r2', 'r3'], False, ['r1', 'r2', 'r3'], True, STOP_END_NOT_CONFIRMED),
+    (['r1', 'r2', 'r3'], False, [], False, STOP_END_NOT_CONFIRMED),
+    ([], False, [], False, STOP_END_NOT_CONFIRMED),
+    (['r1'], True, ['r1'], False, STOP_END_NOT_CONFIRMED),
+])
+def test_play_end_stop_reason(first_ids, first_has_next_page, second_ids, second_has_next_page, expected):
+    assert play_end_stop_reason(first_ids, first_has_next_page, second_ids, second_has_next_page) == expected
+
+
+def _last_page_scanned(page, target):
+    """``result`` after scan_play_page saw ``page`` arrive with no next-page token."""
+    result = FetchResult()
+    assert scan_play_page(result, page, False, target, max_reviews=3000) == STOP_EXHAUSTED
+    return result
+
+
+def test_confirm_play_end_same_answer_twice_confirms_missing():
+    page = [_play_review('a', '2.3.1'), _play_review('x', None)]
+    target = _play_target(a=REVIEWED_AT, deleted=REVIEWED_AT)
+    result = _last_page_scanned(page, target)
+
+    stop = confirm_play_end(result, page, [dict(review) for review in page], False, target)
+
+    assert (stop, result.complete, result.found, result.fetched) == (STOP_EXHAUSTED, True, {'a': '2.3.1'}, 2)
+
+
+@pytest.mark.parametrize('second_page, second_has_next_page', [
+    ([_play_review('a', '2.3.1'), _play_review('x', None)], True),   # a token appeared
+    ([_play_review('a', '2.3.1')], False),                           # fewer reviews
+    ([], False),                                                     # the re-request failed
+])
+def test_confirm_play_end_rejects_a_different_second_answer(second_page, second_has_next_page):
+    page = [_play_review('a', '2.3.1'), _play_review('x', None)]
+    target = _play_target(a=REVIEWED_AT, deleted=REVIEWED_AT)
+    result = _last_page_scanned(page, target)
+
+    stop = confirm_play_end(result, page, second_page, second_has_next_page, target)
+
+    assert (stop, result.complete) == (STOP_END_NOT_CONFIRMED, False)
+
+
+def test_confirm_play_end_merges_targets_from_the_second_answer():
+    """The first answer was cut short; the second holds one more target but not all of them."""
+    first = [_play_review('a', '2.3.1')]
+    second = [_play_review('a', '2.3.1'), _play_review('b', '2.3.0')]
+    target = _play_target(a=REVIEWED_AT, b=REVIEWED_AT, deleted=REVIEWED_AT)
+    result = _last_page_scanned(first, target)
+
+    stop = confirm_play_end(result, first, second, False, target)
+
+    assert (stop, result.complete) == (STOP_END_NOT_CONFIRMED, False)
+    assert result.found == {'a': '2.3.1', 'b': '2.3.0'}
+
+
+def test_confirm_play_end_all_matched_after_merge():
+    first = [_play_review('a', '2.3.1')]
+    second = [_play_review('a', '2.3.1'), _play_review('b', '2.3.0')]
+    target = _play_target(a=REVIEWED_AT, b=REVIEWED_AT)
+    result = _last_page_scanned(first, target)
+
+    assert confirm_play_end(result, first, second, False, target) == STOP_ALL_MATCHED
+    assert (result.complete, result.found) == (True, {'a': '2.3.1', 'b': '2.3.0'})
 
 
 def test_scan_play_cap_leaves_targets_unverified():
@@ -538,11 +612,10 @@ def test_play_matches_without_version_and_unmatched_are_counted_not_written(test
     for review_id in ('p1', 'p2', 'p3'):
         _seed_review(test_db_session, app_id, PLAYSTORE, review_id)
     target = _target(test_db_session, app_id)
+    page = [_play_review('p1', '2.3.1'), _play_review('p2', None), _play_review('other', '2.3.1')]
     fetch = FetchResult()
-    scan_play_page(
-        fetch, [_play_review('p1', '2.3.1'), _play_review('p2', None), _play_review('other', '2.3.1')],
-        False, target, max_reviews=3000,
-    )
+    scan_play_page(fetch, page, False, target, max_reviews=3000)
+    confirm_play_end(fetch, page, list(page), False, target)  # the same last page twice
 
     result = settle_app(test_db_session, target, fetch, apply=True)
 

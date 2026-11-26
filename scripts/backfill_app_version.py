@@ -30,8 +30,8 @@ exit codes:
   {EXIT_CONFIRMED}  모든 앱을 끝까지 읽었다. 못 맞춘 리뷰는 모두 unmatched_confirmed 다
   {EXIT_ERROR}  스토어 요청이나 DB 쓰기가 실패한 앱이 있다 (error 칸). {EXIT_UNVERIFIED} 보다 우선한다
   {EXIT_USAGE}  인자가 잘못됐다 (argparse). 백필을 실행하지 않는다
-  {EXIT_UNVERIFIED}  오류는 없지만 unverified 가 남았다 (빈 페이지, 빈 피드, Play 상한, App Store
-     조회 중단). 나중에 다시 실행하면 더 채워질 수 있다
+  {EXIT_UNVERIFIED}  오류는 없지만 unverified 가 남았다 (빈 페이지, 빈 피드, Play 상한, 두 번 같지
+     않았던 Play 끝, App Store 조회 중단). 나중에 다시 실행하면 더 채워질 수 있다
 """
 
 

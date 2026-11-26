@@ -13,10 +13,13 @@ platform_review_id로 맞춘 행의 app_version과 updated_at만 UPDATE한다.
   (AND app_version IS NULL) 다시 실행해도 결과가 같다. INSERT나 DELETE는 하지 않는다.
 - 못 맞춘 리뷰는 둘로 나눈다. unmatched_confirmed는 스토어 응답을 끝까지 정상으로 읽었는데도
   없는 리뷰, unverified는 빈 응답이나 실패한 요청 때문에 없다고 단정할 수 없는 리뷰다.
-- 남은 한계(Play): google-play-scraper 1.2.7의 reviews()는 서버가 요청보다 적은 리뷰와 다음
-  token을 주면 같은 호출 안에서 요청을 더 보낸다. 그 뒤쪽 요청이 실패하면 예외를 삼키고 그때까지
-  모은 리뷰를 token None과 함께 돌려준다. 공개 API로는 이것을 진짜 끝(리뷰가 있고 token이 없는
-  쪽)과 구별할 수 없어 exhausted로 보고, 남은 대상을 unmatched_confirmed로 센다.
+- Play의 끝은 두 번 보고 정한다. google-play-scraper 1.2.7의 reviews()는 서버가 요청보다 적은
+  리뷰와 다음 token을 주면 같은 호출 안에서 요청을 더 보내고, 그 뒤쪽 요청이 실패하면 예외를
+  삼킨 채 그때까지 모은 리뷰를 token None과 함께 돌려준다. 이 모양은 진짜 끝과 같으므로, 리뷰가
+  있고 token이 없는 쪽은 같은 continuation token으로 한 번 더 요청한다. 두 번째 응답이 같은 리뷰
+  id들을 담고 또 token이 없을 때만 exhausted(확정)이고, 아니면 end_not_confirmed(미확인)다.
+  남은 한계: 같은 실패가 두 요청에서 똑같이 되풀이되면(같은 부분 목록, token 없음) 여전히 진짜
+  끝으로 보인다.
 - 스토어를 기다리는 동안 DB 트랜잭션을 열어 두지 않는다. 대상을 읽은 뒤 바로 닫고, 앱마다
   apply는 commit, dry-run은 rollback으로 닫는다.
 - 한 앱의 조회나 쓰기에서 예외가 나면 그 앱의 변경만 rollback하고 traceback을 로그에 남긴 뒤,
@@ -59,13 +62,15 @@ STOP_ERROR = 'error'
 STOP_SKIPPED_AFTER_EMPTY_FEEDS = 'skipped_after_empty_feeds'  # not requested, see cutoff
 # Play
 STOP_PASSED_OLDEST_TARGET = 'passed_oldest_target'
-STOP_EXHAUSTED = 'exhausted'  # a page with reviews and no next-page token: the store's end
+STOP_EXHAUSTED = 'exhausted'  # a page with reviews and no next-page token, twice alike: the end
+STOP_END_NOT_CONFIRMED = 'end_not_confirmed'  # that page answered differently the second time
 STOP_EMPTY_PAGE = 'empty_page'  # an empty page after pages with reviews
 STOP_CAP_REACHED = 'cap_reached'
 
 # Play stops after which the unmatched targets are known to be absent from the store. An empty
 # page can be a request google-play-scraper failed and swallowed, and the cap stops early.
-PLAY_COMPLETE_STOPS = frozenset({STOP_ALL_MATCHED, STOP_PASSED_OLDEST_TARGET, STOP_EXHAUSTED})
+# ``exhausted`` is complete only once confirm_play_end has seen the last page twice alike.
+PLAY_COMPLETE_STOPS = frozenset({STOP_ALL_MATCHED, STOP_PASSED_OLDEST_TARGET})
 
 # PlayStoreCrawler._parse_reviewed_at labels google-play-scraper's local-time `at` as UTC, so a
 # stored reviewed_at can be later than the store's own timestamp by the crawl host's UTC offset.
@@ -318,7 +323,11 @@ def scan_play_page(
     target: AppTargets,
     max_reviews: int,
 ) -> Optional[str]:
-    """Fold one google-play-scraper page into ``result``; return the stop reason, or ``None``."""
+    """Fold one google-play-scraper page into ``result``; return the stop reason, or ``None``.
+
+    ``exhausted`` returned here is provisional and leaves ``result`` incomplete until
+    confirm_play_end has seen the page a second time.
+    """
     result.fetched += len(page)
     result.empty_pages += not page
     result.found.update(match_versions(PlatformType.PLAYSTORE, page, target.reviewed_at))
@@ -338,6 +347,54 @@ def scan_play_page(
         oldest_fetched=result.oldest_fetched,
     )
     result.complete = result.stop_reason in PLAY_COMPLETE_STOPS
+    return result.stop_reason
+
+
+def play_end_stop_reason(
+    first_ids: Sequence[str],
+    first_has_next_page: bool,
+    second_ids: Sequence[str],
+    second_has_next_page: bool,
+) -> str:
+    """Whether a Play page that came with no next-page token is the store's real end.
+
+    The page is requested twice with the same continuation token. google-play-scraper returns
+    that same shape (reviews, no token) when a later request inside one reviews() call fails,
+    so only two answers with the same review ids and no token confirm the end.
+    """
+    if (
+        first_ids
+        and not first_has_next_page
+        and not second_has_next_page
+        and sorted(first_ids) == sorted(second_ids)
+    ):
+        return STOP_EXHAUSTED
+    return STOP_END_NOT_CONFIRMED
+
+
+def confirm_play_end(
+    result: FetchResult,
+    first_page: List[Dict[str, Any]],
+    second_page: List[Dict[str, Any]],
+    second_has_next_page: bool,
+    target: AppTargets,
+) -> str:
+    """Fold the second answer for a would-be last Play page into ``result`` and settle the stop.
+
+    Targets the second answer holds are merged first; the second answer's reviews are not added
+    to ``fetched``, which counts each page's first answer.
+    """
+    result.found.update(match_versions(PlatformType.PLAYSTORE, second_page, target.reviewed_at))
+    if len(result.found) >= len(target.reviewed_at):
+        result.stop_reason = STOP_ALL_MATCHED
+    else:
+        result.stop_reason = play_end_stop_reason(
+            [PlayStoreCrawler._extract_platform_review_id(review) for review in first_page],
+            False,  # scan_play_page returns exhausted only for a page without a next-page token
+            [PlayStoreCrawler._extract_platform_review_id(review) for review in second_page],
+            second_has_next_page,
+        )
+    result.complete = result.stop_reason in (STOP_ALL_MATCHED, STOP_EXHAUSTED)
     return result.stop_reason
 
 
@@ -386,28 +443,40 @@ def fetch_playstore_versions(target: AppTargets, settings: BackfillSettings) -> 
     catches it and returns an empty page with no next-page token, which scan_play_page reports
     as ``feed_empty`` or ``empty_page`` (unverified) rather than as the end of the reviews.
 
-    One case stays undetectable. When a response holds fewer reviews than requested together
-    with a next-page token, reviews() sends further requests within the same call; if one of
-    those fails it returns the reviews collected so far with a None token. Through the public
-    API that equals the store's real end (reviews and no token), so it is reported as
-    ``exhausted`` and the unmatched targets count as confirmed.
+    A page with reviews and no next-page token is not taken as the end on its own. When a
+    response holds fewer reviews than requested together with a token, reviews() sends further
+    requests within the same call, and if one of those fails it returns the reviews collected so
+    far with no token, which looks exactly like the end. So that page is requested once more with
+    the same continuation token, and confirm_play_end keeps ``exhausted`` only if both answers
+    match; otherwise the stop is ``end_not_confirmed``. A failure that repeats identically on both
+    requests still passes as the end.
     """
-    result = FetchResult()
-    token = None
-    while True:
-        if token is not None:
-            time.sleep(settings.delay_seconds)
-        page, token = play_reviews(
+
+    def request(continuation_token):
+        return play_reviews(
             target.platform_app_id,
             lang=settings.playstore_language,
             country=settings.playstore_country,
             sort=Sort.NEWEST,
             count=settings.playstore_page_size,
-            continuation_token=token,
+            continuation_token=continuation_token,
         )
-        if scan_play_page(
+
+    result = FetchResult()
+    token = None
+    while True:
+        if token is not None:
+            time.sleep(settings.delay_seconds)
+        requested_with = token
+        page, token = request(requested_with)
+        stop = scan_play_page(
             result, page, token.token is not None, target, settings.playstore_max_reviews_per_app
-        ):
+        )
+        if stop == STOP_EXHAUSTED:
+            time.sleep(settings.delay_seconds)
+            again, again_token = request(requested_with)
+            stop = confirm_play_end(result, page, again, again_token.token is not None, target)
+        if stop:
             return result
 
 
