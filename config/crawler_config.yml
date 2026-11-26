@@ -16,6 +16,9 @@ playstore:
   country: "kr"                    # 국가 코드
   reviews_per_app: 10              # 앱당 리뷰 수 (테스트용)
   sort_order: "newest"             # 정렬 순서
+  # app_version 백필(scripts/backfill_app_version.py) 전용. 평소 수집에는 쓰지 않음
+  backfill_page_size: 200          # 요청 1회(continuation token 1쪽)에 받는 리뷰 수
+  backfill_max_reviews_per_app: 3000  # 앱당 조회 상한. 조회한 리뷰 수가 이 값에 닿으면 cap_reached 로 멈춤
 
 # 출력 설정
 output:
