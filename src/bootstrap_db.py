@@ -54,11 +54,11 @@ def get_bootstrap_sql_paths(root: Path) -> list[Path]:
 def build_verification_queries() -> list[BootstrapVerification]:
     return [
         BootstrapVerification("app_service", "SELECT COUNT(*) FROM app_service", 39),
-        BootstrapVerification("apps", "SELECT COUNT(*) FROM apps", 63),
+        BootstrapVerification("apps", "SELECT COUNT(*) FROM apps", 65),
         BootstrapVerification(
             "app_metadata_active",
             "SELECT COUNT(*) FROM app_metadata WHERE is_active = TRUE",
-            63,
+            61,
         ),
     ]
 

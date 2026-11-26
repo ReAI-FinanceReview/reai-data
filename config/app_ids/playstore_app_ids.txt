@@ -16,10 +16,10 @@ nh.smart.nhcok                  # NH콕뱅크(농협)
 ### 시중은행 (국내) ###
 
 # 신한
-com.shinhan.smartcaremgr        # 신한 슈퍼SOL - 신한 유니버설 금융 앱
-com.shinhan.sbanking            # 신한 SOL뱅크-신한은행 스마트폰 뱅킹
+# com.shinhan.smartcaremgr      # (구)신한 슈퍼SOL - 제외: 2026-11-24 스토어에 없음, 마지막 관측 2026-08-13
+com.shinhan.sbanking            # 신한 슈퍼SOL (2026-06-17 신한 SOL뱅크에서 이름 변경)
 com.shinhan.foreignerbank       # 신한 SOL Global
-com.shinhan.sbankmini           # 신한 쏠(SOL) mini - 신한은행 스마트폰뱅킹
+# com.shinhan.sbankmini         # 신한 쏠(SOL) mini - 제외: 2026-11-24 스토어에 없음, 마지막 관측 2026-08-13
 
 
 # KB국민
@@ -27,7 +27,8 @@ com.kbstar.kbbank               # KB스타뱅킹-금융, 결제, 통신도 다 �
 com.kbstar.global               # KB Global Banking 
 
 # 하나
-com.kebhana.hanapush            # 하나은행, 하나원큐는 즐거운 혜택이 가득한 은행 앱
+com.kebhana.hanapush            # (구)하나원큐 – 종료 예정 (종료일 미정, 종료 전까지 수집)
+com.hanabank.oqf                # 하나원큐 (NEW, 2026-01-29 등록)
 kr.co.hanamembers.hmscustomer   # 하나머니(트래블로그)
 
 # 우리
@@ -40,7 +41,7 @@ kr.co.dgb.dgbm                  # iM뱅크
 ### 시중은행 (외국계) ###
 
 # SC제일
-com.scbank.ma                   # SC제일은행 모바일뱅킹
+com.scbank.ma30                 # SC제일은행 모바일뱅킹 (2026-11-24 없는 id com.scbank.ma 에서 정정)
 
 # 한국씨티
 kr.co.citibank.citimobile       # 씨티모바일
