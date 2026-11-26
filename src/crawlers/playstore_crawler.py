@@ -47,9 +47,15 @@ class PlayStoreCrawler(BaseCrawler):
         """Get platform type for PlayStore."""
         return PlatformType.PLAYSTORE
 
-    def _extract_platform_review_id(self, review_data: Dict[str, Any]) -> str:
+    @staticmethod
+    def _extract_platform_review_id(review_data: Dict[str, Any]) -> str:
         """Extract reviewId from Play Store review data."""
         return review_data.get('reviewId', '')
+
+    @staticmethod
+    def _extract_app_version(review_data: Dict[str, Any]) -> Optional[str]:
+        """Extract the app version the review was written against (`reviewCreatedVersion`)."""
+        return review_data.get('reviewCreatedVersion')
 
     def _parse_reviewed_at(self, review_data: Dict[str, Any]) -> datetime:
         """Parse reviewed_at timestamp from Play Store review data."""
@@ -139,7 +145,7 @@ class PlayStoreCrawler(BaseCrawler):
                 reviewed_at=reviewed_at_cache[platform_review_id],
                 is_reply=False,
                 reply_comment=review_data.get('replyContent'),
-                app_version=review_data.get('reviewCreatedVersion')
+                app_version=self._extract_app_version(review_data)
             ))
         return parquet_records
 

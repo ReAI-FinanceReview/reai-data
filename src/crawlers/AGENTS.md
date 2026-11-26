@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
 
 # src/crawlers
 
@@ -14,8 +14,8 @@ stage's job (`src/loaders/`), which keeps crawl failures isolated from DB state.
 | File | Description |
 |------|-------------|
 | `base_crawler.py` | `BaseCrawler(ABC)`: config/app-id loading, request pacing, `collect_app_records()`, `save_crawl_batch()`, `save_daily_batch()`, `run()` template. Owns Parquet format consistency for all stores |
-| `appstore_crawler.py` | `AppStoreCrawler`: App Store RSS/API via `requests`; app-id file from `config.app_ids.appstore`. Record `app_version` comes from the entry's `im:version.label` |
-| `playstore_crawler.py` | `PlayStoreCrawler`: `google_play_scraper.reviews` + `app`; app-id file from `config.app_ids.playstore`. Record `app_version` comes from `reviewCreatedVersion` (google-play-scraper fills `appVersion` from the same payload element), `None` when the store omits it |
+| `appstore_crawler.py` | `AppStoreCrawler`: App Store RSS/API via `requests` (URL template `APPSTORE_REVIEWS_RSS_URL`); app-id file from `config.app_ids.appstore`. Record `app_version` comes from the entry's `im:version.label` via the static `_extract_app_version` |
+| `playstore_crawler.py` | `PlayStoreCrawler`: `google_play_scraper.reviews` + `app`; app-id file from `config.app_ids.playstore`. Record `app_version` comes from `reviewCreatedVersion` via the static `_extract_app_version` (google-play-scraper fills `appVersion` from the same payload element), `None` when the store omits it |
 | `unified_crawler.py` | `UnifiedCrawler`: runs both stores sequentially, catching each store's failure so one store cannot abort the other. Deliberately **not** a `BaseCrawler` subclass |
 | `exceptions.py` | `ParquetWriteError` — Parquet write failure during the crawl stage |
 | `__init__.py` | `Store` enum (`appstore` / `playstore` / `unified`) and the `get_crawler(store, config_path)` factory |

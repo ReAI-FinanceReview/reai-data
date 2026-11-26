@@ -17,6 +17,9 @@ from src.models.base import Base
 from src.models.enums import PlatformType
 from src.schemas.parquet.app_review import AppReviewSchema
 
+# App Store 고객 리뷰 RSS (최신순, 페이지 단위). 이 URL을 쓰는 코드는 모두 이 템플릿을 쓴다.
+APPSTORE_REVIEWS_RSS_URL = "https://itunes.apple.com/{country}/rss/customerreviews/page={page}/id={app_id}/sortby=mostRecent/json"
+
 
 class AppStoreCrawler(BaseCrawler):
     """App Store 리뷰 크롤러 (Batch DLQ Architecture)
@@ -49,9 +52,15 @@ class AppStoreCrawler(BaseCrawler):
         """Get platform type for AppStore."""
         return PlatformType.APPSTORE
 
-    def _extract_platform_review_id(self, review_data: Dict[str, Any]) -> str:
+    @staticmethod
+    def _extract_platform_review_id(review_data: Dict[str, Any]) -> str:
         """Extract review ID from App Store review data."""
         return review_data.get('id', {}).get('label', '')
+
+    @staticmethod
+    def _extract_app_version(review_data: Dict[str, Any]) -> Optional[str]:
+        """Extract the app version the review was written against (RSS `im:version.label`)."""
+        return review_data.get('im:version', {}).get('label')
 
     def _parse_reviewed_at(self, review_data: Dict[str, Any]) -> datetime:
         """Parse reviewed_at timestamp from App Store review data."""
@@ -85,7 +94,7 @@ class AppStoreCrawler(BaseCrawler):
         self.logger.info(f"앱 ID {app_id}의 리뷰 크롤링 시작 (최대 {pages}페이지)")
 
         for page in range(1, pages + 1):
-            url = f"https://itunes.apple.com/{country}/rss/customerreviews/page={page}/id={app_id}/sortby=mostRecent/json"
+            url = APPSTORE_REVIEWS_RSS_URL.format(country=country, page=page, app_id=app_id)
 
             try:
                 response = requests.get(url, timeout=self.timeout)
@@ -170,7 +179,7 @@ class AppStoreCrawler(BaseCrawler):
                 reviewed_at=reviewed_at_cache[platform_review_id],
                 is_reply=False,
                 reply_comment=None,
-                app_version=review_data.get('im:version', {}).get('label')
+                app_version=self._extract_app_version(review_data)
             ))
         return parquet_records
 
