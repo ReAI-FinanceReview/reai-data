@@ -961,3 +961,45 @@ def test_pipeline_keeps_only_the_loaded_copy_of_a_review_bronze_holds_under_seve
                          {'pids': platform_review_ids})
             conn.execute(text('DELETE FROM review_master_index WHERE app_id = :app_id'), {'app_id': app_id})
             conn.execute(text('DELETE FROM apps WHERE app_id = :app_id'), {'app_id': app_id})
+
+
+@pytest.mark.requires_db
+def test_duplicate_filter_matches_a_loaded_review_id_written_in_another_uuid_spelling(
+    tmp_synonyms, tmp_profanity, test_db_engine, test_db_schema, test_db_url, monkeypatch
+):
+    """The loaded copy is kept even when Bronze spells its review_id braced and upper-case."""
+    from uuid import UUID
+
+    from sqlalchemy import text
+    from sqlalchemy.orm import Session
+
+    from src.models.apps import App
+    from src.models.enums import PlatformType
+    from src.models.review_master_index import ReviewMasterIndex
+    from src.utils.db_connector import DatabaseConnector
+
+    monkeypatch.setenv('DATABASE_URL', test_db_url)
+    app_id = uuid7()
+    loaded, retried = uuid7(), uuid7()
+    loaded_copy = {'platform_review_id': 'uuid-spelling', 'review_id': '{' + str(loaded).upper() + '}'}
+    retried_copy = {'platform_review_id': 'uuid-spelling', 'review_id': str(retried)}
+    with Session(test_db_engine) as session:
+        session.add(App(app_id=app_id, platform_app_id='uuid-spelling-app', platform_type=PlatformType.APPSTORE,
+                        name='UUID Spelling App'))
+        session.flush()
+        session.add(ReviewMasterIndex(review_id=UUID(str(loaded)), app_id=app_id, platform_review_id='uuid-spelling',
+                                      platform_type=PlatformType.APPSTORE,
+                                      processing_status=ProcessingStatusType.RAW, retry_count=0))
+        session.commit()
+    try:
+        pipeline = ReviewCleaningPipeline(
+            minio_client=None, db_connector=DatabaseConnector(),
+            synonyms_path=tmp_synonyms, profanity_path=tmp_profanity,
+        )
+        kept, dropped = pipeline._drop_duplicate_bronze_rows([loaded_copy, retried_copy])
+
+        assert (kept, dropped) == ([loaded_copy], 1)
+    finally:
+        with test_db_engine.begin() as conn:
+            conn.execute(text('DELETE FROM review_master_index WHERE app_id = :app_id'), {'app_id': app_id})
+            conn.execute(text('DELETE FROM apps WHERE app_id = :app_id'), {'app_id': app_id})

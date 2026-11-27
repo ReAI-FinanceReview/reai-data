@@ -208,6 +208,16 @@ def write_silver_parquet(
 # ReviewCleaningPipeline
 # =========================================================
 
+def _parse_review_id(value: Any) -> UUID | None:
+    """Bronze 행의 review_id 를 UUID 값으로 읽는다. 비었거나 UUID 가 아니면 None 이다."""
+    if not value:
+        return None
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
 class ReviewCleaningPipeline:
     """Bronze → Silver 정제 파이프라인.
 
@@ -315,17 +325,18 @@ class ReviewCleaningPipeline:
         그중 review_master_index 에 있는 review_id 의 행만 남기고 나머지 사본은 버린다. 어느
         review_id 도 없으면 적재되지 않은 리뷰라 CLEANED 로 표시할 수 없으므로 묶음째 버린다.
 
-        review_id 가 하나뿐인 platform_review_id 는 조회하지 않고 그대로 둔다.
+        review_id 가 하나뿐인 platform_review_id 는 조회하지 않고 그대로 둔다. review_id 는 UUID 값으로
+        비교하므로 표기(대소문자, 중괄호)가 달라도 같은 id 로 본다.
 
         Returns:
             (남길 행, 버린 행 수)
         """
-        review_ids_by_platform_review_id: Dict[str, set[str]] = defaultdict(set)
+        review_ids_by_platform_review_id: Dict[str, set[UUID]] = defaultdict(set)
         for row in bronze_rows:
             platform_review_id = row.get('platform_review_id')
-            review_id = row.get('review_id')
+            review_id = _parse_review_id(row.get('review_id'))
             if platform_review_id and review_id:
-                review_ids_by_platform_review_id[platform_review_id].add(str(review_id))
+                review_ids_by_platform_review_id[platform_review_id].add(review_id)
         duplicated = {
             platform_review_id: review_ids
             for platform_review_id, review_ids in review_ids_by_platform_review_id.items()
@@ -337,12 +348,12 @@ class ReviewCleaningPipeline:
         from src.models.review_master_index import ReviewMasterIndex
 
         candidate_review_ids = [
-            UUID(review_id) for review_ids in duplicated.values() for review_id in review_ids
+            review_id for review_ids in duplicated.values() for review_id in review_ids
         ]
         session = self.db.get_session()
         try:
             loaded_review_ids = {
-                str(review_id)
+                review_id
                 for (review_id,) in session.query(ReviewMasterIndex.review_id)
                 .filter(ReviewMasterIndex.review_id.in_(candidate_review_ids))
                 .all()
@@ -353,7 +364,7 @@ class ReviewCleaningPipeline:
         kept_rows = [
             row for row in bronze_rows
             if row.get('platform_review_id') not in duplicated
-            or str(row.get('review_id')) in loaded_review_ids
+            or _parse_review_id(row.get('review_id')) in loaded_review_ids
         ]
         dropped = len(bronze_rows) - len(kept_rows)
         unloaded = sum(
