@@ -162,12 +162,15 @@ def test_crawler_stops_at_max_reviews_per_app_and_keeps_the_app_name(
 
 @pytest.mark.requires_db
 def test_crawler_getter_logs_a_failed_request_and_returns_what_it_read(
-    crawl_config, appstore_rss_server, rss_review_entry
+    crawl_config, appstore_rss_server, rss_review_entry, monkeypatch
 ):
     appstore_rss_server.set_pages('204', _page(rss_review_entry, 'p1', MAX_REVIEWS - 1))
     appstore_rss_server.fail('204', 2, status=503)
     crawler = AppStoreCrawler(crawl_config.path)
     crawler_logger = logging.getLogger(AppStoreCrawler.__name__.lower())  # BaseCrawler's logger name
+    # alembic/env.py's fileConfig (run by test_db_schema) disables every logger that already exists,
+    # so a crawler logger created by an earlier test would drop the record this test reads.
+    monkeypatch.setattr(crawler_logger, 'disabled', False)
     warnings = _WarningRecords()
     crawler_logger.addHandler(warnings)
     try:
@@ -186,12 +189,15 @@ def test_crawler_getter_logs_a_failed_request_and_returns_what_it_read(
 
 
 @pytest.mark.requires_db
-def test_one_empty_app_is_a_warning_and_the_store_succeeds(crawl_config, appstore_rss_server, rss_review_entry):
+def test_one_empty_app_is_a_warning_and_the_store_succeeds(
+    crawl_config, appstore_rss_server, rss_review_entry, monkeypatch
+):
     """A Hana EZ-like app whose every page is empty, between apps with reviews."""
     appstore_rss_server.set_pages('301', _page(rss_review_entry, 'a1'))
     appstore_rss_server.set_pages('303', _page(rss_review_entry, 'c1'))
     crawl_config.set_app_ids('appstore', '301', '302', '303')
     crawler_logger = logging.getLogger(AppStoreCrawler.__name__.lower())  # BaseCrawler's logger name
+    monkeypatch.setattr(crawler_logger, 'disabled', False)  # see the getter test above
     warnings = _WarningRecords()
     crawler_logger.addHandler(warnings)
     try:
