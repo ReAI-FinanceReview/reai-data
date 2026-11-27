@@ -161,6 +161,31 @@ def test_crawler_stops_at_max_reviews_per_app_and_keeps_the_app_name(
 
 
 @pytest.mark.requires_db
+def test_crawler_getter_logs_a_failed_request_and_returns_what_it_read(
+    crawl_config, appstore_rss_server, rss_review_entry
+):
+    appstore_rss_server.set_pages('204', _page(rss_review_entry, 'p1', MAX_REVIEWS - 1))
+    appstore_rss_server.fail('204', 2, status=503)
+    crawler = AppStoreCrawler(crawl_config.path)
+    crawler_logger = logging.getLogger(AppStoreCrawler.__name__.lower())  # BaseCrawler's logger name
+    warnings = _WarningRecords()
+    crawler_logger.addHandler(warnings)
+    try:
+        name, reviews = crawler.get_app_store_reviews_and_appname('204')
+    finally:
+        crawler_logger.removeHandler(warnings)
+
+    assert appstore_rss_server.requested_pages('204') == [1, 2]
+    assert (name, [review['id']['label'] for review in reviews]) == (
+        'app_204', [f'p1-{i}' for i in range(MAX_REVIEWS - 1)],
+    )
+    [record] = warnings.records
+    assert record.levelno == logging.ERROR
+    assert record.getMessage().startswith('앱 ID 204: HTTP 요청 중 에러 발생 - page 2: HTTPError(')
+    assert '503' in record.getMessage()
+
+
+@pytest.mark.requires_db
 def test_one_empty_app_is_a_warning_and_the_store_succeeds(crawl_config, appstore_rss_server, rss_review_entry):
     """A Hana EZ-like app whose every page is empty, between apps with reviews."""
     appstore_rss_server.set_pages('301', _page(rss_review_entry, 'a1'))

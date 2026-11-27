@@ -109,6 +109,8 @@ class AppStoreCrawler(BaseCrawler):
         리뷰가 하나도 없으면 None이다.
         """
         read = self.read_reviews(app_id, country, pages)
+        if read.error:
+            self.logger.error(f"앱 ID {app_id}: HTTP 요청 중 에러 발생 - {read.error}")
         reviews = read.entries[:self.max_reviews_per_app]
         if read.app_name:
             app_name = read.app_name
