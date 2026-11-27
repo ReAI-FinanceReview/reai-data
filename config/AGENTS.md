@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-27T00:00:00Z -->
 
 # config
 
@@ -41,7 +41,7 @@ environment variables, and `paths.yml` only references them via `${VARIABLE}` pl
   any alternative config passed with `--config`.
 - `output.*` in `crawler_config.yml` describes the legacy CSV dump path. The production Bronze and
   Silver locations are not configured in this directory: their MinIO object keys are built in code
-  (`src/crawlers/base_crawler.py:433-436` writes `bronze/app_reviews/...`;
+  (`BaseCrawler.save_daily_batch` in `src/crawlers/base_crawler.py` writes `bronze/app_reviews/...`;
   `src/processing/cleanse.py:173-178,197-201` reads Bronze and writes `silver/reviews/...`) inside
   the bucket named by `MINIO_BUCKET`.
 - `paths.yml` and `PathResolver` / `get_medallion_paths()` are not used by any code under `src/`,
