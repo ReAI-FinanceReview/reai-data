@@ -10,6 +10,11 @@
 배치를 적재하고, leaf task `crawl_watcher`(`one_failed`)가 실패해 DAG 실행은 실패로 남는다. Airflow는
 DAG 실행 상태를 leaf task로만 정하므로 이 task가 없으면 뒤 단계가 성공했을 때 크롤 실패가 묻힌다.
 
+App Store 크롤은 cutoff로 실패해도 읽은 리뷰를 올리고, 재시도는 `load_reviews` 전에 돈다. 그래서 재시도는
+같은 리뷰를 새 `review_id`로 같은 날짜 Bronze 폴더에 한 번 더 올린다. 그래도 안전하다. `BatchLoader`는
+`platform_review_id`마다 한 번만 적재하고, cleanse(`ReviewCleaningPipeline.run`)는 `review_master_index`에
+있는 `review_id`의 행만 남기고 나머지 사본은 버린다(WARNING 로그, 결과의 `duplicates_dropped`).
+
 검증 task는 target date(`{{ ds }}`) 기준으로 기존 DB 테이블을 조회한다. 1차 범위에서는
 신규 모니터링 테이블, Slack/Email/PagerDuty, live App Store/Play Store API gate,
 Metabase/Grafana dashboard 구현을 추가하지 않는다.

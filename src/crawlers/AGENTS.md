@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-27T00:00:00Z -->
 
 # src/crawlers
 
@@ -104,8 +104,8 @@ failed requests counting toward it, the count resetting) with Parquet writes off
 (`crawl_config`). `tests/test_crawl_outcome.py` covers `playstore_failure` with
 google-play-scraper-shaped data, `run_crawl` store selection and per-store failure, the pipeline
 CLI crawl step, and an Airflow-style retry after the cutoff on the same day against a real MinIO
-bucket and `BatchLoader` (each review loaded once). `tests/test_crawl_reviews_cli.py` covers
-`scripts/crawl_reviews.py` exit codes.
+bucket, `BatchLoader` and `ReviewCleaningPipeline` (each review loaded once and cleansed once).
+`tests/test_crawl_reviews_cli.py` covers `scripts/crawl_reviews.py` exit codes.
 `tests/test_crawler_consistency.py` covers `save_daily_batch` only: the MinIO upload happens before
 the `ingestion_batch` PENDING row, a failed upload opens no DB session, and a failed commit deletes
 the uploaded object. It drives `AppStoreCrawler` with stand-in records, so no test compares App

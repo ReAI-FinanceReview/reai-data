@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-27T00:00:00Z -->
 
 # dags
 
@@ -30,7 +30,11 @@ None.
   the task log.
 - `load_reviews` has `trigger_rule="all_done"`: it waits until both crawl tasks are finished,
   retries included, and runs even when one (or both) failed, loading whatever PENDING batches
-  exist, including what a crawl stopped by the cutoff uploaded. `none_failed_min_one_success`
+  exist, including what a crawl stopped by the cutoff uploaded. A retry re-reads what the failed
+  attempt uploaded (those reviews are not in `review_master_index` until `load_reviews`), so the
+  day's Bronze partition can hold a review twice under different `review_id`s; that is safe because
+  `BatchLoader` loads it once and `cleanse_reviews` keeps only the loaded copy
+  (`ReviewCleaningPipeline.run`, see `src/processing/AGENTS.md`). `none_failed_min_one_success`
   would mark it `upstream_failed` as soon as one crawl failed, and `one_success` would start it
   before the other store's crawl and its retries are done.
 - Airflow decides the DAG run state from the leaf tasks only, so with `all_done` a failed crawl

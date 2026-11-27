@@ -844,3 +844,120 @@ def test_update_db_status_upserts_reviews_preprocessed_rows(tmp_path, test_db_se
     assert preprocessed.platform_review_id == platform_review_id
     assert preprocessed.refined_text == "공식 seed 앱 리뷰 정제문"
     assert master.processing_status == ProcessingStatusType.CLEANED
+
+
+@pytest.mark.requires_db
+def test_pipeline_keeps_only_the_loaded_copy_of_a_review_bronze_holds_under_several_review_ids(
+    tmp_synonyms, tmp_profanity, minio_bucket, test_db_engine, test_db_schema, test_db_url, monkeypatch
+):
+    """A retried crawl puts a review into the day's Bronze partition again under a new review_id.
+
+    Of a review with several review_ids only the copy in review_master_index is cleansed; a review
+    none of whose copies was loaded is dropped whole; a review Bronze holds once is cleansed as
+    before, loaded or not. Bronze objects and the master index rows are real (test MinIO, test DB).
+    """
+    import logging
+    from datetime import datetime, timezone
+    from uuid import UUID
+
+    from sqlalchemy import text
+    from sqlalchemy.orm import Session
+
+    from src.models.apps import App
+    from src.models.enums import PlatformType
+    from src.models.review_master_index import ReviewMasterIndex
+    from src.schemas.parquet.app_review import AppReviewSchema
+    from src.utils.db_connector import DatabaseConnector
+    from src.utils.minio_client import MinIOClient
+
+    class _WarningRecords(logging.Handler):
+        def __init__(self):
+            super().__init__(logging.WARNING)
+            self.records = []
+
+        def emit(self, record):
+            self.records.append(record)
+
+    s3, bucket = minio_bucket
+    monkeypatch.setenv('DATABASE_URL', test_db_url)
+    target_date = date(2026, 3, 4)
+    app_id = uuid7()
+    loaded, retry_1, retry_2 = str(uuid7()), str(uuid7()), str(uuid7())  # one review, three crawls
+    never_loaded_1, never_loaded_2 = str(uuid7()), str(uuid7())
+    single_loaded, single_not_loaded = str(uuid7()), str(uuid7())
+
+    def bronze_row(review_id, platform_review_id):
+        return AppReviewSchema(
+            review_id=review_id, app_id=str(app_id), platform_type='APPSTORE',
+            platform_review_id=platform_review_id, review_text='로그인이 자꾸 풀려요', rating=1,
+            reviewed_at=datetime(target_date.year, target_date.month, target_date.day, tzinfo=timezone.utc),
+        ).model_dump()
+
+    objects = [  # the first crawl, then two retries of it
+        [bronze_row(loaded, 'retry-dup'), bronze_row(never_loaded_1, 'retry-dup-unloaded'),
+         bronze_row(single_loaded, 'retry-single'), bronze_row(single_not_loaded, 'retry-single-unloaded')],
+        [bronze_row(retry_1, 'retry-dup'), bronze_row(never_loaded_2, 'retry-dup-unloaded')],
+        [bronze_row(retry_2, 'retry-dup')],
+    ]
+    platform_review_ids = ['retry-dup', 'retry-dup-unloaded', 'retry-single', 'retry-single-unloaded']
+    bronze_keys = [
+        f'bronze/app_reviews/year={target_date.year}/month={target_date.month:02d}/day={target_date.day:02d}'
+        f'/appstore_{number}.parquet'
+        for number in range(len(objects))
+    ]
+    minio = MinIOClient()
+    for key, rows in zip(bronze_keys, objects):
+        minio.put_parquet(key, pa.Table.from_pylist(rows))
+    with Session(test_db_engine) as session:
+        session.add(App(app_id=app_id, platform_app_id='retry-dup-app', platform_type=PlatformType.APPSTORE,
+                        name='Retry App'))
+        session.flush()
+        session.add_all([
+            ReviewMasterIndex(review_id=UUID(review_id), app_id=app_id, platform_review_id=platform_review_id,
+                              platform_type=PlatformType.APPSTORE, processing_status=ProcessingStatusType.RAW,
+                              retry_count=0)
+            for review_id, platform_review_id in [(loaded, 'retry-dup'), (single_loaded, 'retry-single')]
+        ])
+        session.commit()
+    cleanse_logger = logging.getLogger('src.processing.cleanse')
+    # test_db_schema runs the migrations, and alembic/env.py's fileConfig disables every logger
+    # that already exists, this module's included (it was imported at collection).
+    monkeypatch.setattr(cleanse_logger, 'disabled', False)
+    warnings = _WarningRecords()
+    cleanse_logger.addHandler(warnings)
+    try:
+        result = ReviewCleaningPipeline(
+            minio_client=minio, db_connector=DatabaseConnector(),
+            synonyms_path=tmp_synonyms, profanity_path=tmp_profanity,
+        ).run(target_date=target_date)
+
+        assert (result['processed'], result['skipped'], result['duplicates_dropped']) == (3, 0, 4)
+        assert [record.getMessage() for record in warnings.records] == [
+            '  Dropped 4 duplicate Bronze rows: 2 platform_review_ids had more than one review_id, '
+            '1 of them with none in review_master_index'
+        ]
+        [silver_key] = {obj['Key'] for obj in s3.list_objects_v2(Bucket=bucket)['Contents']} - set(bronze_keys)
+        cleansed = [
+            (row['platform_review_id'], row['review_id']) for row in minio.get_parquet(silver_key).to_pylist()
+        ]
+        expected = {('retry-dup', loaded), ('retry-single', single_loaded), ('retry-single-unloaded', single_not_loaded)}
+        assert sorted(cleansed) == sorted(expected)
+        with test_db_engine.connect() as conn:
+            preprocessed = conn.execute(
+                text('SELECT platform_review_id, review_id::text FROM reviews_preprocessed '
+                     'WHERE platform_review_id = ANY(:pids)'),
+                {'pids': platform_review_ids},
+            ).all()
+            statuses = dict(conn.execute(
+                text('SELECT review_id::text, processing_status::text FROM review_master_index WHERE app_id = :app_id'),
+                {'app_id': app_id},
+            ).all())
+        assert {tuple(row) for row in preprocessed} == expected
+        assert statuses == {loaded: 'CLEANED', single_loaded: 'CLEANED'}
+    finally:
+        cleanse_logger.removeHandler(warnings)
+        with test_db_engine.begin() as conn:
+            conn.execute(text('DELETE FROM reviews_preprocessed WHERE platform_review_id = ANY(:pids)'),
+                         {'pids': platform_review_ids})
+            conn.execute(text('DELETE FROM review_master_index WHERE app_id = :app_id'), {'app_id': app_id})
+            conn.execute(text('DELETE FROM apps WHERE app_id = :app_id'), {'app_id': app_id})

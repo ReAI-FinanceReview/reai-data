@@ -4,8 +4,8 @@ The App Store runs over real HTTP against ``appstore_rss_server``. Play is never
 its decision, every app empty, is tested as the pure ``playstore_failure`` over results built
 from google-play-scraper-shaped reviews, and in the step tests its app-id file is left empty so
 ``PlayStoreCrawler.run`` raises before any request. The database is the real test database;
-the re-run test also writes to a real MinIO bucket (``minio_bucket``) and loads with the real
-``BatchLoader``.
+the re-run test also writes to a real MinIO bucket (``minio_bucket``), loads with the real
+``BatchLoader`` and cleanses with the real ``ReviewCleaningPipeline``.
 """
 from datetime import datetime
 from pathlib import Path
@@ -172,6 +172,11 @@ def _delete_crawled_rows(engine, platform_app_ids, storage_paths):
             {'ids': platform_app_ids},
         ).scalars())
         conn.execute(text('DELETE FROM app_reviews WHERE app_id = ANY(:ids)'), {'ids': app_ids})
+        conn.execute(
+            text('DELETE FROM reviews_preprocessed WHERE platform_review_id IN '
+                 '(SELECT platform_review_id FROM review_master_index WHERE app_id = ANY(:ids))'),
+            {'ids': app_ids},
+        )
         conn.execute(text('DELETE FROM review_master_index WHERE app_id = ANY(:ids)'), {'ids': app_ids})
         conn.execute(text('DELETE FROM ingestion_batch WHERE storage_path = ANY(:paths)'), {'paths': storage_paths})
         conn.execute(text('DELETE FROM apps WHERE app_id = ANY(:ids)'), {'ids': app_ids})
@@ -182,8 +187,12 @@ def test_retried_crawl_after_the_cutoff_persists_both_runs_and_loads_each_review
     crawl_config, appstore_rss_server, rss_review_entry, minio_bucket, test_db_engine, monkeypatch
 ):
     """Run 1 hits the cutoff but still uploads what it read; the retry, the same day and before any
-    load, re-reads those reviews into a second object; the loader stores each review once."""
+    load, re-reads those reviews into a second object under new review_ids; the loader stores each
+    review once, and the cleanse of that day's Bronze partition keeps only the loaded copy."""
     from src.loaders.batch_loader import BatchLoader
+    from src.processing.cleanse import PROFANITY_PATH, SYNONYMS_PATH, ReviewCleaningPipeline
+    from src.utils.db_connector import DatabaseConnector
+    from src.utils.minio_client import MinIOClient
 
     s3, bucket = minio_bucket
     monkeypatch.setenv('ENABLE_PARQUET_WRITE', 'true')
@@ -246,5 +255,42 @@ def test_retried_crawl_after_the_cutoff_persists_both_runs_and_loads_each_review
         run_3 = run_crawl(crawl_config.path, store='appstore')  # after the load nothing is new
         assert (run_3.status, run_3.output_count) == ('success', 0)
         assert run_3.validations['appstore']['storage_path'] is None
+
+        # The cleanse of that Bronze partition reads both objects: the first app's reviews twice.
+        bronze_date = datetime.strptime(  # bronze/app_reviews/year=YYYY/month=MM/day=DD/<object>
+            '/'.join(Path(storage_paths[0]).parts[2:5]), 'year=%Y/month=%m/day=%d'
+        ).date()
+        minio = MinIOClient()
+        result = ReviewCleaningPipeline(
+            minio_client=minio, db_connector=DatabaseConnector(crawl_config.path),
+            synonyms_path=SYNONYMS_PATH, profanity_path=PROFANITY_PATH,
+        ).run(target_date=bronze_date)
+
+        assert (result['processed'], result['skipped'], result['duplicates_dropped']) == (
+            MAX_REVIEWS * len(store_ids), 0, MAX_REVIEWS,
+        )
+        with test_db_engine.connect() as conn:
+            master = conn.execute(
+                text("SELECT r.platform_review_id, r.review_id::text, r.processing_status::text "
+                     "FROM review_master_index r JOIN apps a ON a.app_id = r.app_id "
+                     "WHERE a.platform_type = 'APPSTORE' AND a.platform_app_id = ANY(:ids)"),
+                {'ids': store_ids},
+            ).all()
+            preprocessed = conn.execute(
+                text('SELECT platform_review_id, review_id::text FROM reviews_preprocessed '
+                     'WHERE platform_review_id = ANY(:pids)'),
+                {'pids': [row[0] for row in master]},
+            ).all()
+        loaded_review_ids = {platform_review_id: review_id for platform_review_id, review_id, _ in master}
+        assert {status for _, _, status in master} == {'CLEANED'}
+        assert len(preprocessed) == len(loaded_review_ids) == MAX_REVIEWS * len(store_ids)
+        assert dict(preprocessed) == loaded_review_ids
+        silver_keys = {obj['Key'] for obj in s3.list_objects_v2(Bucket=bucket)['Contents']} - set(storage_paths)
+        silver = [
+            (row['platform_review_id'], row['review_id'])
+            for key in silver_keys
+            for row in minio.get_parquet(key).to_pylist()
+        ]
+        assert sorted(silver) == sorted(loaded_review_ids.items())
     finally:
         _delete_crawled_rows(test_db_engine, store_ids, [p for p in storage_paths if p])
