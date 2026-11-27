@@ -952,7 +952,8 @@ def minio_bucket(monkeypatch):
 
     The server is docker-compose.test.yml's ``test-minio`` (``TEST_MINIO_API_PORT``, default 9002)
     unless ``TEST_MINIO_ENDPOINT`` names another; the credentials default to that compose file's.
-    The test is skipped when no MinIO answers there.
+    The test is skipped when no MinIO answers there; a MinIO that answers with an error (wrong
+    credentials, say) fails it.
     """
     import boto3
     from botocore.config import Config
@@ -970,8 +971,10 @@ def minio_bucket(monkeypatch):
     )
     try:
         s3.create_bucket(Bucket=bucket)
-    except (BotoCoreError, ClientError) as exc:
+    except BotoCoreError as exc:  # no answer: connection refused, timed out, unknown host
         pytest.skip(f'test MinIO not reachable at {endpoint}: {exc!r}')
+    except ClientError as exc:  # it answered and refused, e.g. InvalidAccessKeyId
+        pytest.fail(f'test MinIO at {endpoint} refused to create bucket {bucket}: {exc!r}')
     for name, value in {
         'MINIO_ENDPOINT': endpoint, 'MINIO_ACCESS_KEY': access_key,
         'MINIO_SECRET_KEY': secret_key, 'MINIO_BUCKET': bucket,

@@ -16,7 +16,7 @@ passing mock-based test says nothing about the real database. The HTTP stub fixt
 
 | File | Description |
 |------|-------------|
-| `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration, and for the `app_version` backfill a real local App Store RSS HTTP server (`appstore_rss_server`), a config pointed at it (`backfill_config`), and committed seed rows (`backfill_db`). For the crawl step: `crawl_config` (a `CrawlConfig` pointed at that server with per-store app-id files that start empty, the test database, Parquet writes off) and `minio_bucket` (a fresh bucket on the test MinIO, skipped when none answers) |
+| `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration, and for the `app_version` backfill a real local App Store RSS HTTP server (`appstore_rss_server`), a config pointed at it (`backfill_config`), and committed seed rows (`backfill_db`). For the crawl step: `crawl_config` (a `CrawlConfig` pointed at that server with per-store app-id files that start empty, the test database, Parquet writes off) and `minio_bucket` (a fresh bucket on the test MinIO, skipped when none answers, failed when it answers with an error) |
 | `test_backend_datamart_contract.py` | Backend-facing mart contract for the four Gold tables |
 | `test_backend_datamart_serving_readiness.py` | Serving-readiness evidence checks for the mart |
 | `test_post_aggregate_validation.py` | `PostAggregateValidator` checks, severities, and report shape |
@@ -75,8 +75,9 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
 - `crawl_config` leaves both app-id files empty, so a store a test does not fill raises before any
   request; keep the Play file empty so no test reaches the live Play store. `minio_bucket` uses
   docker-compose.test.yml's `test-minio` (`TEST_MINIO_API_PORT`, default 9002) unless
-  `TEST_MINIO_ENDPOINT` names another, creates its own bucket, and skips the test when no MinIO
-  answers.
+  `TEST_MINIO_ENDPOINT` names another, creates its own bucket, and skips the test only when no MinIO
+  answers (a connection error). A MinIO that answers with an error, such as `InvalidAccessKeyId`
+  from wrong `TEST_MINIO_ACCESS_KEY` / `TEST_MINIO_SECRET_KEY`, fails the test instead.
 - There is no `[tool.pytest.ini_options]` section in `pyproject.toml`; markers are registered in
   `pytest_configure` at `conftest.py:667`.
 
