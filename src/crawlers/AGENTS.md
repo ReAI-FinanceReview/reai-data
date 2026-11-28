@@ -41,9 +41,12 @@ None.
 - `UnifiedCrawler` is an orchestrator, not a crawler. Keep it out of the `BaseCrawler` hierarchy.
 - Parquet upload plus `ingestion_batch` registration can be disabled with `ENABLE_PARQUET_WRITE=false`
   (see `.env.example`); code paths must tolerate that flag.
-- Request pacing comes from `crawler_config.yml` `global.delay_between_requests` /
-  `max_retries` / `timeout`, and Play request retries from `playstore.max_retries` /
-  `retry_backoff_seconds`. Never hardcode sleeps or retry counts.
+- Request pacing comes from `crawler_config.yml`: `global.delay_between_requests` between
+  requests and `global.timeout` per request, the one timeout App Store RSS and Play requests
+  share. The only HTTP request retry setting is `playstore.max_retries` /
+  `retry_backoff_seconds`, for Play requests only; App Store RSS requests are not retried.
+  `global.max_retries` is not a request retry: it is the `ingestion_batch` retry budget that the
+  loader uses (`base_crawler.py:42,358,463`). Never hardcode sleeps or retry counts.
 - A `ParquetWriteError` must fail the crawl for that batch rather than silently continuing — a
   registered batch with no Parquet object would strand the loader.
 - Store field paths live once, in each store crawler's static `_extract_platform_review_id` /

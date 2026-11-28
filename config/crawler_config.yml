@@ -1,8 +1,8 @@
 # 크롤러 전역 설정
 global:
   delay_between_requests: 2        # 요청 간 대기시간 (초)
-  max_retries: 3                   # 최대 재시도 횟수
-  timeout: 30                      # 요청 타임아웃 (초)
+  max_retries: 3                   # ingestion_batch 재시도 한도(loader 의 DLQ). HTTP 요청 재시도가 아님: 요청 재시도는 playstore.max_retries(Play 전용)뿐
+  timeout: 30                      # 요청 타임아웃 (초). App Store RSS 와 Play 요청이 함께 씀
 
 # App Store 크롤러 설정
 appstore:
