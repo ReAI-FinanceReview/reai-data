@@ -7,6 +7,8 @@ a ``wrb.fr`` entry whose payload holds the review arrays at [0] and the next-pag
 the live store and nothing is mocked; the crawler runs against the real test database, and the
 Bronze test writes to a real MinIO bucket.
 """
+import subprocess
+import sys
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -213,6 +215,29 @@ def test_a_short_review_array_reads_missing_positions_as_none():
 
     assert review['reviewId'] == 'only-an-id'
     assert {key for key, value in review.items() if value is not None} == {'reviewId'}
+
+
+# ========================================
+# D. NO PROCESS-WIDE TLS CHANGE
+# ========================================
+
+def test_importing_the_crawlers_keeps_the_default_tls_context():
+    """google-play-scraper 1.2.7 switched it to an unverified context on import (#128)."""
+    code = (
+        'import ssl, sys\n'
+        'before = ssl._create_default_https_context\n'
+        'import src.crawlers, src.crawlers.playstore_crawler, src.crawlers.playstore_reviews\n'
+        'import src.crawlers.app_version_backfill, src.crawlers.unified_crawler\n'
+        'context = ssl._create_default_https_context()\n'
+        'print(ssl._create_default_https_context is before, context.verify_mode == ssl.CERT_REQUIRED,\n'
+        '      context.check_hostname, "google_play_scraper" in sys.modules)\n'
+    )
+    result = subprocess.run(
+        [sys.executable, '-c', code], cwd=ROOT, capture_output=True, text=True, check=True,
+        env={'PYTHONPATH': str(ROOT), 'PATH': ''},
+    )
+
+    assert result.stdout.split() == ['True', 'True', 'True', 'False']
 
 
 # ========================================

@@ -5,7 +5,7 @@ including:
 - Database setup and teardown (PostgreSQL with schema initialization)
 - Temporary storage fixtures (Parquet directories)
 - Mock data generators (sample reviews, apps)
-- Mock API fixtures (App Store, Play Store)
+- Mock API fixture (App Store)
 - Real local HTTP servers for the App Store RSS and the Play reviews batchexecute endpoint
 - Database state helpers (pre-populated tables)
 
@@ -484,60 +484,6 @@ def mock_appstore_api(requests_mock):
     )
 
     return requests_mock
-
-
-@pytest.fixture
-def mock_playstore_api(monkeypatch):
-    """Mock google-play-scraper functions.
-
-    Usage in tests:
-        def test_something(mock_playstore_api):
-            # google_play_scraper.reviews() is already mocked
-            crawler.crawl_reviews('com.example.app')
-
-    Returns: Monkeypatch fixture with Play Store functions mocked
-    """
-    from unittest.mock import MagicMock
-
-    # Mock reviews() function
-    mock_reviews_result = (
-        [
-            {
-                'reviewId': 'mock_play_review_1',
-                'userName': 'PlayUser1',
-                'content': 'Excellent app!',
-                'score': 5,
-                'at': datetime(2026, 2, 4, 12, 0, 0, tzinfo=timezone.utc),
-                'appVersion': '1.0.0'
-            },
-            {
-                'reviewId': 'mock_play_review_2',
-                'userName': 'PlayUser2',
-                'content': 'Very good',
-                'score': 4,
-                'at': datetime(2026, 2, 4, 11, 0, 0, tzinfo=timezone.utc),
-                'appVersion': '1.0.0'
-            }
-        ],
-        None  # continuation_token
-    )
-
-    mock_reviews = MagicMock(return_value=mock_reviews_result)
-
-    # Mock app() function
-    mock_app_result = {
-        'title': 'Mock Play Store App',
-        'installs': '1,000+',
-        'score': 4.5
-    }
-
-    mock_app = MagicMock(return_value=mock_app_result)
-
-    # Patch google_play_scraper
-    monkeypatch.setattr('google_play_scraper.reviews', mock_reviews)
-    monkeypatch.setattr('google_play_scraper.app', mock_app)
-
-    return monkeypatch
 
 
 # ========================================
