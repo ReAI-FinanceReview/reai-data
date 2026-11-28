@@ -7,6 +7,7 @@ a ``wrb.fr`` entry whose payload holds the review arrays at [0] and the next-pag
 the live store and nothing is mocked; the crawler runs against the real test database, and the
 Bronze test writes to a real MinIO bucket.
 """
+import json
 import subprocess
 import sys
 import time
@@ -35,6 +36,7 @@ CONFIG = yaml.safe_load((ROOT / 'config' / 'crawler_config.yml').read_text(encod
 REVIEWS_PER_APP = CONFIG['playstore']['reviews_per_app']
 APP = 'com.example.bank'
 RPC_ID = CONFIG['playstore']['reviews_rpc_id']
+REQUIRED_ONLY_ITEM = ['only-required', None, 4, None, None, [PLAY_REVIEW_AT]]  # reviewId [0], score [2], at [5][0]
 
 
 @pytest.fixture
@@ -47,6 +49,11 @@ def settings(play_reviews_server):
 
 def _items(play_review_item, prefix, count):
     return [play_review_item(f'{prefix}-{i}', '7.0.0', at=PLAY_REVIEW_AT - i) for i in range(count)]
+
+
+def _page_body(items, tail):
+    """A response body whose payload holds ``items`` at [0] and ``tail`` in the token slot [-2]."""
+    return PlayReviewsServer.envelope(RPC_ID, json.dumps([items, tail, None]))
 
 
 # ========================================
@@ -176,6 +183,60 @@ def test_a_malformed_response_raises(play_reviews_server, settings, body):
     assert len(play_reviews_server.requests_for(APP)) == 1  # not retried
 
 
+@pytest.mark.parametrize('body, match', [
+    pytest.param(
+        PlayReviewsServer.PREFIX + json.dumps([['wrb.fr', RPC_ID]]), 'without a payload', id='entry_too_short'
+    ),
+    pytest.param(PlayReviewsServer.PREFIX + '[' * 100000, 'RecursionError', id='envelope_too_deep'),
+    pytest.param(PlayReviewsServer.envelope(RPC_ID, '[' * 100000), 'RecursionError', id='payload_too_deep'),
+    pytest.param(_page_body({}, None), 'reviews dict', id='reviews_empty_object'),
+    pytest.param(_page_body(0, None), 'reviews int', id='reviews_zero'),
+    pytest.param(_page_body([REQUIRED_ONLY_ITEM], 'abc'), 'token slot str', id='token_slot_string'),
+])
+def test_a_malformed_response_raises_naming_what_is_wrong(play_reviews_server, settings, body, match):
+    play_reviews_server.push(APP, PlayAnswer(body=body))
+
+    with pytest.raises(PlayReviewsError, match=match):
+        fetch_reviews_page(APP, 10, settings)
+    assert len(play_reviews_server.requests_for(APP)) == 1  # not retried
+
+
+@pytest.mark.parametrize('prepended', [None, 'extra'])
+def test_a_review_shifted_by_one_position_raises_without_its_text(
+    play_reviews_server, settings, play_review_item, prepended
+):
+    """Every position moves, as if Play added a field in front; the error names types, never values."""
+    item = play_review_item('r-0', content='오류 메시지에 나오면 안 되는 본문', user_name='나오면 안 되는 이름')
+    body = PlayReviewsServer.envelope(RPC_ID, PlayReviewsServer.page_payload([[prepended] + item], None))
+    play_reviews_server.push(APP, PlayAnswer(body=body))
+
+    with pytest.raises(PlayReviewsError, match='item 0 (reviewId|score) is ') as raised:
+        fetch_reviews_page(APP, 10, settings)
+    assert '안 되는' not in str(raised.value)
+    assert len(play_reviews_server.requests_for(APP)) == 1  # not retried
+
+
+@pytest.mark.parametrize('position, value, message', [
+    (0, '', 'reviewId is str'),
+    (0, 7, 'reviewId is int'),
+    (2, 0, 'score is int'),
+    (2, 6, 'score is int'),
+    (2, True, 'score is bool'),
+    (2, '4', 'score is str'),
+    (5, None, 'at is NoneType'),
+    (5, [str(PLAY_REVIEW_AT), 0], 'at is str'),
+])
+def test_a_review_without_a_required_field_raises_naming_the_item_and_field(
+    play_review_item, position, value, message
+):
+    items = [play_review_item('r-0'), play_review_item('r-1')]
+    items[1][position] = value
+    body = PlayReviewsServer.envelope(RPC_ID, PlayReviewsServer.page_payload(items, None))
+
+    with pytest.raises(PlayReviewsError, match=f'item 1 {message}, expected '):
+        parse_reviews_response(body, RPC_ID)
+
+
 def test_a_bad_continuation_token_raises_instead_of_ending_the_feed(play_reviews_server, settings, play_review_item):
     play_reviews_server.set_reviews(APP, _items(play_review_item, 'r', 3))
 
@@ -225,13 +286,13 @@ def test_review_fields_without_reply_or_version(play_review_item):
     assert PlayStoreCrawler._extract_app_version(review) is None
 
 
-def test_a_short_review_array_reads_missing_positions_as_none():
+def test_a_short_review_array_reads_missing_optional_positions_as_none():
     [review] = parse_reviews_response(
-        PlayReviewsServer.envelope(RPC_ID, PlayReviewsServer.page_payload([['only-an-id']], None)), RPC_ID
+        PlayReviewsServer.envelope(RPC_ID, PlayReviewsServer.page_payload([REQUIRED_ONLY_ITEM], None)), RPC_ID
     ).reviews
 
-    assert review['reviewId'] == 'only-an-id'
-    assert {key for key, value in review.items() if value is not None} == {'reviewId'}
+    assert (review['reviewId'], review['score']) == ('only-required', 4)
+    assert {key for key, value in review.items() if value is not None} == {'reviewId', 'score', 'at'}
 
 
 # ========================================
@@ -303,6 +364,22 @@ def test_every_app_failing_fails_the_store(crawl_config, play_reviews_server):
 
     assert summary.failure == 'Play Store: 앱 2개 모두 리뷰 0건'
     assert [(app.outcome, app.fetched) for app in summary.apps] == [(OUTCOME_ERROR, 0)] * 2
+
+
+@pytest.mark.requires_db
+def test_a_review_whose_positions_moved_makes_the_app_an_error(crawl_config, play_reviews_server, play_review_item):
+    play_reviews_server.set_reviews('com.example.ok', _items(play_review_item, 'ok', 2))
+    play_reviews_server.set_reviews(
+        'com.example.moved', [[None] + item for item in _items(play_review_item, 'moved', 2)]
+    )
+    crawl_config.set_app_ids('playstore', 'com.example.ok', 'com.example.moved')
+
+    summary = PlayStoreCrawler(crawl_config.path).run()
+
+    ok, moved = summary.apps
+    assert (ok.outcome, ok.fetched) == (OUTCOME_OK, 2)
+    assert (moved.outcome, moved.fetched) == (OUTCOME_ERROR, 0)
+    assert 'item 0 reviewId is NoneType' in moved.detail
 
 
 @pytest.mark.requires_db

@@ -21,7 +21,7 @@ already in `app_reviews` and UPDATEs only their NULL `app_version`, plus `update
 | `base_crawler.py` | `BaseCrawler(ABC)`: config/app-id loading, request pacing, `collect_app_records()`, `save_crawl_batch()`, `save_daily_batch()`, `run()` template. Owns Parquet format consistency for all stores |
 | `appstore_crawler.py` | `AppStoreCrawler`: reads each app through `appstore_rss.read_feed` (`read_reviews`: stops once `appstore.max_reviews_per_app` reviews are in, never at an empty page); app-id file from `config.app_ids.appstore`. `run()` returns a `StoreCrawlSummary` with each app's `read_outcome`, and sets `failure` at the empty-feed cutoff (`appstore.max_consecutive_empty_feeds`). App name: the RSS app-metadata entry's `im:name`, else `app_{app_id}`. Record `app_version` comes from the entry's `im:version.label` via the static `_extract_app_version` |
 | `playstore_crawler.py` | `PlayStoreCrawler`: reads each app through `playstore_reviews.fetch_reviews_page` (`get_playstore_reviews`: up to `playstore.reviews_per_app` newest reviews, at most `playstore.page_size` per request, following continuation tokens until a page has none); app-id file from `config.app_ids.playstore`. `run()` returns a `StoreCrawlSummary` (`ok` / `feed_empty` / `error` per app; an app whose request failed is `error` with `fetched` 0) whose `failure` is `playstore_failure`: every app returned zero reviews. App name: the catalog `apps` row's name when that row exists, else `app_{app_id}`. Record `app_version` comes from `reviewCreatedVersion` via the static `_extract_app_version`, `None` when the store omits it |
-| `playstore_reviews.py` | The one Play reviews client, shared by `PlayStoreCrawler` and the backfill (issue #133), replacing google-play-scraper: `fetch_reviews_page` (one batchexecute POST per page to the `playstore.reviews_url` template with RPC id `playstore.reviews_rpc_id`, through `requests` with TLS verification and `global.timeout`; raises `PlayReviewsError` on failure), `parse_reviews_response`, `review_from_item` (google-play-scraper 1.2.7's payload positions for `reviewId`, `userName`, `score`, `content`, `at`, `thumbsUpCount`, `replyContent`, `repliedAt`, `reviewCreatedVersion`), `PlayPage` (`reviews`, `next_token`) and `play_reviews_settings` / `PlayReviewsSettings` |
+| `playstore_reviews.py` | The one Play reviews client, shared by `PlayStoreCrawler` and the backfill (issue #133), replacing google-play-scraper: `fetch_reviews_page` (one batchexecute POST per page to the `playstore.reviews_url` template with RPC id `playstore.reviews_rpc_id`, through `requests` with TLS verification and `global.timeout`; raises `PlayReviewsError` on failure), `parse_reviews_response` (also raises `PlayReviewsError` for a review without a non-empty string `reviewId`, an int `score` from 1 to 5 and an int epoch `at`, which every live review carried), `review_from_item` (google-play-scraper 1.2.7's payload positions for `reviewId`, `userName`, `score`, `content`, `at`, `thumbsUpCount`, `replyContent`, `repliedAt`, `reviewCreatedVersion`), `PlayPage` (`reviews`, `next_token`) and `play_reviews_settings` / `PlayReviewsSettings` |
 | `unified_crawler.py` | `UnifiedCrawler(config_path, stores)`: runs the chosen stores in order (`CRAWL_STORE_CHOICES`: `appstore`, `playstore`, `all` = App Store then Play) and returns one `StoreCrawlSummary` each. A store's crawler is built and run inside its own `try`, so its exception becomes that store's `failure` and the next store still runs. Deliberately **not** a `BaseCrawler` subclass |
 | `appstore_rss.py` | The one App Store RSS reader, shared by `AppStoreCrawler` and the backfill (issue #127): `read_feed` (URL from the `reviews_rss_url` template; reads up to `pages` without stopping at an empty page; `on_page` may stop it; a failed request ends it with `error` naming the page), `appstore_review_entries` (keeps entries with `im:rating`, dropping the app-metadata entry), `appstore_app_name`, `appstore_feed_complete`, `FeedRead` (`fetched`, `empty_pages`, `feed_empty`) and `read_outcome` (`error` / `feed_empty` / `gap` / `ok`) |
 | `crawl_outcome.py` | Crawl outcome types: the `OUTCOME_*` constants, `AppCrawlResult` (per app: `outcome`, `fetched`, `new`, `detail`), `StoreCrawlSummary` (per store: `apps`, `storage_path`, `failure`, `warnings`, `as_dict`) and `playstore_failure` |
@@ -77,20 +77,22 @@ None.
   One app that is empty, has a gap, or fails is a warning: logged at WARNING by the crawler and
   listed in `RunResult.validations[store]['warnings']` by `run_crawl`. A single app such as Hana EZ
   (1472964746), whose page 1 came back empty on the only recorded crawl, must stay a warning.
-- Play reviews are read only through `playstore_reviews.fetch_reviews_page`: one request per
-  page, TLS verified by `requests` (the process-wide default TLS context is left alone), and
+- Play reviews are read only through `playstore_reviews.fetch_reviews_page`: one request per page,
+  TLS verified by `requests` (the process-wide default TLS context is left alone), and
   `global.timeout` per request. Connection errors, timeouts, HTTP 429 / 5xx and a body without a
   payload that carries PlayGatewayError are retried `playstore.max_retries` times, waiting
   `playstore.retry_backoff_seconds` times the retry number. A request that still fails, any other
-  HTTP error, and a body that does not parse (the payload-less entry Play sends for a bad
-  continuation token included) raise `PlayReviewsError`, so a failure never looks like the end of
-  the feed. No live PlayGatewayError answer has been captured, so its name is matched anywhere in
-  a body, but a body with a payload is read as a page: review text can quote the name. The end is
-  a page whose payload `[-2]` is null, so it has no next-page token. Play answers an app with no
-  reviews, and an app id it does not know, with an empty page and no token.
-  Measured on 2026-11-28 (ko/kr, newest first): the 5 apps paged to their end each ended on a
-  partial page without a token, and none of about 50 pages from 7 apps was empty or partial with
-  a token.
+  HTTP error, a body that does not parse (the payload-less entry Play sends for a bad continuation
+  token included), and a review without a non-empty string `reviewId`, an int `score` from 1 to 5 or
+  an int epoch `at` (every live review had all three, so their positions moved; the error names the
+  item, the field and its type, never the value) raise `PlayReviewsError`, so a failure never looks
+  like the end of the feed or a page of empty reviews. No live PlayGatewayError answer has been
+  captured, so its name is matched anywhere in a body, but a body with a payload is read as a page:
+  review text can quote the name. The end is a page whose payload `[-2]` is null, so it has no
+  next-page token. Play answers an app with no reviews, and an app id it does not know, with an
+  empty page and no token. Measured on 2026-11-28 (ko/kr, newest first): the 5 apps paged to their
+  end each ended on a partial page without a token, and none of about 50 pages from 7 apps was empty
+  or partial with a token.
   - Crawl: `PlayStoreCrawler.run` makes an app whose request failed `error` with `fetched` 0, a
     warning. Reviews read before a later page failed are not kept (with `reviews_per_app` at or
     below `page_size` an app is one request).
@@ -133,10 +135,12 @@ Store and Play Store output. `tests/test_bronze_loading.py` covers the Parquet â
 each store's `app_version` mapping into Bronze. `tests/test_playstore_reviews.py` covers the Play
 client over real HTTP against the local `play_reviews_server` (first, next, last and empty page,
 HTTP errors, server-error and PlayGatewayError retries, a review quoting the PlayGatewayError
-name read at once, timeout, malformed bodies, a bad token, field extraction with and without reply
-and version, and the default TLS context left alone on import, checked in a fresh interpreter) and `PlayStoreCrawler.run` over it (every app empty or
-failing fails the store, one failed app is a warning, paging up to `reviews_per_app`, reviews
-into Bronze through a real MinIO bucket with the catalog app name kept).
+name read at once, timeout, malformed bodies, reviews missing a required field or shifted by one
+position, a bad token, field extraction with and without reply and version, and the default TLS
+context left alone on import, checked in a fresh interpreter) and `PlayStoreCrawler.run` over it
+(every app empty or failing fails the store, one failed app is a warning, a review whose positions
+moved makes its app an error, paging up to `reviews_per_app`, reviews into Bronze through a real
+MinIO bucket with the catalog app name kept).
 `tests/test_app_version_backfill.py` covers the backfill: `fetch_appstore_versions`,
 `fetch_playstore_versions` and `backfill_app_versions` run over real HTTP against the local
 `appstore_rss_server` and `play_reviews_server` (conftest) and against committed rows

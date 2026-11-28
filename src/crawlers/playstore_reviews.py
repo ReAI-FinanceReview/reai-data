@@ -40,8 +40,8 @@ _RESPONSE_ENTRY = 'wrb.fr'
 GATEWAY_ERROR_MARKER = 'com.google.play.gateway.proto.PlayGatewayError'
 
 # Positions inside one review item (google-play-scraper 1.2.7 `ElementSpecs.Review`, without
-# `userImage` and the duplicate `appVersion`). A missing position reads as None, as it does there.
-# Positions the library does not map are not read.
+# `userImage` and the duplicate `appVersion`). A missing position reads as None, as it does there,
+# except the fields in _REQUIRED_FIELDS. Positions the library does not map are not read.
 _REVIEW_FIELDS = {
     'reviewId': (0,),
     'userName': (1, 0),
@@ -119,6 +119,25 @@ def _lookup(item: Any, path: Tuple[int, ...]) -> Any:
     return value
 
 
+_SCORES = range(1, 6)  # star ratings
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+# Fields every live review carried (2026-11-28: all 9,882 reviews on 36 captured pages), each with
+# what it must be. A review without one means the positions moved, so parse_reviews_response
+# raises instead of reading None.
+_REQUIRED_FIELDS = {
+    'reviewId': ('a non-empty str', lambda value: isinstance(value, str) and value != ''),
+    'score': (
+        f'an int from {_SCORES[0]} to {_SCORES[-1]}', lambda value: _is_int(value) and value in _SCORES
+    ),
+    'at': ('an int epoch', _is_int),
+}
+
+
 def review_from_item(item: Any) -> Dict[str, Any]:
     """One review dict with the keys and value types google-play-scraper 1.2.7 returned.
 
@@ -145,20 +164,35 @@ def parse_reviews_response(text: str, rpc_id: str) -> PlayPage:
             item for item in envelope
             if isinstance(item, list) and item[:2] == [_RESPONSE_ENTRY, rpc_id]
         )
-    except (ValueError, TypeError, StopIteration) as exc:
+    except (ValueError, TypeError, StopIteration, RecursionError) as exc:
         raise PlayReviewsError(f'no {_RESPONSE_ENTRY} {rpc_id} entry in the response: {exc!r}') from exc
-    if not isinstance(entry[2], str):
+    if len(entry) < 3 or not isinstance(entry[2], str):
         # Seen with a bad continuation token: ["wrb.fr", rpc_id, null, null, null, [3], "generic"].
         raise PlayReviewsError(f'{rpc_id} answered without a payload: {entry!r}')
     try:
         payload = json.loads(entry[2])
-        items = payload[0] or []
+        items = payload[0]
         tail = payload[-2]
-        token = tail[-1] if tail else None
-    except (ValueError, TypeError, IndexError, KeyError) as exc:
+    except (ValueError, TypeError, IndexError, KeyError, RecursionError) as exc:
         raise PlayReviewsError(f'malformed {rpc_id} payload: {exc!r}') from exc
-    if not isinstance(items, list) or not (token is None or isinstance(token, str)):
-        raise PlayReviewsError(f'malformed {rpc_id} payload: reviews {type(items).__name__}, token {token!r}')
+    if items is None:  # a page without reviews
+        items = []
+    if not isinstance(items, list):
+        raise PlayReviewsError(f'malformed {rpc_id} payload: reviews {type(items).__name__}')
+    if tail is not None and not isinstance(tail, list):
+        raise PlayReviewsError(f'malformed {rpc_id} payload: token slot {type(tail).__name__}')
+    token = tail[-1] if tail else None
+    if not (token is None or isinstance(token, str)):
+        raise PlayReviewsError(f'malformed {rpc_id} payload: token {type(token).__name__}')
+    for index, item in enumerate(items):
+        for key, (expected, valid) in _REQUIRED_FIELDS.items():
+            value = _lookup(item, _REVIEW_FIELDS[key])
+            if not valid(value):
+                # The type only: once positions move, the value can be review text or a name.
+                raise PlayReviewsError(
+                    f'malformed {rpc_id} payload: item {index} {key} is {type(value).__name__}, '
+                    f'expected {expected}'
+                )
     return PlayPage([review_from_item(item) for item in items], token)
 
 
