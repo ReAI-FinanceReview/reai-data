@@ -186,6 +186,10 @@ def test_play_gateway_error_is_retried_then_the_page_is_read(play_reviews_server
 @pytest.mark.parametrize('body', [
     pytest.param(PlayReviewsServer.gateway_error_body(RPC_ID), id='entry_without_payload'),
     pytest.param(PlayReviewsServer.PREFIX + '[' * 100000 + GATEWAY_ERROR_MARKER, id='too_deep_to_parse'),
+    pytest.param(
+        PlayReviewsServer.PREFIX + json.dumps([['wrb.fr', RPC_ID], ['er', [GATEWAY_ERROR_MARKER]]]),
+        id='entry_too_short_for_a_payload',
+    ),
 ])
 def test_play_gateway_error_on_every_attempt_raises(play_reviews_server, settings, body):
     attempts = settings.max_retries + 1
