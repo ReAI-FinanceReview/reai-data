@@ -900,3 +900,87 @@ def backfill_db(test_db_engine, test_db_schema, test_db_url, monkeypatch):
     db = BackfillDb(test_db_engine)
     yield db
     db.cleanup()
+
+
+# ========================================
+# CRAWL STEP (Issue #127)
+# ========================================
+
+class CrawlConfig:
+    """config/crawler_config.yml for a crawl test, written under ``tmp_path``.
+
+    The App Store RSS URL points at ``appstore_rss_server``, there is no delay, the crawler's
+    output directories live under ``tmp_path``, and each store reads its app ids from a file of
+    its own that starts empty, so that store's crawler raises before any request (Play never
+    reaches the live store) until set_app_ids fills it.
+    """
+
+    def __init__(self, tmp_path: Path, rss_url_template: str):
+        config = yaml.safe_load(
+            (Path(__file__).resolve().parents[1] / 'config' / 'crawler_config.yml').read_text(encoding='utf-8')
+        )
+        config['global']['delay_between_requests'] = 0
+        config['appstore']['reviews_rss_url'] = rss_url_template
+        config['output']['base_directory'] = str(tmp_path / 'crawler_output')
+        self.app_id_files = {store: tmp_path / f'{store}_app_ids.txt' for store in ('appstore', 'playstore')}
+        for store, path in self.app_id_files.items():
+            path.write_text('', encoding='utf-8')
+            config['app_ids'][store] = str(path)
+        self.config = config
+        self.path = str(tmp_path / 'crawler_config.yml')
+        Path(self.path).write_text(yaml.safe_dump(config, allow_unicode=True), encoding='utf-8')
+
+    def set_app_ids(self, store: str, *app_ids: str) -> None:
+        self.app_id_files[store].write_text(''.join(f'{app_id}\n' for app_id in app_ids), encoding='utf-8')
+
+
+@pytest.fixture
+def crawl_config(tmp_path, appstore_rss_server, test_db_schema, test_db_url, monkeypatch) -> CrawlConfig:
+    """CrawlConfig on the test database with Parquet writes off (no object store, no DB rows).
+
+    The crawlers' DatabaseConnector is pointed at the test database through ``DATABASE_URL``;
+    with ``ENABLE_PARQUET_WRITE=false`` a crawl only reads the store and touches no table.
+    """
+    monkeypatch.setenv('DATABASE_URL', test_db_url)
+    monkeypatch.setenv('ENABLE_PARQUET_WRITE', 'false')
+    return CrawlConfig(tmp_path, appstore_rss_server.url_template)
+
+
+@pytest.fixture
+def minio_bucket(monkeypatch):
+    """A new bucket on the test MinIO, exported as ``MINIO_*`` for MinIOClient; removed afterwards.
+
+    The server is docker-compose.test.yml's ``test-minio`` (``TEST_MINIO_API_PORT``, default 9002)
+    unless ``TEST_MINIO_ENDPOINT`` names another; the credentials default to that compose file's.
+    The test is skipped when no MinIO answers there; a MinIO that answers with an error (wrong
+    credentials, say) fails it.
+    """
+    import boto3
+    from botocore.config import Config
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    endpoint = os.getenv('TEST_MINIO_ENDPOINT', f"http://127.0.0.1:{os.getenv('TEST_MINIO_API_PORT', '9002')}")
+    access_key = os.getenv('TEST_MINIO_ACCESS_KEY', 'minio')
+    secret_key = os.getenv('TEST_MINIO_SECRET_KEY', 'minio123')
+    bucket = f'reai-test-{uuid7().hex}'
+    no_proxy = os.environ.get('NO_PROXY', '')
+    monkeypatch.setenv('NO_PROXY', ','.join(filter(None, [no_proxy, '127.0.0.1', 'localhost'])))
+    s3 = boto3.client(
+        's3', endpoint_url=endpoint, aws_access_key_id=access_key, aws_secret_access_key=secret_key,
+        config=Config(connect_timeout=2, retries={'max_attempts': 1}),
+    )
+    try:
+        s3.create_bucket(Bucket=bucket)
+    except BotoCoreError as exc:  # no answer: connection refused, timed out, unknown host
+        pytest.skip(f'test MinIO not reachable at {endpoint}: {exc!r}')
+    except ClientError as exc:  # it answered and refused, e.g. InvalidAccessKeyId
+        pytest.fail(f'test MinIO at {endpoint} refused to create bucket {bucket}: {exc!r}')
+    for name, value in {
+        'MINIO_ENDPOINT': endpoint, 'MINIO_ACCESS_KEY': access_key,
+        'MINIO_SECRET_KEY': secret_key, 'MINIO_BUCKET': bucket,
+    }.items():
+        monkeypatch.setenv(name, value)
+    yield s3, bucket
+    for obj in s3.list_objects_v2(Bucket=bucket).get('Contents', []):
+        s3.delete_object(Bucket=bucket, Key=obj['Key'])
+    s3.delete_bucket(Bucket=bucket)

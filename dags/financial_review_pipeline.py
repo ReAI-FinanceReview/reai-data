@@ -7,7 +7,8 @@ Financial Review ETL Pipeline DAG
 금융 앱 리뷰 분석을 위한 Airflow DAG.
 
 실행 순서:
-  1. crawl_reviews   — App Store / Play Store 리뷰 크롤링 → MinIO Parquet + IngestionBatch(PENDING)
+  1. crawl_appstore, crawl_playstore — 스토어별 리뷰 크롤링 → MinIO Parquet + IngestionBatch(PENDING)
+     (crawl_watcher — 크롤이 하나라도 끝내 실패하면 실패해 DAG 실행을 실패로 남김)
   2. load_reviews    — IngestionBatch Parquet → ReviewMasterIndex(RAW)
   3. cleanse_reviews — Bronze Parquet → Silver(reviews_preprocessed), ReviewMasterIndex(CLEANED)
   4. gold_analyze    — GoldOrchestrator: embedding → ABSA → action, ReviewMasterIndex(ANALYZED)
@@ -42,21 +43,47 @@ dag = DAG(
     tags=["finance", "etl", "reviews", "nlp"],
 )
 
-# Step 1: 리뷰 크롤링
-# AppStoreCrawler + PlayStoreCrawler → MinIO Parquet + IngestionBatch PENDING
-crawl_reviews = BashOperator(
-    task_id="crawl_reviews",
-    bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/crawl_reviews.py",
+# Step 1: 리뷰 크롤링 (스토어별 태스크)
+# AppStoreCrawler / PlayStoreCrawler → MinIO Parquet + IngestionBatch PENDING
+# 스토어마다 따로 실패하고 따로 재시도한다(default_args 의 3회, 5분 간격). 스토어 단계가 실패하는
+# 경우는 크롤러 예외와 피드 장애 판정이다(App Store: 리뷰를 못 읽은 앱이 연달아
+# appstore.max_consecutive_empty_feeds 개, Play: 모든 앱 0건). 앱 하나가 빈 것은 경고다.
+crawl_appstore = BashOperator(
+    task_id="crawl_appstore",
+    bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/crawl_reviews.py --store appstore",
     dag=dag,
     execution_timeout=timedelta(hours=2),
 )
 
+crawl_playstore = BashOperator(
+    task_id="crawl_playstore",
+    bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/crawl_reviews.py --store playstore",
+    dag=dag,
+    execution_timeout=timedelta(hours=2),
+)
+
+# DAG 실행의 성패는 leaf 태스크로 정해진다. 아래 load_reviews 는 크롤 하나가 실패해도 돌기 때문에
+# 뒤 단계가 성공하면 DAG 실행은 성공이 되어 크롤 실패가 묻힌다. 이 leaf 태스크가 크롤 실패를
+# 받아 실패해 DAG 실행을 실패로 남긴다(Airflow 문서의 watcher 패턴). 크롤이 모두 성공하면 skipped 다.
+crawl_watcher = BashOperator(
+    task_id="crawl_watcher",
+    bash_command='echo "crawl_appstore 또는 crawl_playstore 가 재시도 끝에 실패했다" >&2; exit 1',
+    dag=dag,
+    trigger_rule="one_failed",
+    retries=0,
+)
+
 # Step 2: DB 로드
 # IngestionBatch(PENDING) → ReviewMasterIndex(RAW)
+# trigger_rule="all_done": 두 크롤 태스크가 재시도까지 모두 끝난 뒤, 하나가 실패했어도 적재한다.
+# none_failed_min_one_success 는 크롤 하나만 실패해도 이 태스크를 upstream_failed 로 건너뛰고,
+# one_success 는 다른 스토어의 크롤(과 재시도)을 기다리지 않는다. 둘 다 실패하면 이전 실행이나
+# 장애로 멈춘 크롤이 남긴 PENDING 배치만 적재한다.
 load_reviews = BashOperator(
     task_id="load_reviews",
     bash_command=f"cd {PROJECT_ROOT} && PYTHONPATH=. {PYTHON_BIN} scripts/load_reviews.py",
     dag=dag,
+    trigger_rule="all_done",
     execution_timeout=timedelta(minutes=30),
 )
 
@@ -143,8 +170,10 @@ post_aggregate_validate = BashOperator(
     execution_timeout=timedelta(minutes=15),
 )
 
+[crawl_appstore, crawl_playstore] >> crawl_watcher
+
 (
-    crawl_reviews
+    [crawl_appstore, crawl_playstore]
     >> load_reviews
     >> cleanse_reviews
     >> gold_analyze

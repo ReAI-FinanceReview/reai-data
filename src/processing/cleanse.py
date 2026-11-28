@@ -208,6 +208,16 @@ def write_silver_parquet(
 # ReviewCleaningPipeline
 # =========================================================
 
+def _parse_review_id(value: Any) -> UUID | None:
+    """Bronze 행의 review_id 를 UUID 값으로 읽는다. 비었거나 UUID 가 아니면 None 이다."""
+    if not value:
+        return None
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
 class ReviewCleaningPipeline:
     """Bronze → Silver 정제 파이프라인.
 
@@ -236,13 +246,15 @@ class ReviewCleaningPipeline:
         """지정 날짜의 Bronze 데이터를 정제하여 Silver에 저장한다.
 
         Returns:
-            dict: {'processed': int, 'skipped': int, 'elapsed_sec': float}
+            dict: {'processed': int, 'skipped': int, 'duplicates_dropped': int,
+                   'elapsed_sec': float}
         """
         start = time.time()
         logger.info(f"[CleansePipeline] Start: target_date={target_date}")
 
         bronze_rows = load_bronze_parquet(self.minio, target_date)
         logger.info(f"  Loaded {len(bronze_rows)} rows from Bronze")
+        bronze_rows, duplicates_dropped = self._drop_duplicate_bronze_rows(bronze_rows)
 
         processed = 0
         skipped = 0
@@ -291,9 +303,78 @@ class ReviewCleaningPipeline:
         elapsed = round(time.time() - start, 2)
         logger.info(
             f"[CleansePipeline] Done: processed={processed}, "
-            f"skipped={skipped}, elapsed={elapsed}s"
+            f"skipped={skipped}, duplicates_dropped={duplicates_dropped}, elapsed={elapsed}s"
         )
-        return {'processed': processed, 'skipped': skipped, 'elapsed_sec': elapsed}
+        return {
+            'processed': processed,
+            'skipped': skipped,
+            'duplicates_dropped': duplicates_dropped,
+            'elapsed_sec': elapsed,
+        }
+
+    def _drop_duplicate_bronze_rows(
+        self,
+        bronze_rows: List[Dict[str, Any]],
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """한 platform_review_id 가 여러 review_id 로 들어 있으면 적재된 사본만 남긴다.
+
+        App Store 크롤이 empty-feed cutoff 로 실패해도 읽은 리뷰는 올리고, Airflow 재시도는
+        load_reviews 전에 돈다. 크롤러는 review_master_index 로만 중복을 거르므로 재시도는 같은
+        리뷰에 새 uuid7 review_id 를 붙여 같은 날짜 폴더에 객체를 하나 더 올린다
+        (BaseCrawler.save_daily_batch). BatchLoader 는 platform_review_id 마다 한 번만 적재하므로
+        그중 review_master_index 에 있는 review_id 의 행만 남기고 나머지 사본은 버린다. 어느
+        review_id 도 없으면 적재되지 않은 리뷰라 CLEANED 로 표시할 수 없으므로 묶음째 버린다.
+
+        review_id 가 하나뿐인 platform_review_id 는 조회하지 않고 그대로 둔다. review_id 는 UUID 값으로
+        비교하므로 표기(대소문자, 중괄호)가 달라도 같은 id 로 본다.
+
+        Returns:
+            (남길 행, 버린 행 수)
+        """
+        review_ids_by_platform_review_id: Dict[str, set[UUID]] = defaultdict(set)
+        for row in bronze_rows:
+            platform_review_id = row.get('platform_review_id')
+            review_id = _parse_review_id(row.get('review_id'))
+            if platform_review_id and review_id:
+                review_ids_by_platform_review_id[platform_review_id].add(review_id)
+        duplicated = {
+            platform_review_id: review_ids
+            for platform_review_id, review_ids in review_ids_by_platform_review_id.items()
+            if len(review_ids) > 1
+        }
+        if not duplicated:
+            return bronze_rows, 0
+
+        from src.models.review_master_index import ReviewMasterIndex
+
+        candidate_review_ids = [
+            review_id for review_ids in duplicated.values() for review_id in review_ids
+        ]
+        session = self.db.get_session()
+        try:
+            loaded_review_ids = {
+                review_id
+                for (review_id,) in session.query(ReviewMasterIndex.review_id)
+                .filter(ReviewMasterIndex.review_id.in_(candidate_review_ids))
+                .all()
+            }
+        finally:
+            session.close()
+
+        kept_rows = [
+            row for row in bronze_rows
+            if row.get('platform_review_id') not in duplicated
+            or _parse_review_id(row.get('review_id')) in loaded_review_ids
+        ]
+        dropped = len(bronze_rows) - len(kept_rows)
+        unloaded = sum(
+            1 for review_ids in duplicated.values() if not review_ids & loaded_review_ids
+        )
+        logger.warning(
+            f"  Dropped {dropped} duplicate Bronze rows: {len(duplicated)} platform_review_ids "
+            f"had more than one review_id, {unloaded} of them with none in review_master_index"
+        )
+        return kept_rows, dropped
 
     def _mark_review_failed(self, review_id: str, error_message: str) -> None:
         """Record a row-level cleanse failure in ReviewMasterIndex.

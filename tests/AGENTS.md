@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-27T00:00:00Z -->
 
 # tests
 
@@ -16,11 +16,11 @@ passing mock-based test says nothing about the real database. The HTTP stub fixt
 
 | File | Description |
 |------|-------------|
-| `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration, and for the `app_version` backfill a real local App Store RSS HTTP server (`appstore_rss_server`), a config pointed at it (`backfill_config`), and committed seed rows (`backfill_db`) |
+| `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration, and for the `app_version` backfill a real local App Store RSS HTTP server (`appstore_rss_server`), a config pointed at it (`backfill_config`), and committed seed rows (`backfill_db`). For the crawl step: `crawl_config` (a `CrawlConfig` pointed at that server with per-store app-id files that start empty, the test database, Parquet writes off) and `minio_bucket` (a fresh bucket on the test MinIO, skipped when none answers, failed when it answers with an error) |
 | `test_backend_datamart_contract.py` | Backend-facing mart contract for the four Gold tables |
 | `test_backend_datamart_serving_readiness.py` | Serving-readiness evidence checks for the mart |
 | `test_post_aggregate_validation.py` | `PostAggregateValidator` checks, severities, and report shape |
-| `test_cleanse.py` | Bronze → Silver cleansing rules, dictionaries, PII masking |
+| `test_cleanse.py` | Bronze → Silver cleansing rules, dictionaries, PII masking, and dropping the duplicate Bronze rows a retried crawl leaves (test MinIO and test database) |
 | `test_gold_absa_analyzer.py` | Keyword/sentiment/category extraction, negation, embedding fallback |
 | `test_gold_action_analyzer.py` | Attention/action rules, Snorkel labeling functions, LLM summary |
 | `test_gold_aggregator.py` | Fact table + serving mart UPSERT semantics |
@@ -32,6 +32,9 @@ passing mock-based test says nothing about the real database. The HTTP stub fixt
 | `test_bronze_loading.py` | Bronze Parquet → DB load integration |
 | `test_app_version_backfill.py` | `app_version` backfill (issue #125): shared id/version extraction, App Store fetch over HTTP against the local RSS server (gaps, early stop, HTTP error, empty feed, feed end), confirmed vs unverified misses, Play paging decisions and the twice-requested Play end (`play_end_stop_reason`, `confirm_play_end`), `updated_at`, dry-run / apply / re-run, per-app commits, an app whose UPDATE fails on a held row lock being rolled back alone, no open transaction while waiting, the empty-feed cutoff |
 | `test_backfill_app_version_cli.py` | `scripts/backfill_app_version.py` `main()`: exit codes 0/1/3 (and 2 left to argparse) and the `--platform` mapping, against the test database and the local RSS server |
+| `test_appstore_rss.py` | Shared App Store RSS reader (issue #127) and `AppStoreCrawler` over HTTP against the local RSS server: empty pages read past, failed request, app-metadata entry, `read_outcome`, `max_reviews_per_app` stop, one empty app as a warning, gap pages, the empty-feed cutoff |
+| `test_crawl_outcome.py` | `playstore_failure` (every Play app empty) on google-play-scraper-shaped data, `run_crawl` store selection and per-store failure, the CLI crawl step, and a same-day retry after the cutoff through a real MinIO bucket, `BatchLoader` and the cleanse (each review loaded once and cleansed once) |
+| `test_crawl_reviews_cli.py` | `scripts/crawl_reviews.py` `main()`: exit codes 0/1 (and 2 left to argparse) and the `--store` default |
 | `test_crawler_consistency.py` | `save_daily_batch` upload → PENDING registration order and failure cleanup (App Store crawler only; no cross-store parity check) |
 | `test_database_schema.py` | Schema objects created by `schema_v4.sql` |
 | `test_parquet_schemas.py` / `test_parquet_writer.py` | Pydantic Parquet schemas and writer partitioning |
@@ -69,6 +72,12 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
   afterwards. It points the backfill at the test database by setting `DATABASE_URL`, and fails up
   front if any `app_reviews` row without `app_version` is already there, because the backfill
   would fetch that app too, and for Play that means the live store.
+- `crawl_config` leaves both app-id files empty, so a store a test does not fill raises before any
+  request; keep the Play file empty so no test reaches the live Play store. `minio_bucket` uses
+  docker-compose.test.yml's `test-minio` (`TEST_MINIO_API_PORT`, default 9002) unless
+  `TEST_MINIO_ENDPOINT` names another, creates its own bucket, and skips the test only when no MinIO
+  answers (a connection error). A MinIO that answers with an error, such as `InvalidAccessKeyId`
+  from wrong `TEST_MINIO_ACCESS_KEY` / `TEST_MINIO_SECRET_KEY`, fails the test instead.
 - There is no `[tool.pytest.ini_options]` section in `pyproject.toml`; markers are registered in
   `pytest_configure` at `conftest.py:667`.
 
@@ -77,7 +86,7 @@ This is the one canonical way to run the suite; other `AGENTS.md` files only nam
 pass to the same `pytest` command.
 
 ```bash
-docker compose -f docker-compose.test.yml up -d test-postgres
+docker compose -f docker-compose.test.yml up -d test-postgres test-minio
 PYTHONPATH=. uv run pytest            # full suite
 PYTHONPATH=. uv run pytest -m "not requires_db"   # NOT DB-free, see below
 ```
@@ -107,7 +116,7 @@ unreachable address; those two tests then skip.
 `config/dictionaries/`.
 
 ### External
-`pytest`, `sqlalchemy`, `uuid6`, `pyarrow`. `mock_appstore_api` in `conftest.py` expects the
+`pytest`, `sqlalchemy`, `uuid6`, `pyarrow`, `boto3` (`minio_bucket`). `mock_appstore_api` in `conftest.py` expects the
 requests-mock plugin, which is not a dependency (see `src/crawlers/AGENTS.md`).
 
 <!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->

@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-27T00:00:00Z -->
 
 # src/models
 
@@ -50,7 +50,8 @@ None.
   modules rely on `from src.models import X`.
 - `Review` (`app_reviews`) and `ReviewPreprocessed` (`reviews_preprocessed`) rows live in
   PostgreSQL and are queried: the loader inserts `app_reviews` (`src/loaders/batch_loader.py:214`),
-  cleansing upserts `reviews_preprocessed` (`src/processing/cleanse.py:426`), and Gold reads both
+  cleansing upserts `reviews_preprocessed` (`ReviewCleaningPipeline._update_db_status` in
+  `src/processing/cleanse.py`), and Gold reads both
   (`src/gold/absa_analyzer.py:239,635`, `src/gold/action_analyzer.py:228`). The Parquet files are
   copies, so a column change goes into the model and `src/schemas/parquet/` together, and for Silver
   also into the record dicts `src/processing/cleanse.py` writes, which no schema checks. The module

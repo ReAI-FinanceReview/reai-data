@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-27T00:00:00Z -->
 
 # src/utils
 
@@ -31,7 +31,8 @@ None.
   `src/processing/`. Utilities depend downward only (`src/models/`, `src/schemas/`).
 - `PathResolver` resolves `config/paths.yml`, but no production code uses it — only
   `tests/test_path_resolver.py`. MinIO object keys are built at their call sites
-  (`src/crawlers/base_crawler.py:433-436`, `src/processing/cleanse.py:173-178,197-201`) in the
+  (`BaseCrawler.save_daily_batch` in `src/crawlers/base_crawler.py`,
+  `src/processing/cleanse.py:173-178,197-201`) in the
   bucket named by `MINIO_BUCKET`; the crawler's Bronze key and the cleanse step's Bronze prefix must
   stay in agreement. Do not hardcode local filesystem paths such as `data/` or `/mnt/nas/...`.
 - `MINIO_ENDPOINT` selects the backend: `host:9000` (no scheme) targets MinIO, unset/empty targets

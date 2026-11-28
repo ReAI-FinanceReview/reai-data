@@ -35,14 +35,15 @@ None.
 - App Store entries are numeric IDs; Play Store entries are package names. Mixing them silently
   yields empty crawls.
 - File locations are configurable via `config/crawler_config.yml`; do not hardcode these paths in
-  new code — read them from config as `src/crawlers/appstore_crawler.py:39` /
-  `src/crawlers/playstore_crawler.py:36` do.
+  new code — read them from config as `AppStoreCrawler.__init__` /
+  `PlayStoreCrawler.__init__` do.
 
 ### Testing Requirements
 No test reads these files directly (`tests/conftest.py` defines a `sample_app_id_file` fixture, but
-no test uses it). There is no scoped crawl: `scripts/crawl_reviews.py` takes no arguments and crawls
-every app in both lists through `UnifiedCrawler` (`src/pipeline/steps.py:42-46`), uploading Bronze
-Parquet to MinIO and registering `ingestion_batch` rows. Run it only against the local stack
+no test uses it; the crawl tests write their own lists through `crawl_config`). There is no
+per-app crawl: `scripts/crawl_reviews.py` crawls every app in one list (`--store appstore` or
+`--store playstore`) or, by default, in both (`run_crawl` through `UnifiedCrawler`), uploading
+Bronze Parquet to MinIO and registering `ingestion_batch` rows. Run it only against the local stack
 (`docs/local-development.md`), and expect it to write a full batch there:
 
 ```bash

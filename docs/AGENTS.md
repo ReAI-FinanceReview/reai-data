@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-22T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
 
 # docs
 
@@ -13,7 +13,7 @@ of the delivery contract.
 | File | Description |
 |------|-------------|
 | `backend-datamart-contract.md` | Physical table contract for the four backend-facing Gold tables; the authoritative interface for dashboard consumers |
-| `airflow-continuous-load-readiness.md` | Defines DAG success as task success **plus** the `post_aggregate_validate` DB check, and the severity policy behind it |
+| `airflow-continuous-load-readiness.md` | Defines DAG success as task success **plus** the `post_aggregate_validate` DB check, and the severity policy behind it, including the per-store crawl tasks (app-level warnings vs store failures, `load_reviews` `all_done`, the `crawl_watcher` leaf) |
 | `backend-datamart-serving-readiness.md` | Runbook for the manual release proof of mart serving readiness |
 | `local-development.md` | Local stack setup: docker compose, `.env.local.example`, bootstrap, minimum ETL flow, verification queries |
 | `schema-management.md` | Alembic baseline strategy, migration workflow, reference-data ownership, pre-merge checklist |
