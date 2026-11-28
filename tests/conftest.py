@@ -797,11 +797,17 @@ def play_review_item():
 @dataclass
 class PlayAnswer:
     """A one-off answer queued with PlayReviewsServer.push: an HTTP ``status``, a raw ``body``
-    (``None``: the page the request asks for), after waiting ``delay`` seconds."""
+    (``None``: the page the request asks for), after waiting ``delay`` seconds. ``drop`` closes the
+    connection instead of answering in full: ``BEFORE_ANSWER`` sends nothing (requests raises
+    ConnectionError), ``MID_BODY`` sends the headers and half the body (ChunkedEncodingError)."""
+
+    BEFORE_ANSWER = 'before_answer'
+    MID_BODY = 'mid_body'
 
     status: int = 200
     body: Optional[str] = None
     delay: float = 0
+    drop: Optional[str] = None
 
 
 class PlayReviewsServer:
@@ -822,11 +828,16 @@ class PlayReviewsServer:
         self.reviews: Dict[str, List[List[Any]]] = {}
         self.answers: Dict[str, List[PlayAnswer]] = {}
         self.requests: List[Dict[str, Any]] = []
+        self.connections = 0  # accepted, including ones that never became a request (a TLS handshake)
         self._tokens: Dict[str, tuple] = {}
         self._release = threading.Event()
         play = self
 
         class Handler(BaseHTTPRequestHandler):
+            def setup(self):
+                play.connections += 1
+                super().setup()
+
             def do_POST(self):
                 url = urlsplit(self.path)
                 if url.path != play.PATH:
@@ -846,6 +857,9 @@ class PlayReviewsServer:
                 answer = queued.pop(0) if queued else PlayAnswer()
                 if answer.delay:
                     play._release.wait(answer.delay)
+                if answer.drop == PlayAnswer.BEFORE_ANSWER:
+                    self.close_connection = True
+                    return
                 if answer.status != 200:
                     self.send_error(answer.status)
                     return
@@ -855,6 +869,10 @@ class PlayReviewsServer:
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.send_header('Content-Length', str(len(data)))
                 self.end_headers()
+                if answer.drop == PlayAnswer.MID_BODY:
+                    self.wfile.write(data[:len(data) // 2])
+                    self.close_connection = True
+                    return
                 self.wfile.write(data)
 
             def log_message(self, *args):

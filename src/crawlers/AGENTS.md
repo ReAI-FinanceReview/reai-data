@@ -79,20 +79,21 @@ None.
   (1472964746), whose page 1 came back empty on the only recorded crawl, must stay a warning.
 - Play reviews are read only through `playstore_reviews.fetch_reviews_page`: one request per page,
   TLS verified by `requests` (the process-wide default TLS context is left alone), and
-  `global.timeout` per request. Connection errors, timeouts, HTTP 429 / 5xx and a body without a
-  payload that carries PlayGatewayError are retried `playstore.max_retries` times, waiting
-  `playstore.retry_backoff_seconds` times the retry number. A request that still fails, any other
-  HTTP error, a body that does not parse (the payload-less entry Play sends for a bad continuation
-  token included), and a review without a non-empty string `reviewId`, an int `score` from 1 to 5 or
-  an int epoch `at` (every live review had all three, so their positions moved; the error names the
-  item, the field and its type, never the value) raise `PlayReviewsError`, so a failure never looks
-  like the end of the feed or a page of empty reviews. No live PlayGatewayError answer has been
-  captured, so its name is matched anywhere in a body, but a body with a payload is read as a page:
-  review text can quote the name. The end is a page whose payload `[-2]` is null, so it has no
-  next-page token. Play answers an app with no reviews, and an app id it does not know, with an
-  empty page and no token. Measured on 2026-11-28 (ko/kr, newest first): the 5 apps paged to their
-  end each ended on a partial page without a token, and none of about 50 pages from 7 apps was empty
-  or partial with a token.
+  `global.timeout` per request. Connection errors (a connection dropped while the body is read
+  included), timeouts, HTTP 429 / 5xx and a body without a payload that carries PlayGatewayError are
+  retried `playstore.max_retries` times, waiting `playstore.retry_backoff_seconds` times the retry
+  number. A request that still fails, a TLS failure (certificate verification or handshake, raised
+  at once), any other HTTP error, a body that does not parse (the payload-less entry Play sends for
+  a bad continuation token included), and a review without a non-empty string `reviewId`, an int
+  `score` from 1 to 5 or an int epoch `at` (every live review had all three, so their positions
+  moved; the error names the item, the field and its type, never the value) raise
+  `PlayReviewsError`, so a failure never looks like the end of the feed or a page of empty reviews.
+  No live PlayGatewayError answer has been captured, so its name is matched anywhere in a body, but
+  a body with a payload is read as a page: review text can quote the name. The end is a page whose
+  payload `[-2]` is null, so it has no next-page token. Play answers an app with no reviews, and an
+  app id it does not know, with an empty page and no token. Measured on 2026-11-28 (ko/kr, newest
+  first): the 5 apps paged to their end each ended on a partial page without a token, and none of
+  about 50 pages from 7 apps was empty or partial with a token.
   - Crawl: `PlayStoreCrawler.run` makes an app whose request failed `error` with `fetched` 0, a
     warning. Reviews read before a later page failed are not kept (with `reviews_per_app` at or
     below `page_size` an app is one request).
@@ -134,13 +135,13 @@ the uploaded object. It drives `AppStoreCrawler` with stand-in records, so no te
 Store and Play Store output. `tests/test_bronze_loading.py` covers the Parquet → DB handoff and
 each store's `app_version` mapping into Bronze. `tests/test_playstore_reviews.py` covers the Play
 client over real HTTP against the local `play_reviews_server` (first, next, last and empty page,
-HTTP errors, server-error and PlayGatewayError retries, a review quoting the PlayGatewayError
-name read at once, timeout, malformed bodies, reviews missing a required field or shifted by one
-position, a bad token, field extraction with and without reply and version, and the default TLS
-context left alone on import, checked in a fresh interpreter) and `PlayStoreCrawler.run` over it
-(every app empty or failing fails the store, one failed app is a warning, a review whose positions
-moved makes its app an error, paging up to `reviews_per_app`, reviews into Bronze through a real
-MinIO bucket with the catalog app name kept).
+HTTP errors, server-error, dropped-connection and PlayGatewayError retries, a review quoting the
+PlayGatewayError name read at once, a TLS failure raised at once, timeout, malformed bodies,
+reviews missing a required field or shifted by one position, a bad token, field extraction with
+and without reply and version, and the default TLS context left alone on import, checked in a
+fresh interpreter) and `PlayStoreCrawler.run` over it (every app empty or failing fails the store,
+one failed app is a warning, a review whose positions moved makes its app an error, paging up to
+`reviews_per_app`, reviews into Bronze through a real MinIO bucket with the catalog app name kept).
 `tests/test_app_version_backfill.py` covers the backfill: `fetch_appstore_versions`,
 `fetch_playstore_versions` and `backfill_app_versions` run over real HTTP against the local
 `appstore_rss_server` and `play_reviews_server` (conftest) and against committed rows

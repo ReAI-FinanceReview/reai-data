@@ -130,6 +130,34 @@ def test_a_timeout_raises(play_reviews_server, settings, play_review_item):
     assert len(play_reviews_server.requests_for(APP)) == 2
 
 
+@pytest.mark.parametrize('drop, error', [
+    (PlayAnswer.BEFORE_ANSWER, 'ConnectionError'),
+    (PlayAnswer.MID_BODY, 'ChunkedEncodingError'),
+])
+def test_a_dropped_connection_is_retried_and_raised_once_retries_run_out(
+    play_reviews_server, settings, play_review_item, drop, error
+):
+    play_reviews_server.set_reviews(APP, _items(play_review_item, 'r', 3))
+    attempts = settings.max_retries + 1
+    play_reviews_server.push(APP, *[PlayAnswer(drop=drop)] * attempts)
+
+    with pytest.raises(PlayReviewsError, match=f'{attempts} attempts failed, last: {error}'):
+        fetch_reviews_page(APP, 10, settings)
+    assert len(play_reviews_server.requests_for(APP)) == attempts
+
+    play_reviews_server.push(APP, PlayAnswer(drop=drop))  # one drop, then the page
+    assert len(fetch_reviews_page(APP, 10, settings).reviews) == 3
+
+
+def test_a_tls_failure_raises_at_once(play_reviews_server, settings):
+    """https:// to the plain-HTTP server fails the handshake, so no certificate is needed."""
+    https = replace(settings, url_template=settings.url_template.replace('http://', 'https://', 1))
+
+    with pytest.raises(PlayReviewsError, match='^TLS handshake or certificate verification failed'):
+        fetch_reviews_page(APP, 10, https)
+    assert play_reviews_server.connections == 1  # not retried
+
+
 def test_play_gateway_error_is_retried_then_the_page_is_read(play_reviews_server, settings, play_review_item):
     play_reviews_server.set_reviews(APP, _items(play_review_item, 'r', 3))
     play_reviews_server.push(APP, PlayAnswer(body=PlayReviewsServer.gateway_error_body(RPC_ID)))

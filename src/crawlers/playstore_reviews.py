@@ -9,9 +9,10 @@
 - 응답: 앞의 ``)]}'``를 떼고 JSON으로 읽어 ``["wrb.fr", RPC id, payload, ...]`` 항목을 찾는다.
   payload(JSON 문자열)의 ``[0]``이 리뷰 목록, ``[-2][-1]``이 다음 쪽 토큰이다. 마지막 쪽은
   ``[-2]``가 null이다(2026-11-28 실측: 끝까지 넘긴 앱 5개 모두 덜 찬 쪽에 토큰 없음).
-- 요청 한 번이 한 쪽이다. 요청이 실패하면(HTTP 상태, 연결, timeout, 재시도 뒤에도 남은
-  PlayGatewayError, 모양이 깨진 응답) ``PlayReviewsError``를 올린다. 피드의 끝(토큰 없음)이나
-  빈 목록과는 섞이지 않는다.
+- 요청 한 번이 한 쪽이다. 연결 오류, 본문을 읽다 끊긴 응답, timeout, HTTP 429/5xx, payload 없이
+  PlayGatewayError를 담은 응답은 ``playstore.max_retries``번까지 다시 요청한다. 요청이 실패하면
+  (재시도 뒤에도 남은 위 오류, TLS 실패, 그 밖의 HTTP 상태, 모양이 깨진 응답) ``PlayReviewsError``를
+  올린다. 피드의 끝(토큰 없음)이나 빈 목록과는 섞이지 않는다.
 - TLS는 requests가 검증하고, 프로세스의 기본 TLS 컨텍스트는 건드리지 않는다.
 """
 
@@ -213,8 +214,9 @@ def _has_payload(text: str, rpc_id: str) -> bool:
 def _post(url: str, form: Dict[str, str], settings: PlayReviewsSettings) -> str:
     """POST with TLS verification and the timeout, retrying transient failures with linear backoff.
 
-    Retried: connection errors, timeouts, HTTP 429 and 5xx, and a body without a payload that
-    carries PlayGatewayError. Any other HTTP error status is raised at once.
+    Retried: connection errors, a connection dropped while the body is read, timeouts, HTTP 429
+    and 5xx, and a body without a payload that carries PlayGatewayError. A TLS failure (certificate
+    verification or handshake) and any other HTTP error status are raised at once.
     """
     attempts = settings.max_retries + 1
     failure: Optional[str] = None
@@ -225,7 +227,10 @@ def _post(url: str, form: Dict[str, str], settings: PlayReviewsSettings) -> str:
             time.sleep(settings.retry_backoff_seconds * attempt)
         try:
             response = requests.post(url, data=form, timeout=settings.timeout_seconds, verify=True)
-        except (requests.ConnectionError, requests.Timeout) as exc:
+        except requests.exceptions.SSLError as exc:
+            # A ConnectionError subclass, but a certificate or handshake failure is not transient.
+            raise PlayReviewsError(f'TLS handshake or certificate verification failed: {exc!r}') from exc
+        except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as exc:
             failure, cause = repr(exc), exc
             continue
         except requests.RequestException as exc:
