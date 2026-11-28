@@ -1,4 +1,4 @@
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-28T00:00:00Z -->
 
 # reai-data
 
@@ -96,7 +96,8 @@ boundary is documented in `docs/backend-datamart-contract.md`.
 (MinIO/S3), `pyarrow` + `pandas` (Parquet), `pydantic` (schema validation), `openai` +
 `sentence-transformers` + `transformers` + `torch` (embeddings/LLM), `snorkel` (weak supervision),
 `konlpy` + `nltk` + `flashtext` + `emoji` (Korean text processing),
-`google-play-scraper` + `requests` (crawling), `uuid6`, `pyyaml`, `python-dotenv`.
+`requests` (crawling; the Play reviews client is in-house, `src/crawlers/playstore_reviews.py`),
+`uuid6`, `pyyaml`, `python-dotenv`.
 
 ### Keeping These Files True
 

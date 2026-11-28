@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-27T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-28T00:00:00Z -->
 
 # tests
 
@@ -9,14 +9,14 @@ Flat pytest suite covering every pipeline stage. Tests that use the database fix
 `sql/schema_v4.sql` so pgvector, enums, partitions, and constraints are all exercised. Many unit
 tests do replace collaborators with `MagicMock` (DB sessions in `test_gold_orchestrator.py`, MinIO
 and the DB connector in `test_crawler_consistency.py`, boto3 in `test_minio_client.py`), so a
-passing mock-based test says nothing about the real database. The HTTP stub fixtures in
-`conftest.py` are unused.
+passing mock-based test says nothing about the real database. The `mock_appstore_api` HTTP stub
+fixture in `conftest.py` is unused.
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
-| `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration, and for the `app_version` backfill a real local App Store RSS HTTP server (`appstore_rss_server`), a config pointed at it (`backfill_config`), and committed seed rows (`backfill_db`). For the crawl step: `crawl_config` (a `CrawlConfig` pointed at that server with per-store app-id files that start empty, the test database, Parquet writes off) and `minio_bucket` (a fresh bucket on the test MinIO, skipped when none answers, failed when it answers with an error) |
+| `conftest.py` | Shared infrastructure: session-scoped engine/schema, function-scoped rollback session, temp Parquet dirs, sample review payloads, pre-populated DB states, API stubs, marker registration, a real local App Store RSS HTTP server (`appstore_rss_server`), a real local Play batchexecute server (`play_reviews_server`, answering in the shape captured from the live store, with `play_review_item` for synthetic review arrays and `PlayAnswer` for queued failures), for the `app_version` backfill a config pointed at both (`backfill_config`) and committed seed rows (`backfill_db`). For the crawl step: `crawl_config` (a `CrawlConfig` pointed at both servers with per-store app-id files that start empty, the test database, Parquet writes off) and `minio_bucket` (a fresh bucket on the test MinIO, skipped when none answers, failed when it answers with an error) |
 | `test_backend_datamart_contract.py` | Backend-facing mart contract for the four Gold tables |
 | `test_backend_datamart_serving_readiness.py` | Serving-readiness evidence checks for the mart |
 | `test_post_aggregate_validation.py` | `PostAggregateValidator` checks, severities, and report shape |
@@ -30,10 +30,11 @@ passing mock-based test says nothing about the real database. The HTTP stub fixt
 | `test_assign_dept_cli.py` / `test_eval_assignment_cli.py` | Argument contracts for `scripts/assign_dept.py` and `scripts/eval_assignment.py` |
 | `test_batch_loader.py` | Pending/failed batch consumption into `review_master_index` |
 | `test_bronze_loading.py` | Bronze Parquet → DB load integration |
-| `test_app_version_backfill.py` | `app_version` backfill (issue #125): shared id/version extraction, App Store fetch over HTTP against the local RSS server (gaps, early stop, HTTP error, empty feed, feed end), confirmed vs unverified misses, Play paging decisions and the twice-requested Play end (`play_end_stop_reason`, `confirm_play_end`), `updated_at`, dry-run / apply / re-run, per-app commits, an app whose UPDATE fails on a held row lock being rolled back alone, no open transaction while waiting, the empty-feed cutoff |
-| `test_backfill_app_version_cli.py` | `scripts/backfill_app_version.py` `main()`: exit codes 0/1/3 (and 2 left to argparse) and the `--platform` mapping, against the test database and the local RSS server |
+| `test_app_version_backfill.py` | `app_version` backfill (issue #125): shared id/version extraction, App Store fetch over HTTP against the local RSS server (gaps, early stop, HTTP error, empty feed, feed end), confirmed vs unverified misses, Play fetch over HTTP against the local Play server (tokens, the twice-requested end, failed requests as `error`), Play paging decisions and the twice-requested Play end (`play_end_stop_reason`, `confirm_play_end`), `updated_at`, dry-run / apply / re-run, per-app commits, an app whose UPDATE fails on a held row lock being rolled back alone, no open transaction while waiting, the empty-feed cutoff |
+| `test_backfill_app_version_cli.py` | `scripts/backfill_app_version.py` `main()`: exit codes 0/1/3 (and 2 left to argparse, 1 also for a failed Play request) and the `--platform` mapping, against the test database and the local RSS and Play servers |
 | `test_appstore_rss.py` | Shared App Store RSS reader (issue #127) and `AppStoreCrawler` over HTTP against the local RSS server: empty pages read past, failed request, app-metadata entry, `read_outcome`, `max_reviews_per_app` stop, one empty app as a warning, gap pages, the empty-feed cutoff |
-| `test_crawl_outcome.py` | `playstore_failure` (every Play app empty) on google-play-scraper-shaped data, `run_crawl` store selection and per-store failure, the CLI crawl step, and a same-day retry after the cutoff through a real MinIO bucket, `BatchLoader` and the cleanse (each review loaded once and cleansed once) |
+| `test_playstore_reviews.py` | Play reviews client (issue #133) over HTTP against the local Play server: first, next, last and empty page, HTTP errors, retries on server errors and PlayGatewayError, timeout, malformed bodies, field extraction, the default TLS context left alone on import; and `PlayStoreCrawler.run` over it (every app empty or failing, one failed app as a warning, token paging, Bronze through a real MinIO bucket) |
+| `test_crawl_outcome.py` | `playstore_failure` (every Play app empty) on Play review dicts, `run_crawl` store selection and per-store failure, the CLI crawl step, and a same-day retry after the cutoff through a real MinIO bucket, `BatchLoader` and the cleanse (each review loaded once and cleansed once) |
 | `test_crawl_reviews_cli.py` | `scripts/crawl_reviews.py` `main()`: exit codes 0/1 (and 2 left to argparse) and the `--store` default |
 | `test_crawler_consistency.py` | `save_daily_batch` upload → PENDING registration order and failure cleanup (App Store crawler only; no cross-store parity check) |
 | `test_database_schema.py` | Schema objects created by `schema_v4.sql` |
@@ -71,9 +72,11 @@ The test modules themselves stay flat: one `test_<module>.py` per source module.
 - `backfill_db` commits its rows (the backfill opens its own connection) and deletes them
   afterwards. It points the backfill at the test database by setting `DATABASE_URL`, and fails up
   front if any `app_reviews` row without `app_version` is already there, because the backfill
-  would fetch that app too, and for Play that means the live store.
-- `crawl_config` leaves both app-id files empty, so a store a test does not fill raises before any
-  request; keep the Play file empty so no test reaches the live Play store. `minio_bucket` uses
+  would fetch that app too and count it.
+- `crawl_config` and `backfill_config` point the App Store RSS URL and the Play reviews URL at the
+  local servers, so no test reaches a live store; keep it that way in any new config fixture.
+  `crawl_config` leaves both app-id files empty, so a store a test does not fill raises before any
+  request. `minio_bucket` uses
   docker-compose.test.yml's `test-minio` (`TEST_MINIO_API_PORT`, default 9002) unless
   `TEST_MINIO_ENDPOINT` names another, creates its own bucket, and skips the test only when no MinIO
   answers (a connection error). A MinIO that answers with an error, such as `InvalidAccessKeyId`
@@ -106,8 +109,9 @@ unreachable address; those two tests then skip.
 - `@pytest.mark.requires_db` on anything touching PostgreSQL (not yet applied consistently; see
   Testing Requirements).
 - Fixtures return live `Session` objects; assertions query through the ORM models in `src/models/`.
-- Sample crawler payloads mirror the real upstream response shapes (App Store RSS entries,
-  google-play-scraper dicts) so schema drift is caught at the boundary.
+- Sample crawler payloads mirror the real upstream response shapes (App Store RSS entries, Play
+  batchexecute review arrays and the dicts the Play client returns) so schema drift is caught at
+  the boundary.
 
 ## Dependencies
 

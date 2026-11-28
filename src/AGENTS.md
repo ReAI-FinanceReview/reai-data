@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-28T00:00:00Z -->
 
 # src
 
@@ -68,6 +68,6 @@ Database-backed tests need the Docker test database; start and connect it as des
 
 ### External
 `sqlalchemy`, `pydantic`, `pyarrow`, `boto3`, `pandas`, `openai`, `sentence-transformers`,
-`snorkel`, `google-play-scraper`, `konlpy`, `uuid6`.
+`snorkel`, `konlpy`, `uuid6`.
 
 <!-- MANUAL: hand-maintained; keep this marker as the last line and add notes to their section (root AGENTS.md) -->
