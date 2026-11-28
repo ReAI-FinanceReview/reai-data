@@ -1,12 +1,18 @@
 """Tests for GoldABSAAnalyzer (Issue #38)
 
 Coverage:
-- Sentiment score calculation (S_final = S_base × W_adv, negation inversion)
+- Sentiment score calculation (S_final = 0.5 + (S_base - 0.5) × W_adv, negation inversion)
 - Keyword extraction (dict-match fallback, KoNLPy unavailable)
 - Category mapping (rule-based 1st, vector similarity 2nd)
 - process(): single-record happy path, skip-if-already-analyzed, required-row failures
 - process_batch(): standalone batch with DB
 """
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -96,18 +102,31 @@ class TestSentimentCalculation:
         assert kw_aspects["편리"].sentiment_score == pytest.approx(0.85, abs=1e-4)
 
     def test_adverb_intensifies_score(self):
-        """매우 (1.3) × 편리 (0.85) = 1.105 → clamped to 1.0"""
+        """매우 (1.3): 0.5 + (0.85 - 0.5) × 1.3 = 0.955"""
         text = "매우 편리한 앱입니다"
         aspects = self.analyzer._analyze(MagicMock(), uuid7(), text)
         kw_aspects = {a.keyword: a for a in aspects}
-        assert kw_aspects["편리"].sentiment_score == pytest.approx(1.0, abs=1e-4)
+        assert kw_aspects["편리"].sentiment_score == pytest.approx(0.955, abs=1e-4)
 
     def test_adverb_weakens_score(self):
-        """좀 (0.8) × 편리 (0.85) = 0.68"""
+        """좀 (0.8): 0.5 + (0.85 - 0.5) × 0.8 = 0.78"""
         text = "좀 편리한 앱입니다"
         aspects = self.analyzer._analyze(MagicMock(), uuid7(), text)
         kw_aspects = {a.keyword: a for a in aspects}
-        assert kw_aspects["편리"].sentiment_score == pytest.approx(0.68, abs=1e-4)
+        assert kw_aspects["편리"].sentiment_score == pytest.approx(0.78, abs=1e-4)
+
+    def test_adverb_intensifies_negative_score_toward_zero(self):
+        """너무 (1.2): 0.5 + (0.2 - 0.5) × 1.2 = 0.14. 곱하기만 하면 0.24 로 덜 부정이 됐다 (#117)."""
+        plain = {a.keyword: a for a in self.analyzer._analyze(MagicMock(), uuid7(), "불편해요")}
+        strong = {a.keyword: a for a in self.analyzer._analyze(MagicMock(), uuid7(), "너무 불편해요")}
+        assert plain["불편"].sentiment_score == pytest.approx(0.20, abs=1e-4)
+        assert strong["불편"].sentiment_score == pytest.approx(0.14, abs=1e-4)
+
+    @pytest.mark.parametrize("text", ["디자인 너무", "디자인 좀"])
+    def test_adverb_leaves_neutral_keyword_neutral(self, text):
+        """중립 키워드(0.5)는 부사가 있어도 극성을 얻지 않는다 (예전: 0.6 / 0.4)."""
+        aspects = {a.keyword: a for a in self.analyzer._analyze(MagicMock(), uuid7(), text)}
+        assert aspects["디자인"].sentiment_score == pytest.approx(0.5, abs=1e-4)
 
     def test_negation_inverts_score(self):
         """안 + 편리 → 1.0 - 0.85 = 0.15"""
@@ -146,7 +165,7 @@ class TestSentimentCalculation:
 
     def test_adverb_applies_only_to_nearby_keyword(self):
         """혼합 강도: '매우 편리한 기능들 좋고 그런데 오류가 있어요'
-        편리(token 1): window[0:5] = "매우 편리한 기능들 좋고 그런데" → "매우"(1.3) → 1.0
+        편리(token 1): window[0:5] = "매우 편리한 기능들 좋고 그런데" → "매우"(1.3) → 0.955
         오류(token 5): window[2:7] = "기능들 좋고 그런데 오류가 있어요" → "매우" 없음 → 0.10 유지
         """
         text = "매우 편리한 기능들 좋고 그런데 오류가 있어요"
@@ -154,7 +173,7 @@ class TestSentimentCalculation:
         kw_aspects = {a.keyword: a for a in aspects}
         assert "편리" in kw_aspects
         assert "오류" in kw_aspects
-        assert kw_aspects["편리"].sentiment_score == pytest.approx(1.0, abs=1e-4)
+        assert kw_aspects["편리"].sentiment_score == pytest.approx(0.955, abs=1e-4)
         assert kw_aspects["오류"].sentiment_score == pytest.approx(0.10, abs=1e-4)
 
 
@@ -496,7 +515,7 @@ class TestColloquialPredicateTier:
             ("빨라요", "빠르", 0.80, "SPEED"),          # Okt 가 빨르다로 복원
             ("느려터졌음", "느리", 0.20, "SPEED"),
             ("귀찮아요 ㅠㅠ", "귀찮", 0.20, "USABILITY"),
-            ("너무조아요", "좋", 0.96, None),           # 너무 × 1.2
+            ("너무조아요", "좋", 0.86, None),           # 0.5 + 0.3 × 1.2 (너무)
             # 현재진행 사용 만족 구문
             ("잘 쓰고 있어요", "잘쓰", 0.80, None),
             ("잘쓰고있어요", "잘쓰", 0.80, None),
@@ -566,6 +585,18 @@ class TestColloquialPredicateTier:
             ("귀찮지 않게 돼야 하는데", {"귀찮": 0.20}),
             ("귀찮지 않게 되나요", {"귀찮": 0.20}),
             ("느려지지 않도록 바뀌었으면", {"느리": 0.20}),
+            # 바람·당위·반문·추측도 지금 그렇다는 뜻이다 (#117, PR #118 독립 검증에서 실측한 오판정)
+            ("귀찮지 않길", {"귀찮": 0.20}),
+            ("귀찮지 않기를 바래요", {"귀찮": 0.20}),
+            ("느리지 않아야 해요", {"느리": 0.20}),
+            ("느리지 않냐", {"느리": 0.20}),
+            ("귀찮지 않은가요", {"귀찮": 0.20}),
+            ("귀찮지 않습니까", {"귀찮": 0.20}),
+            ("귀찮지 않는지 모르겠어요", {"귀찮": 0.20}),
+            ("느리지 않을텐데", {"느리": 0.20}),
+            ("귀찮지 않아요?", {"귀찮": 0.20}),
+            # 추측이지만 지금 그렇지 않다는 뜻이다 ('않나요' 반문과 구별)
+            ("귀찮지 않나 봐요", {"귀찮": 0.80}),
         ],
     )
     def test_predicate_negation_follows_the_adjacent_token(
@@ -602,15 +633,15 @@ class TestColloquialPredicateTier:
         """대조·과거형 도입부는 '잘 쓰고 있는데 안돼요' 처럼 불만 키워드만 남는다."""
         assert okt_analyzer._extract_keywords(text) == ["안되"]
 
-    def test_predicate_tier_does_not_run_when_nouns_exist(self, okt_analyzer):
-        """명사가 나오는 리뷰는 기존 결과 그대로다 (용언 단계는 0건일 때만)."""
+    def test_predicate_keywords_are_appended_after_noun_keywords(self, okt_analyzer):
+        """명사가 나와도 용언 단계를 덧붙인다: 감성은 [로그인] 이 아니라 [안되] 에 있다 (#117)."""
         keywords = okt_analyzer._extract_keywords("로그인이 안돼요")
-        assert keywords == ["로그인"]
+        assert keywords == ["로그인", "안되"]
 
     def test_predicate_tier_does_not_run_when_dict_fallback_matches(self, okt_analyzer):
-        """표면 사전이 잡는 짧은 리뷰도 기존 결과 그대로다 ('쉽게 할수있어 좋아요')."""
+        """명사가 없을 때 표면 사전이 잡으면 용언 단계는 돌지 않는다 ('쉽게 할수있어 좋아요')."""
         keywords = okt_analyzer._extract_keywords("쉽게 할수있어 좋아요")
-        assert sorted(keywords) == sorted(["좋", "쉽"])  # 사전 매칭 순서는 set 순회 순서
+        assert keywords == ["쉽", "좋"]  # 표면 사전은 왼쪽부터 찾는다
 
     def test_predicate_vocabulary_does_not_enter_the_surface_dictionary(self, okt_analyzer):
         """용언 단계 어휘(귀찮)는 표면 사전 결과를 바꾸지 않는다 (main 과 같이 [불편])."""
@@ -655,6 +686,142 @@ class TestSatisfiedUsagePhrase:
     )
     def test_ignores_past_contrastive_and_negated_forms(self, text):
         assert _SATISFIED_USAGE_RE.search(text) is None
+
+
+# ─────────────────────────────────────────────
+# H2. 감성 점수 결함 수정 (issue #117) — 실제 Okt
+# ─────────────────────────────────────────────
+# 사전 조정은 로컬 ANALYZED 리뷰의 별점 분포를 근거로 했다 (PR 본문의 case 분석).
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _okt_failing_after_nouns(failure):
+    """명사 단계는 실제 Okt 로 돌리고, 그 뒤(용언 단계)의 pos 호출에만 결함을 넣는 Okt.
+
+    Okt.nouns 는 내부에서 pos 를 부르므로 pos 를 통째로 바꾸면 명사 단계까지 깨진다.
+    """
+    from src.gold.absa_analyzer import Okt
+
+    class _FaultAfterNounsOkt(Okt):
+        nouns_done = False
+
+        def nouns(self, phrase):
+            result = super().nouns(phrase)
+            self.nouns_done = True
+            return result
+
+        def pos(self, phrase, norm=False, stem=False, join=False):
+            if self.nouns_done:
+                return failure()
+            return super().pos(phrase, norm=norm, stem=stem, join=join)
+
+    return _FaultAfterNounsOkt()
+
+
+def _analyzer_with_okt(okt):
+    from src.utils.logger import get_logger
+
+    analyzer = GoldABSAAnalyzer.__new__(GoldABSAAnalyzer)
+    analyzer.logger = get_logger(__name__)
+    analyzer.db_connector = None
+    analyzer._okt = okt
+    return analyzer
+
+
+class TestSentimentQualityFixes:
+    @pytest.mark.requires_db
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("로그인이 안돼요", [("로그인", 0.5), ("안되", 0.10)]),
+            # 덧붙인 용언 키워드는 인접 규칙을 쓴다: 문맥 창이면 '안' 이 느리 까지 뒤집었다
+            ("화면이 안 열리고 느려요", [("화면", 0.5), ("안열리", 0.10), ("느리", 0.20)]),
+            # 명사 키워드는 문맥 창 규칙 그대로다: 오류가 안 난다 → 긍정
+            ("오류는 안 나고 빨라요", [("오류", 0.90), ("빠르", 0.80)]),
+            ("오류가 많고 불편해요", [("오류", 0.10), ("불편", 0.20)]),
+            # 명사로 이미 잡힌 키워드는 다시 넣지 않는다 (aspect 마트의 언급 수가 두 번 세어진다)
+            ("불편 사항이 많고 너무 불편해요", [("불편", 0.14), ("사항", 0.5)]),
+        ],
+    )
+    def test_predicate_keywords_follow_noun_keywords(
+        self, test_db_session, okt_analyzer, text, expected
+    ):
+        aspects = okt_analyzer._analyze(test_db_session, uuid7(), text)
+        assert [(a.keyword, round(a.sentiment_score, 4)) for a in aspects] == expected
+
+    @pytest.mark.requires_db
+    @pytest.mark.parametrize(
+        ("text", "keyword", "score", "category"),
+        [
+            # 불친절 안의 친절을 긍정으로 잡지 않는다 (#84 의 안정/불안정 과 같은 유형)
+            ("너무 불친절함", "불친절", 0.08, "CUSTOMER_SUPPORT"),
+            ("상담원 불친절", "불친절", 0.15, "CUSTOMER_SUPPORT"),
+            # 불만·요청 문맥이 대부분인 명사는 중립 키워드다
+            ("업데이트 후 안돼요", "업데이트", 0.5, None),
+            ("개선 좀 해주세요", "개선", 0.5, None),
+            ("해결해주세요", "해결", 0.5, None),
+            # 기능 이름 앞부분의 간편은 중립, 용언 어미가 붙으면 감성이다
+            ("간편인증 생겨서 좋아요", "간편", 0.5, "USABILITY"),
+            ("간편 비밀번호 입력하는데", "간편", 0.5, "USABILITY"),
+            ("간편하고 좋아요", "간편", 0.85, "USABILITY"),
+        ],
+    )
+    def test_dictionary_follows_star_ratings(
+        self, test_db_session, okt_analyzer, text, keyword, score, category
+    ):
+        aspects = {a.keyword: a for a in okt_analyzer._analyze(test_db_session, uuid7(), text)}
+        assert aspects[keyword].sentiment_score == pytest.approx(score, abs=1e-4)
+        assert aspects[keyword].category == category
+        assert "친절" not in aspects
+
+    @pytest.mark.requires_db
+    def test_intensifier_makes_a_complaint_more_negative(self, test_db_session, okt_analyzer):
+        plain = _aspects_by_keyword(okt_analyzer, test_db_session, "느려요")
+        strong = _aspects_by_keyword(okt_analyzer, test_db_session, "너무 느려요")
+        assert plain["느리"].sentiment_score == pytest.approx(0.20, abs=1e-4)
+        assert strong["느리"].sentiment_score == pytest.approx(0.14, abs=1e-4)
+
+    def test_surface_dictionary_match_does_not_depend_on_hash_seed(self):
+        """같은 길이의 겹치는 후보(불편/편하, 간편/편하)가 해시 시드에 따라 갈리지 않는다.
+
+        예전 구현은 후보를 길이로만 정렬해 집합 순회 순서에 맡겼고, 그 순서는 프로세스마다 다르다.
+        그래서 시드를 바꿔 가며 새 프로세스에서 확인한다.
+        """
+        code = (
+            "import json\n"
+            "from src.gold.absa_analyzer import GoldABSAAnalyzer\n"
+            "a = GoldABSAAnalyzer.__new__(GoldABSAAnalyzer)\n"
+            "texts = ['앱이 영 불편하네', '간편하고 좋아요', '너무 불친절함']\n"
+            "print(json.dumps([[k for k, _, _ in a._dict_match_keywords_with_spans(t)] for t in texts]))\n"
+        )
+        expected = [["불편"], ["간편", "좋"], ["불친절"]]
+        for seed in ("0", "1", "2", "3", "4", "5"):
+            env = {**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": str(_REPO_ROOT)}
+            done = subprocess.run(
+                [sys.executable, "-c", code],
+                cwd=_REPO_ROOT, env=env, capture_output=True, text=True, check=True,
+            )
+            assert json.loads(done.stdout.strip().splitlines()[-1]) == expected, seed
+
+    def test_misaligned_predicate_tokens_keep_the_noun_keywords(self, okt_analyzer):
+        """용언 토큰을 원문에 맞추지 못하면 명사 결과만 쓴다 (이 단계를 넣기 전과 같다)."""
+        analyzer = _analyzer_with_okt(
+            _okt_failing_after_nouns(lambda: [("원문에없는토큰", "Noun")])
+        )
+        extraction = analyzer._extract("로그인이 안돼요")
+        assert extraction.keywords == [("로그인", 0, 3)]
+        assert extraction.negated is None
+
+    def test_other_predicate_errors_are_not_swallowed(self, okt_analyzer):
+        """일시적일 수 있는 Okt 오류는 잡지 않아 재시도 가능한 실패로 남는다."""
+
+        def fail():
+            raise RuntimeError("injected Okt.pos failure")
+
+        analyzer = _analyzer_with_okt(_okt_failing_after_nouns(fail))
+        with pytest.raises(RuntimeError, match=r"injected Okt\.pos failure"):
+            analyzer._extract("로그인이 안돼요")
 
 
 # ─────────────────────────────────────────────

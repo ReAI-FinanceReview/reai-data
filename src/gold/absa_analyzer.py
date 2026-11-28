@@ -4,7 +4,7 @@ reviews_preprocessed.refined_text에서 키워드/감성/카테고리를 추출�
 review_aspects에 적재.
 
 감성 공식:
-    S_final = S_base × W_adv
+    S_final = 0.5 + (S_base - 0.5) × W_adv   (부사는 중립에서 멀어지는 정도를 키우거나 줄인다)
     negation 감지 시: S_final = 1.0 - S_final
     범위: 0.0 (매우 부정) ~ 1.0 (매우 긍정)
 
@@ -61,13 +61,16 @@ _SENTIMENT_DICT: Dict[str, float] = {
     "좋": 0.80, "굿": 0.80, "훌륭": 0.90, "만족": 0.85, "추천": 0.85,
     "쉽": 0.80, "편하": 0.80, "깔끔": 0.75, "안정": 0.80, "친절": 0.80,
     "감사": 0.85,
-    "개선": 0.70, "업데이트": 0.65, "해결": 0.75,
     # 부정
     "불편": 0.20, "느리": 0.20, "오류": 0.10, "버그": 0.10,
     "에러": 0.10, "강제종료": 0.05, "팅김": 0.10, "먹통": 0.05,
     "최악": 0.05, "짜증": 0.10, "불만": 0.15, "실망": 0.15,
     "어렵": 0.25, "복잡": 0.25, "답답": 0.20, "느림": 0.20,
+    "불친절": 0.15,
 }
+# 업데이트·개선·해결은 감성어로 두지 않는다(명사 키워드 0.5 로는 남는다). 리뷰에서는 '업데이트 후
+# 안돼요', '개선 좀 해주세요', '해결해주세요' 같은 불만·요청 문맥이 대부분이라, ANALYZED 리뷰 중
+# 1-2★ 비율이 28/34, 17/19, 10/13 이었다 (#117). 긍정 점수를 주면 별점과 반대로 간다.
 
 # 부사 가중치 {부사: 배율}
 _ADV_WEIGHTS: Dict[str, float] = {
@@ -103,7 +106,7 @@ _CATEGORY_KEYWORDS: Dict[CategoryType, List[str]] = {
     ],
     CategoryType.CUSTOMER_SUPPORT: [
         "고객", "상담", "CS", "고객센터", "응대", "문의", "지원",
-        "도움", "답변", "서비스", "직원", "친절",
+        "도움", "답변", "서비스", "직원", "친절", "불친절",
     ],
     CategoryType.SPEED: [
         "속도", "빠르", "느리", "로딩", "반응", "렉", "지연",
@@ -118,12 +121,22 @@ _KEYWORD_TO_CATEGORY: Dict[str, CategoryType] = {
     for kw in keywords
 }
 
+# 표면 사전 단계가 찾는 키워드 전체와 가장 긴 키워드 길이 (왼쪽부터 가장 긴 것 우선 매칭용)
+_SURFACE_KEYWORDS = frozenset(_SENTIMENT_DICT) | frozenset(_KEYWORD_TO_CATEGORY)
+_SURFACE_MAX_LEN = max(map(len, _SURFACE_KEYWORDS))
+
+# 금융 앱이 기능 이름 앞에 붙이는 감성 명사('간편인증', '간편결제', '간편 비밀번호'). 바로 뒤가 용언
+# 어미('간편하고', '간편해요', '간편함', '간편히', '간편했')일 때만 감성으로 본다. ANALYZED 리뷰에서
+# '간편' 키워드 16건 중 13건이 1-2★ 였고 대부분 기능 이름이었다 (#117).
+_FEATURE_NAME_PREFIXES: Tuple[str, ...] = ("간편",)
+_PREDICATE_ENDING_SYLLABLES: Tuple[str, ...] = ("하", "해", "함", "히", "했")
+
 # ----------------------------------------------------------------
-# 용언 단계 (issue #94)
-# 명사 추출과 표면 사전 매칭이 모두 빈 리뷰에만 적용한다. 그래서 두 단계로 키워드가
-# 나오는 리뷰의 결과는 바뀌지 않는다. 이 단계의 어휘는 표면 사전(_SENTIMENT_DICT,
-# _CATEGORY_KEYWORDS)에 넣지 않는다 — 넣으면 앞 단계 결과가 바뀐다. 어휘는 실패 66건 밖의
-# ANALYZED 리뷰에서 평점과 극성이 일치하는지 확인한 것만 넣었다 (PR #118 본문의 case 분석).
+# 용언 단계 (issue #94, #117)
+# 명사 키워드 뒤에 덧붙이고(#117), 명사가 0건이면 표면 사전 다음에 홀로 쓴다(#94). 이 단계의
+# 어휘는 _SENTIMENT_DICT / _CATEGORY_KEYWORDS 에 넣지 않는다 — 넣으면 명사·표면 사전 단계의
+# 결과까지 바뀐다. 어휘는 대상 사례 밖의 ANALYZED 리뷰에서 평점과 극성이 일치하는지 확인한 것만
+# 넣었다 (PR #118 본문의 case 분석).
 # ----------------------------------------------------------------
 
 # Okt 가 르-불규칙 활용의 어간을 잘못 복원하는 경우 ('빨라요' → 빨르다)
@@ -142,9 +155,13 @@ _NEGATED_FUNCTION_VERBS: Dict[str, str] = {
 # 붙여 낸다('귀찮지가', '귀찮질', '귀찮지를').
 _LONG_FORM_ENDINGS: Tuple[str, ...] = ("지", "진", "지는", "지도", "지가", "질", "지를")
 
-# '않다' 가 바람·요청·목적·반문이면 지금 그렇다는 뜻이라 부정으로 보지 않는다
-# ('느려지지 않게 해주세요', '않았으면', '않도록', '귀찮지 않나요')
-_NOT_A_DENIAL: Tuple[str, ...] = ("않게", "않도록", "않으면", "않았으면", "않을까", "않나")
+# '않다' 가 바람·요청·목적·당위·반문·추측이면 지금 그렇다는 뜻이라 부정으로 보지 않는다
+# ('느려지지 않게 해주세요', '않았으면', '않도록', '귀찮지 않나요', '않길', '않아야', '않습니까',
+# '않는지', '않을텐데')
+_NOT_A_DENIAL: Tuple[str, ...] = (
+    "않게", "않도록", "않으면", "않았으면", "않을까", "않나",
+    "않길", "않기를", "않아야", "않냐", "않은가", "않습니까", "않는지", "않을텐데",
+)
 # 그래도 부정인 형태: 동시('귀찮지 않으면서')
 _DENIAL_DESPITE: Tuple[str, ...] = ("않으면서",)
 # '않게/않도록' 뒤가 결과('않게 됐어요', '않도록 바뀌었어요')면 부정이다. Okt 어간(돼다, 되어다)은
@@ -196,6 +213,10 @@ def _skip_reason_before_extraction(text: Optional[str]) -> Optional[str]:
     return None
 
 
+class _SpanMisalignment(ValueError):
+    """용언 단계가 Okt 토큰을 원문 위치에 맞추지 못했다. 같은 입력은 다시 돌려도 맞지 않는다."""
+
+
 class _Extraction(NamedTuple):
     """키워드 추출 결과.
 
@@ -236,14 +257,18 @@ def _long_form_denies(
     if next_stems[:1] != ["않다"]:
         return False
     auxiliary = surface[i + 1][0]
+    following = surface[i + 2][0] if i + 2 < len(surface) else ""
     if auxiliary.startswith(_DENIAL_DESPITE):
         return True
+    # '않나 봐요' 는 추측이지만 지금 그렇지 않다는 뜻이다 ('않나요' 반문과 구별)
+    if auxiliary == "않나" and i + 2 < len(stems) and stems[i + 2][0] == "보다":
+        return True
+    # '귀찮지 않아요?' 는 반문이다
+    if following.startswith("?"):
+        return False
     if auxiliary.startswith(("않게", "않도록")):
-        if i + 2 >= len(surface):
-            return False
-        result = surface[i + 2][0]
-        return result.startswith(_RESULT_VERB_PREFIXES) and not any(
-            marker in result for marker in _UNREALIZED_MARKERS
+        return following.startswith(_RESULT_VERB_PREFIXES) and not any(
+            marker in following for marker in _UNREALIZED_MARKERS
         )
     return not auxiliary.startswith(_NOT_A_DENIAL)
 
@@ -388,20 +413,29 @@ class GoldABSAAnalyzer:
         for keyword, kw_start, kw_end in extraction.keywords:
             context = self._local_context(text, kw_start)
             phrase = _PHRASE_KEYWORDS.get(keyword)
-            # 구문 키워드는 극성을 이미 담고 있다. 용언 단계 키워드는 Okt 토큰 인접성으로 정한
-            # 부정을 쓴다 (문맥 창은 '안 열리고 느려요' 의 '안' 을 느리 에도 적용한다).
-            # 명사·표면 사전 단계 키워드는 기존 문맥 창 규칙 그대로다.
+            # 구문 키워드는 극성을 이미 담고 있다. 용언 단계 키워드(명사 뒤에 덧붙인 것 포함)는
+            # Okt 토큰 인접성으로 정한 부정을 쓴다 (문맥 창은 '안 열리고 느려요' 의 '안' 을 느리 에도
+            # 적용한다). 명사·표면 사전 단계 키워드는 기존 문맥 창 규칙 그대로다.
+            from_predicate_step = extraction.negated is not None and keyword in extraction.negated
             if phrase is not None:
                 has_negation = False
-            elif extraction.negated is not None:
-                has_negation = extraction.negated.get(keyword, False)
+            elif from_predicate_step:
+                has_negation = extraction.negated[keyword]
             else:
                 has_negation = self._has_negation(context, keyword=keyword)
             adv_weight = self._get_adv_weight(context)
 
             lexicon = phrase or _PREDICATE_LEXICON.get(keyword)
             s_base = lexicon[0] if lexicon else _SENTIMENT_DICT.get(keyword, 0.5)
-            s_final = s_base * adv_weight
+            if (
+                keyword in _FEATURE_NAME_PREFIXES
+                and not from_predicate_step
+                and not text.startswith(_PREDICATE_ENDING_SYLLABLES, kw_end)
+            ):
+                s_base = 0.5  # '간편인증' 같은 기능 이름
+            # 부사는 중립(0.5)에서 멀어진 정도를 키우거나 줄인다. 점수에 곱하면 부정 점수가 중립 쪽으로
+            # 올라가고('너무 느려요' 0.24 > '느려요' 0.20) 중립 키워드가 극성을 얻었다 (#117).
+            s_final = 0.5 + (s_base - 0.5) * adv_weight
             if has_negation:
                 s_final = 1.0 - s_final
             s_final = max(0.0, min(1.0, s_final))  # clamp
@@ -426,8 +460,9 @@ class GoldABSAAnalyzer:
         return self._extract(text).keywords
 
     def _extract(self, text: str) -> _Extraction:
-        """명사 → 표면 사전 → 용언 단계. 앞 단계가 0건일 때만 다음 단계로 간다."""
+        """명사 단계 + 용언 단계. 명사가 0건일 때만 표면 사전 → 용언 단계 순으로 간다."""
         noun_step_failed = False
+        noun_keywords: List[Tuple[str, int, int]] = []
         if self._okt:
             try:
                 nouns = self._okt.nouns(text)
@@ -436,17 +471,18 @@ class GoldABSAAnalyzer:
                 in_dict_set = set(in_dict)
                 others = [n for n in nouns if len(n) >= 2 and n not in in_dict_set]
                 filtered = list(dict.fromkeys(in_dict + others))[:20]
-                result: List[Tuple[str, int, int]] = []
                 for noun in filtered:
                     idx = text.find(noun)
                     if idx != -1:
-                        result.append((noun, idx, idx + len(noun)))
-                if result:
-                    return _Extraction(result)
-                self.logger.debug("Okt returned no usable keywords — fallback to dict match")
+                        noun_keywords.append((noun, idx, idx + len(noun)))
+                if not noun_keywords:
+                    self.logger.debug("Okt returned no usable keywords — fallback to dict match")
             except Exception as e:
                 self.logger.warning(f"Okt.nouns failed: {e} — fallback to dict match")
                 noun_step_failed = True
+
+        if noun_keywords:
+            return self._append_predicate_keywords(text, noun_keywords)
 
         dict_matches = self._dict_match_keywords_with_spans(text)
         if dict_matches:
@@ -458,17 +494,40 @@ class GoldABSAAnalyzer:
         keywords, negated = self._extract_predicate_keywords_with_spans(text)
         return _Extraction(keywords, negated, noun_step_failed)
 
+    def _append_predicate_keywords(
+        self, text: str, noun_keywords: List[Tuple[str, int, int]]
+    ) -> _Extraction:
+        """명사 키워드 뒤에 용언 단계 키워드를 덧붙인다 (#117).
+
+        명사는 무엇에 대한 리뷰인지를, 용언은 어떻게 느꼈는지를 담는다. '로그인이 안돼요' 의 감성은
+        명사 [로그인] 이 아니라 용언 [안되] 에 있다. 명사로 이미 잡힌 키워드는 다시 넣지 않는다.
+        용언 토큰의 위치를 원문에 맞추지 못하면(_SpanMisalignment) 명사 결과만 쓴다. 그 결과는 이
+        단계를 넣기 전과 같고, 같은 입력은 다시 돌려도 맞춰지지 않는다. 다른 Okt 오류는 잡지 않는다.
+        """
+        try:
+            predicate, negated = self._extract_predicate_keywords_with_spans(text)
+        except _SpanMisalignment as e:
+            self.logger.warning(f"Predicate step skipped: {e} — keeping noun keywords only")
+            return _Extraction(noun_keywords)
+        seen = {keyword for keyword, _, _ in noun_keywords}
+        extra = [item for item in predicate if item[0] not in seen]
+        return _Extraction(noun_keywords + extra, {keyword: negated[keyword] for keyword, _, _ in extra})
+
     def _extract_predicate_keywords_with_spans(
         self, text: str
     ) -> Tuple[List[Tuple[str, int, int]], Dict[str, bool]]:
-        """명사와 표면 사전이 모두 놓친 구어체 리뷰에서 용언·구문 키워드를 찾는다 (#94).
+        """용언·구문 키워드를 찾는다 (#94). 명사 키워드 뒤에 덧붙이거나(#117), 명사와 표면 사전이
+        모두 놓친 구어체 리뷰에서 홀로 쓴다.
 
         Okt ``pos(stem=True)`` 의 어간을 사전과 맞추고('빨라요' → 빠르, '너무조아요' → 좋),
         '안'/'못' 바로 뒤의 기능동사를 부정 구문 키워드로 묶는다('안열리는데' → 안열리).
         감성 용언의 부정은 바로 앞 토큰이 '안'/'못' 인지('안빨라요', '안 느려요'), 바로 뒤가
         장형 부정 '않다' 또는 '못'+'하다' 인지('귀찮지 않아요', '느려지진 않네요')로 정한다.
-        Okt 오류는 잡지 않는다. 여기서 빈 결과는 분석 제외(종결)로 이어지므로, 일시적
+        Okt 오류는 잡지 않는다. 홀로 쓸 때 빈 결과는 분석 제외(종결)로 이어지므로, 일시적
         오류가 재시도 가능한 실패로 남아야 한다.
+
+        Raises:
+            _SpanMisalignment: Okt 토큰을 원문 위치에 맞추지 못했을 때.
 
         Returns:
             (키워드·span 목록, 키워드별 부정 여부)
@@ -491,13 +550,15 @@ class GoldABSAAnalyzer:
         surface = self._okt.pos(text)
         stems = self._okt.pos(text, stem=True)
         if len(surface) != len(stems):
-            raise ValueError("Okt surface/stem token counts differ — spans would misalign")
+            raise _SpanMisalignment("Okt surface/stem token counts differ — spans would misalign")
         offsets: List[int] = []
         cursor = 0
         for token, _ in surface:
             idx = text.find(token, cursor)
             if idx == -1:
-                raise ValueError(f"Okt token {token!r} not found in text — spans would misalign")
+                raise _SpanMisalignment(
+                    f"Okt token {token!r} not found in text — spans would misalign"
+                )
             offsets.append(idx)
             cursor = idx + len(token)
 
@@ -543,30 +604,33 @@ class GoldABSAAnalyzer:
         return found[:20], negated
 
     def _dict_match_keywords_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
-        """사전 기반으로 키워드와 문자 span을 추출한다."""
-        # Fallback: longest-first non-overlapping span matching
-        # (prevents short stems like "안정" from matching inside "불안정한")
-        candidates = sorted(
-            set(_SENTIMENT_DICT) | set(_KEYWORD_TO_CATEGORY),
-            key=len,
-            reverse=True,
-        )
+        """사전 키워드를 왼쪽부터, 같은 위치에서는 가장 긴 것부터 겹치지 않게 찾는다.
+
+        긴 키워드가 그 안의 짧은 키워드를 막고('불안정한' 의 안정, '불친절' 의 친절), 먼저 시작한
+        키워드가 뒤에서 겹치는 키워드를 막는다('불편하네' 의 편하, '간편하고' 의 편하). 예전에는
+        길이로만 정렬해 같은 길이의 겹침을 집합 순회 순서에 맡겼고, 그 순서는 해시 시드마다 달라
+        같은 리뷰가 실행마다 '불편' 0.2 또는 '편하' 0.8 이 됐다 (#117). 키워드마다 첫 출현
+        하나만 기록하고 20개에서 멈춘다.
+        """
         found: List[Tuple[str, int, int]] = []
-        matched_spans: List[Tuple[int, int]] = []
-        for kw in candidates:
-            start = 0
-            while True:
-                idx = text.find(kw, start)
-                if idx == -1:
-                    break
-                end = idx + len(kw)
-                if not any(s < end and idx < e for s, e in matched_spans):
-                    found.append((kw, idx, end))
-                    matched_spans.append((idx, end))
-                    break
-                start = idx + 1
-            if len(found) >= 20:
-                break
+        seen: set = set()
+        i = 0
+        while i < len(text) and len(found) < 20:
+            match = next(
+                (
+                    text[i:i + length]
+                    for length in range(_SURFACE_MAX_LEN, 0, -1)
+                    if text[i:i + length] in _SURFACE_KEYWORDS
+                ),
+                None,
+            )
+            if match is None:
+                i += 1
+                continue
+            if match not in seen:
+                seen.add(match)
+                found.append((match, i, i + len(match)))
+            i += len(match)
         return found
 
     def _local_context(self, text: str, kw_start: int) -> str:

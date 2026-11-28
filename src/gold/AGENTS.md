@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-28T00:00:00Z -->
 
 # src/gold
 
@@ -18,7 +18,7 @@ backend.
 | `orchestrator.py` | `GoldOrchestrator.run(batch_size, limit, target_date)` → `{total, analyzed, skipped, failed}`. Selects `CLEANED` rows plus `FAILED` rows with `retry_count < 3`, runs the three analyzers, commits per chunk, and records `error_message` (truncated to 2000 chars) on failure. An `AnalysisSkipped` from ABSA becomes the terminal `SKIPPED` with `error_message = skip:<reason>` and no retry increment |
 | `skip.py` | `AnalysisSkipped(reason)` and the reason codes `empty` / `non_korean` / `no_aspect` (issue #94). Dependency-free so the orchestrator can catch it without importing analyzer modules eagerly |
 | `embedding_generator.py` | `GoldEmbeddingGenerator`: vectorizes `reviews_preprocessed.refined_text` into `review_embeddings` (default model `text-embedding-3-small`) |
-| `absa_analyzer.py` | `GoldABSAAnalyzer`: keyword/sentiment/category extraction into `review_aspects`. `S_final = S_base × W_adv`, negation flips to `1.0 - S_final`, range 0.0–1.0. Category resolution is rule-based first, then embedding cosine similarity ≥ 0.8, else unclassified. Extraction runs Okt nouns → surface dictionary → predicate step (Okt stems, `안`/`못` + function verb, `잘 쓰고 있` phrase), each only when the previous one found nothing. `process()` raises `AnalysisSkipped` for empty, Hangul-free, or aspect-less text |
+| `absa_analyzer.py` | `GoldABSAAnalyzer`: keyword/sentiment/category extraction into `review_aspects`. `S_final = 0.5 + (S_base − 0.5) × W_adv` (an adverb scales the distance from neutral, so `너무 느려요` is more negative than `느려요` and a neutral keyword stays 0.5), negation flips to `1.0 - S_final`, range 0.0–1.0. Category resolution is rule-based first, then embedding cosine similarity ≥ 0.8, else unclassified. Extraction runs Okt nouns and appends the predicate step's keywords (Okt stems, `안`/`못` + function verb, `잘 쓰고 있` phrase), skipping keywords the nouns already gave. Only when nouns yield nothing does it fall back to the surface dictionary (leftmost-longest match), then to the predicate step alone. `process()` raises `AnalysisSkipped` for empty, Hangul-free, or aspect-less text |
 | `action_analyzer.py` | `GoldActionAnalyzer`: `is_attention_required` rules (rating ≥ 4 with sentiment < 0.4, or rating ≤ 2 with sentiment > 0.6) and `is_action_required` via Snorkel labeling functions + `MajorityLabelVoter`, plus a one-sentence LLM summary into `review_action_analysis` |
 | `dept_assigner.py` | Department assignment (issue #40): `expand_org_path()` plus two interchangeable `Assigner` implementations — keyword-intersection rules and an LLM assigner (Structured Outputs, `temperature=0`) — both emitting the shared `Assignment` type |
 | `assigner_ids.py` | The `ASSIGNER_RULE` / `ASSIGNER_LLM` discriminator constants and `KNOWN_ASSIGNERS`. `reviews_assigned` is unique on `(review_id, assigner)` so rule and LLM results coexist for comparison |
@@ -42,8 +42,9 @@ None.
 - Raise `AnalysisSkipped` only when a retry would give the same answer (the input itself cannot be
   analyzed). A missing or failing dependency is not such a case: ABSA returns `False` on zero
   aspects when Okt is unavailable or `Okt.nouns` raised, skips the predicate step in both cases
-  (a healthy run might have stopped at the noun step), and the predicate step lets Okt errors
-  propagate.
+  (a healthy run might have found nouns), and the predicate step lets Okt errors propagate. The one
+  exception: when the predicate step is appended after noun keywords and cannot align Okt tokens to
+  the text (`_SpanMisalignment`), the noun keywords are kept, since a retry cannot align them either.
 - `_MAX_RETRY = 3` in `orchestrator.py:28` is the retry ceiling; rows past it are the review-level
   dead letters queried by `src/pipeline/failures.py`.
 - Aggregation must stay idempotent (UPSERT) — Airflow retries and manual backfills re-run the same
@@ -57,23 +58,30 @@ None.
   `absa-orphan-integrity` fixes; keep the tests that pin it. Zero aspects ends in `SKIPPED`, never
   `ANALYZED`.
 - New ABSA vocabulary must be justified on reviews outside the cases it is meant to fix: check
-  that its polarity matches star ratings on existing `ANALYZED` reviews (the #94 case analysis is
-  in PR #118's description). Predicate-step vocabulary never goes into `_SENTIMENT_DICT` /
-  `_CATEGORY_KEYWORDS`: those also feed the surface-dictionary step, so an entry there changes
-  reviews that already succeed (a test pins this). Where it goes instead: a sentiment stem into
+  that its polarity matches star ratings on existing `ANALYZED` reviews (the #94 and #117 case
+  analyses are in the descriptions of PR #118 and the #117 PR). Removing a word works the same
+  way: `업데이트`, `개선`, `해결` left `_SENTIMENT_DICT` because most reviews using them were
+  1–2★ complaints and requests. A sentiment noun that banking apps use as a feature-name prefix
+  (`간편인증`) goes into `_FEATURE_NAME_PREFIXES`, which scores it neutral unless a predicate ending
+  follows. Predicate-step vocabulary never goes into `_SENTIMENT_DICT` / `_CATEGORY_KEYWORDS`:
+  those also feed the noun and surface-dictionary steps, so an entry there changes far more
+  reviews (a test pins this). Where it goes instead: a sentiment stem into
   `_PREDICATE_LEXICON`; a function verb that `안` turns into an outage report into
   `_NEGATED_FUNCTION_VERBS`, which generates its `안X` phrase keyword; an Okt stem mis-analysis
   into `_STEM_ALIASES`. Any other phrase keyword needs an entry in `_PHRASE_KEYWORDS` and code in
   the predicate step that emits it.
-- Negation differs by step. Noun and surface-dictionary keywords use the ±3-token window
-  (`_has_negation`). A predicate-step keyword is negated when the token right before it is
-  `안`/`못`, or when `_long_form_denies` holds: the predicate's surface ends in a `-지` form
-  (`_LONG_FORM_ENDINGS`, including particles Okt attaches such as `귀찮지가`, `귀찮질`) and the next
-  token is the long-form `않다` or `못`+`하다` (`귀찮지 않아요`; not `느려서 못 하겠어요`). Short and
-  long forms together cancel out. A wish, request, or question (`않게 해주세요`, `않았으면`,
-  `않나요`) is not a denial; `않으면서` and a realized result (`않게 됐어요`, but not `않게
-  됐으면`) are. Other wish and question endings are a known gap (#117). Phrase keywords in
-  `_PHRASE_KEYWORDS` carry their own polarity and are never flipped.
+- Negation differs by step, decided per keyword. Noun and surface-dictionary keywords use the
+  ±3-token window (`_has_negation`). A predicate-step keyword, including one appended after the
+  nouns, is negated when the token right before it is `안`/`못`, or when `_long_form_denies`
+  holds: the predicate's surface ends in a `-지` form (`_LONG_FORM_ENDINGS`, including particles Okt
+  attaches such as `귀찮지가`, `귀찮질`) and the next token is the long-form `않다` or `못`+`하다`
+  (`귀찮지 않아요`; not `느려서 못 하겠어요`). Short and long forms together cancel out. A wish,
+  request, obligation, question, or conjecture (`않게 해주세요`, `않았으면`, `않나요`, `않길`,
+  `않아야`, `않습니까`, `않는지`, `않을텐데`, `않아요?`) is not a denial; `않으면서`, `않나 봐요`, and a
+  realized result (`않게 됐어요`, but not `않게 됐으면`) are. Unifying the two rules was measured
+  in #117 and deferred: on the local data the window changes a single sentiment keyword's score
+  (`먹통` in `먹통입니다 저장 버튼이 안 눌려`, wrongly), while adjacency cannot read `오류가 안 나요`
+  at all. Phrase keywords in `_PHRASE_KEYWORDS` carry their own polarity and are never flipped.
 - Embedding and LLM summary calls require a live `OPENAI_API_KEY`.
 - Department assignment is **not** inside `GoldOrchestrator`. It is its own pipeline step
   (`run_dept_assign` / `scripts/assign_dept.py`) that reads `ANALYZED` rows and must leave
