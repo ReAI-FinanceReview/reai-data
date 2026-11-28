@@ -13,13 +13,14 @@ platform_review_id로 맞춘 행의 app_version과 updated_at만 UPDATE한다.
   (AND app_version IS NULL) 다시 실행해도 결과가 같다. INSERT나 DELETE는 하지 않는다.
 - 못 맞춘 리뷰는 둘로 나눈다. unmatched_confirmed는 스토어 응답을 끝까지 정상으로 읽었는데도
   없는 리뷰, unverified는 빈 응답이나 실패한 요청 때문에 없다고 단정할 수 없는 리뷰다.
-- Play의 끝은 두 번 보고 정한다. google-play-scraper 1.2.7의 reviews()는 서버가 요청보다 적은
-  리뷰와 다음 token을 주면 같은 호출 안에서 요청을 더 보내고, 그 뒤쪽 요청이 실패하면 예외를
-  삼킨 채 그때까지 모은 리뷰를 token None과 함께 돌려준다. 이 모양은 진짜 끝과 같으므로, 리뷰가
-  있고 token이 없는 쪽은 같은 continuation token으로 한 번 더 요청한다. 두 번째 응답이 같은 리뷰
-  id들을 담고 또 token이 없을 때만 exhausted(확정)이고, 아니면 end_not_confirmed(미확인)다.
-  남은 한계: 같은 실패가 두 요청에서 똑같이 되풀이되면(같은 부분 목록, token 없음) 여전히 진짜
-  끝으로 보인다.
+- Play는 playstore_reviews.fetch_reviews_page로 한 쪽씩 읽는다. 요청 한 번이 한 쪽이고, 실패한
+  요청은 PlayReviewsError로 올라오므로 그 앱은 error(그때까지 맞춘 것은 남기고 나머지는 unverified)가
+  되고 스크립트는 exit 1로 끝난다.
+- Play의 끝은 두 번 보고 정한다. 리뷰가 있고 token이 없는 쪽은 같은 continuation token으로 한 번 더
+  요청해, 두 번째 응답이 같은 리뷰 id들을 담고 또 token이 없을 때만 exhausted(확정)이고, 아니면
+  end_not_confirmed(미확인)다. 이 확인은 google-play-scraper가 실패를 삼켜 끝처럼 보이던 때 생겼다.
+  자체 클라이언트에서는 그 원인이 없어졌지만, 스토어가 끝이 아닌데 token 없는 쪽을 주는 일이 없다고
+  실측으로 단정할 수 없어 유지한다(src/crawlers/AGENTS.md).
 - 스토어를 기다리는 동안 DB 트랜잭션을 열어 두지 않는다. 대상을 읽은 뒤 바로 닫고, 앱마다
   apply는 commit, dry-run은 rollback으로 닫는다.
 - 한 앱의 조회나 쓰기에서 예외가 나면 그 앱의 변경만 rollback하고 traceback을 로그에 남긴 뒤,
@@ -33,7 +34,6 @@ from typing import Any, Collection, Dict, Iterable, List, Optional, Sequence
 from uuid import UUID
 
 import yaml
-from google_play_scraper import Sort, reviews as play_reviews
 from sqlalchemy import text
 
 from src.models.enums import PlatformType
@@ -42,6 +42,12 @@ from src.utils.logger import get_logger
 from .appstore_crawler import AppStoreCrawler
 from .appstore_rss import appstore_feed_complete, read_feed
 from .playstore_crawler import PlayStoreCrawler
+from .playstore_reviews import (
+    PlayReviewsError,
+    PlayReviewsSettings,
+    fetch_reviews_page,
+    play_reviews_settings,
+)
 
 logger = get_logger('app_version_backfill')
 
@@ -68,11 +74,11 @@ STOP_EMPTY_PAGE = 'empty_page'  # an empty page after pages with reviews
 STOP_CAP_REACHED = 'cap_reached'
 
 # Play stops after which the unmatched targets are known to be absent from the store. An empty
-# page can be a request google-play-scraper failed and swallowed, and the cap stops early.
+# page is a valid answer that does not prove the end, and the cap stops early.
 # ``exhausted`` is complete only once confirm_play_end has seen the last page twice alike.
 PLAY_COMPLETE_STOPS = frozenset({STOP_ALL_MATCHED, STOP_PASSED_OLDEST_TARGET})
 
-# PlayStoreCrawler._parse_reviewed_at labels google-play-scraper's local-time `at` as UTC, so a
+# PlayStoreCrawler._parse_reviewed_at labels the Play client's local-time `at` as UTC, so a
 # stored reviewed_at can be later than the store's own timestamp by the crawl host's UTC offset.
 # No UTC offset reaches a full day, so this much slack keeps that shift from ending paging early.
 REVIEWED_AT_SLACK = timedelta(days=1)
@@ -120,10 +126,9 @@ class BackfillSettings:
     appstore_pages: int
     appstore_rss_page_size: int
     appstore_max_consecutive_empty_feeds: int
-    playstore_language: str
-    playstore_country: str
     playstore_page_size: int
     playstore_max_reviews_per_app: int
+    playstore_client: PlayReviewsSettings
 
 
 def load_settings(config_path: str) -> BackfillSettings:
@@ -142,10 +147,9 @@ def load_settings(config_path: str) -> BackfillSettings:
         appstore_pages=config['appstore']['pages_to_crawl'],
         appstore_rss_page_size=config['appstore']['rss_page_size'],
         appstore_max_consecutive_empty_feeds=config['appstore']['max_consecutive_empty_feeds'],
-        playstore_language=config['playstore']['language'],
-        playstore_country=config['playstore']['country'],
         playstore_page_size=config['playstore']['backfill_page_size'],
         playstore_max_reviews_per_app=config['playstore']['backfill_max_reviews_per_app'],
+        playstore_client=play_reviews_settings(config),
     )
 
 
@@ -271,9 +275,9 @@ def play_stop_reason(
 
     ``target_times`` are the targets' stored reviewed_at. Pages come newest first, so once they
     reach further back than the oldest target (minus REVIEWED_AT_SLACK) the next page would only
-    hold reviews older than every target. google-play-scraper turns a failed request into an
-    empty page with no next-page token, so an empty page is ``feed_empty`` when it is the first
-    one and ``empty_page`` otherwise; neither proves the remaining targets are gone.
+    hold reviews older than every target. An empty page is ``feed_empty`` when it is the first
+    one (Play answers an app with no review, and an app id it does not know, that way) and
+    ``empty_page`` otherwise; neither proves the remaining targets are gone.
     """
     if matched >= len(target_times):
         return STOP_ALL_MATCHED
@@ -295,7 +299,7 @@ def scan_play_page(
     target: AppTargets,
     max_reviews: int,
 ) -> Optional[str]:
-    """Fold one google-play-scraper page into ``result``; return the stop reason, or ``None``.
+    """Fold one Play page into ``result``; return the stop reason, or ``None``.
 
     ``exhausted`` returned here is provisional and leaves ``result`` incomplete until
     confirm_play_end has seen the page a second time.
@@ -330,9 +334,8 @@ def play_end_stop_reason(
 ) -> str:
     """Whether a Play page that came with no next-page token is the store's real end.
 
-    The page is requested twice with the same continuation token. google-play-scraper returns
-    that same shape (reviews, no token) when a later request inside one reviews() call fails,
-    so only two answers with the same review ids and no token confirm the end.
+    The page is requested twice with the same continuation token, and only two answers with the
+    same review ids and no token confirm the end.
     """
     if (
         first_ids
@@ -411,45 +414,49 @@ def fetch_appstore_versions(target: AppTargets, settings: BackfillSettings) -> F
 def fetch_playstore_versions(target: AppTargets, settings: BackfillSettings) -> FetchResult:
     """Page newest first with continuation tokens until scan_play_page says stop.
 
-    google-play-scraper takes no timeout and does not raise on a failed request: reviews()
-    catches it and returns an empty page with no next-page token, which scan_play_page reports
-    as ``feed_empty`` or ``empty_page`` (unverified) rather than as the end of the reviews.
+    Each page is one request through playstore_reviews.fetch_reviews_page. A failed request
+    (HTTP status, network, timeout, a response that does not parse) raises ``PlayReviewsError``,
+    which ends the read as ``error`` naming the page: the targets matched before it are kept,
+    the rest stay unverified, and the report's error makes the script exit 1.
 
-    A page with reviews and no next-page token is not taken as the end on its own. When a
-    response holds fewer reviews than requested together with a token, reviews() sends further
-    requests within the same call, and if one of those fails it returns the reviews collected so
-    far with no token, which looks exactly like the end. So that page is requested once more with
-    the same continuation token, and confirm_play_end keeps ``exhausted`` only if both answers
-    match; otherwise the stop is ``end_not_confirmed``. A failure that repeats identically on both
-    requests still passes as the end.
+    A page with reviews and no next-page token is requested once more with the same continuation
+    token, and confirm_play_end keeps ``exhausted`` only if both answers match; otherwise the stop
+    is ``end_not_confirmed``.
     """
 
     def request(continuation_token):
-        return play_reviews(
-            target.platform_app_id,
-            lang=settings.playstore_language,
-            country=settings.playstore_country,
-            sort=Sort.NEWEST,
-            count=settings.playstore_page_size,
-            continuation_token=continuation_token,
+        return fetch_reviews_page(
+            target.platform_app_id, settings.playstore_page_size, settings.playstore_client,
+            continuation_token,
         )
 
     result = FetchResult()
     token = None
-    while True:
-        if token is not None:
-            time.sleep(settings.delay_seconds)
-        requested_with = token
-        page, token = request(requested_with)
-        stop = scan_play_page(
-            result, page, token.token is not None, target, settings.playstore_max_reviews_per_app
-        )
-        if stop == STOP_EXHAUSTED:
-            time.sleep(settings.delay_seconds)
-            again, again_token = request(requested_with)
-            stop = confirm_play_end(result, page, again, again_token.token is not None, target)
-        if stop:
-            return result
+    page_number = 0
+    try:
+        while True:
+            if token is not None:
+                time.sleep(settings.delay_seconds)
+            page_number += 1
+            requested_with = token
+            page = request(requested_with)
+            token = page.next_token
+            stop = scan_play_page(
+                result, page.reviews, token is not None, target, settings.playstore_max_reviews_per_app
+            )
+            if stop == STOP_EXHAUSTED:
+                time.sleep(settings.delay_seconds)
+                again = request(requested_with)
+                stop = confirm_play_end(
+                    result, page.reviews, again.reviews, again.next_token is not None, target
+                )
+            if stop:
+                return result
+    except PlayReviewsError as exc:
+        result.stop_reason = STOP_ERROR
+        result.error = f'page {page_number}: {exc!r}'
+        result.complete = False
+        return result
 
 
 _FETCHERS = {

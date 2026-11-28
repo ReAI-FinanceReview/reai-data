@@ -995,13 +995,15 @@ def _point_play_at(config: Dict[str, Any], server: PlayReviewsServer) -> None:
 
 
 @pytest.fixture
-def backfill_config(tmp_path, appstore_rss_server) -> str:
-    """config/crawler_config.yml with the RSS URL pointed at appstore_rss_server and no delay."""
+def backfill_config(tmp_path, appstore_rss_server, play_reviews_server) -> str:
+    """config/crawler_config.yml with the RSS URL pointed at appstore_rss_server, the Play reviews
+    URL at play_reviews_server, and no delay or retry wait."""
     config = yaml.safe_load(
         (Path(__file__).resolve().parents[1] / 'config' / 'crawler_config.yml').read_text(encoding='utf-8')
     )
     config['global']['delay_between_requests'] = 0
     config['appstore']['reviews_rss_url'] = appstore_rss_server.url_template
+    _point_play_at(config, play_reviews_server)
     path = tmp_path / 'crawler_config.yml'
     path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding='utf-8')
     return str(path)
@@ -1084,7 +1086,7 @@ def backfill_db(test_db_engine, test_db_schema, test_db_url, monkeypatch):
     with BackfillDb.APPLICATION_NAME and BackfillDb.LOCK_TIMEOUT set on its connections.
 
     Fails up front if the database already holds rows without app_version: the backfill would
-    fetch those apps too, and for Play that means the live store.
+    fetch those apps too and count them in its report.
     """
     with test_db_engine.connect() as conn:
         stray = conn.execute(text("SELECT count(*) FROM app_reviews WHERE app_version IS NULL")).scalar_one()
