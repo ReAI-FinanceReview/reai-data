@@ -5,7 +5,8 @@ including:
 - Database setup and teardown (PostgreSQL with schema initialization)
 - Temporary storage fixtures (Parquet directories)
 - Mock data generators (sample reviews, apps)
-- Mock API fixtures (App Store, Play Store)
+- Mock API fixture (App Store)
+- Real local HTTP servers for the App Store RSS and the Play reviews batchexecute endpoint
 - Database state helpers (pre-populated tables)
 
 Architecture:
@@ -22,10 +23,12 @@ import os
 import json
 import re
 import threading
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
+from urllib.parse import parse_qs, urlsplit
 from uuid6 import uuid7
 
 import yaml
@@ -483,60 +486,6 @@ def mock_appstore_api(requests_mock):
     return requests_mock
 
 
-@pytest.fixture
-def mock_playstore_api(monkeypatch):
-    """Mock google-play-scraper functions.
-
-    Usage in tests:
-        def test_something(mock_playstore_api):
-            # google_play_scraper.reviews() is already mocked
-            crawler.crawl_reviews('com.example.app')
-
-    Returns: Monkeypatch fixture with Play Store functions mocked
-    """
-    from unittest.mock import MagicMock
-
-    # Mock reviews() function
-    mock_reviews_result = (
-        [
-            {
-                'reviewId': 'mock_play_review_1',
-                'userName': 'PlayUser1',
-                'content': 'Excellent app!',
-                'score': 5,
-                'at': datetime(2026, 2, 4, 12, 0, 0, tzinfo=timezone.utc),
-                'appVersion': '1.0.0'
-            },
-            {
-                'reviewId': 'mock_play_review_2',
-                'userName': 'PlayUser2',
-                'content': 'Very good',
-                'score': 4,
-                'at': datetime(2026, 2, 4, 11, 0, 0, tzinfo=timezone.utc),
-                'appVersion': '1.0.0'
-            }
-        ],
-        None  # continuation_token
-    )
-
-    mock_reviews = MagicMock(return_value=mock_reviews_result)
-
-    # Mock app() function
-    mock_app_result = {
-        'title': 'Mock Play Store App',
-        'installs': '1,000+',
-        'score': 4.5
-    }
-
-    mock_app = MagicMock(return_value=mock_app_result)
-
-    # Patch google_play_scraper
-    monkeypatch.setattr('google_play_scraper.reviews', mock_reviews)
-    monkeypatch.setattr('google_play_scraper.app', mock_app)
-
-    return monkeypatch
-
-
 # ========================================
 # INGESTION BATCH FIXTURES (Issue #19)
 # ========================================
@@ -797,14 +746,228 @@ def appstore_rss_server(monkeypatch):
     server.close()
 
 
+# ========================================
+# PLAY REVIEWS (Issue #133)
+# ========================================
+
+PLAY_REVIEW_AT = 1795507631  # epoch seconds of a synthetic review (2026-11-24 UTC)
+PLAY_AVATAR_URL = 'https://play-lh.googleusercontent.com/a/example'
+
+
+def _play_review_item(
+    review_id: str,
+    version: Optional[str] = None,
+    *,
+    at: int = PLAY_REVIEW_AT,
+    score: int = 4,
+    content: str = '업데이트 후 로그인이 빨라졌어요',
+    user_name: str = '사용자',
+    thumbs_up: int = 0,
+    reply: Optional[str] = None,
+    replied_at: Optional[int] = None,
+) -> List[Any]:
+    """One review array of a Play batchexecute reviews payload, laid out as on live pages
+    (2026-11-28, ko/kr): 17 elements, [5] = [epoch seconds, nanos], [7] = [replier, reply,
+    [epoch seconds, nanos]] or null, [9] author info, [10] the version or null. Values are synthetic.
+    """
+    avatar = [None, 2, None, [None, None, PLAY_AVATAR_URL]]
+    return [
+        review_id,
+        [user_name, avatar],
+        score,
+        None,
+        content,
+        [at, 0],
+        thumbs_up,
+        None if reply is None else ['테스트은행', reply, [replied_at, 0]],
+        None,
+        [f'author-{review_id}', user_name, None, [avatar, False], avatar],
+        version,
+        None, None, None, None, None,
+        1,
+    ]
+
+
 @pytest.fixture
-def backfill_config(tmp_path, appstore_rss_server) -> str:
-    """config/crawler_config.yml with the RSS URL pointed at appstore_rss_server and no delay."""
+def play_review_item():
+    """Builder for Play review arrays: ``play_review_item(review_id, version=None, **fields)``."""
+    return _play_review_item
+
+
+@dataclass
+class PlayAnswer:
+    """A one-off answer queued with PlayReviewsServer.push: an HTTP ``status``, a raw ``body``
+    (``None``: the page the request asks for), after waiting ``delay`` seconds. ``drop`` closes the
+    connection instead of answering in full: ``BEFORE_ANSWER`` sends nothing (requests raises
+    ConnectionError), ``MID_BODY`` sends the headers and half the body (ChunkedEncodingError)."""
+
+    BEFORE_ANSWER = 'before_answer'
+    MID_BODY = 'mid_body'
+
+    status: int = 200
+    body: Optional[str] = None
+    delay: float = 0
+    drop: Optional[str] = None
+
+
+class PlayReviewsServer:
+    """A real HTTP server on 127.0.0.1 that answers the Play batchexecute reviews POST.
+
+    Each app serves a list of review arrays, newest first. A request reads ``count`` of them from
+    the start, or from where its continuation token points, and the answer carries a next-page
+    token only while reviews remain: that is how the live store answered (2026-11-28: full pages
+    with a token, a last partial page without one). An app with no reviews answers an empty page
+    without a token, as the live store does for an app id it does not know; an unknown token
+    answers the entry without a payload the live store sends for a bad token.
+    """
+
+    PATH = '/_/PlayStoreUi/data/batchexecute'
+    PREFIX = ")]}'\n\n"
+
+    def __init__(self):
+        self.reviews: Dict[str, List[List[Any]]] = {}
+        self.answers: Dict[str, List[PlayAnswer]] = {}
+        self.requests: List[Dict[str, Any]] = []
+        self.connections = 0  # accepted, including ones that never became a request (a TLS handshake)
+        self._tokens: Dict[str, tuple] = {}
+        self._release = threading.Event()
+        play = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def setup(self):
+                play.connections += 1
+                super().setup()
+
+            def do_POST(self):
+                url = urlsplit(self.path)
+                if url.path != play.PATH:
+                    self.send_error(404)
+                    return
+                length = int(self.headers.get('Content-Length', 0))
+                form = parse_qs(self.rfile.read(length).decode('utf-8'))
+                [[[rpc_id, query_json, _, _]]] = json.loads(form['f.req'][0])
+                query = json.loads(query_json)
+                paging = query[1][2]
+                request = {
+                    'app_id': query[2][0], 'count': paging[0], 'token': paging[2] if len(paging) > 2 else None,
+                    'sort': query[1][1], 'rpc_id': rpc_id, 'query': parse_qs(url.query),
+                }
+                play.requests.append(request)
+                queued = play.answers.get(request['app_id'])
+                answer = queued.pop(0) if queued else PlayAnswer()
+                if answer.delay:
+                    play._release.wait(answer.delay)
+                if answer.drop == PlayAnswer.BEFORE_ANSWER:
+                    self.close_connection = True
+                    return
+                if answer.status != 200:
+                    self.send_error(answer.status)
+                    return
+                body = answer.body if answer.body is not None else play.page_body(request)
+                data = body.encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                if answer.drop == PlayAnswer.MID_BODY:
+                    self.wfile.write(data[:len(data) // 2])
+                    self.close_connection = True
+                    return
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        self._httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True
+        )
+        self._thread.start()
+        port = self._httpd.server_address[1]
+        self.url_template = f'http://127.0.0.1:{port}{self.PATH}?hl={{language}}&gl={{country}}'
+
+    @classmethod
+    def envelope(cls, rpc_id: str, payload: Optional[str], error: Optional[List[Any]] = None) -> str:
+        """A response body: the ``)]}'`` prefix, then the wrb.fr entry and the two trailing entries."""
+        entries = [
+            ['wrb.fr', rpc_id, payload, None, None, error, 'generic'],
+            ['di', 48],
+            ['af.httprm', 47, '-7539252846892424692', 28],
+        ]
+        return cls.PREFIX + json.dumps(entries, separators=(',', ':'))
+
+    @classmethod
+    def page_payload(cls, items: List[List[Any]], token: Optional[str]) -> str:
+        payload = [items or None, [None, token] if token else None, [[None, [[1800], None, [72000]]]]]
+        return json.dumps(payload, separators=(',', ':'))
+
+    @classmethod
+    def gateway_error_body(cls, rpc_id: str) -> str:
+        """An entry without a payload whose error names PlayGatewayError. Not captured live: the
+        detail around the name is made up; the name is what google-play-scraper 1.2.7 matched."""
+        detail = [['type.googleapis.com/com.google.play.gateway.proto.PlayGatewayError', []]]
+        return cls.envelope(rpc_id, None, [8, None, detail])
+
+    def page_body(self, request: Dict[str, Any]) -> str:
+        app_id, count, token = request['app_id'], request['count'], request['token']
+        if token is None:
+            offset = 0
+        elif self._tokens.get(token, (None,))[0] == app_id:
+            offset = self._tokens[token][1]
+        else:
+            return self.envelope(request['rpc_id'], None, [3])
+        items = self.reviews.get(app_id, [])
+        end = offset + count
+        next_token = None
+        if end < len(items):
+            next_token = f'tok-{app_id}-{end}'
+            self._tokens[next_token] = (app_id, end)
+        return self.envelope(request['rpc_id'], self.page_payload(items[offset:end], next_token))
+
+    def set_reviews(self, app_id: str, items: List[List[Any]]) -> None:
+        self.reviews[app_id] = items
+
+    def push(self, app_id: str, *answers: PlayAnswer) -> None:
+        """Answer the next requests for ``app_id`` with ``answers``, in order, then serve pages again."""
+        self.answers.setdefault(app_id, []).extend(answers)
+
+    def requests_for(self, app_id: str) -> List[tuple]:
+        """(count, token) of each request for ``app_id``, in order."""
+        return [(r['count'], r['token']) for r in self.requests if r['app_id'] == app_id]
+
+    def close(self) -> None:
+        self._release.set()
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join()
+
+
+@pytest.fixture
+def play_reviews_server(monkeypatch):
+    """PlayReviewsServer for the test; requests to it bypass any configured HTTP proxy."""
+    no_proxy = os.environ.get('NO_PROXY', '')
+    monkeypatch.setenv('NO_PROXY', ','.join(filter(None, [no_proxy, '127.0.0.1'])))
+    server = PlayReviewsServer()
+    yield server
+    server.close()
+
+
+def _point_play_at(config: Dict[str, Any], server: PlayReviewsServer) -> None:
+    """Send the config's Play requests to ``server`` and retry without waiting."""
+    config['playstore']['reviews_url'] = server.url_template
+    config['playstore']['retry_backoff_seconds'] = 0
+
+
+@pytest.fixture
+def backfill_config(tmp_path, appstore_rss_server, play_reviews_server) -> str:
+    """config/crawler_config.yml with the RSS URL pointed at appstore_rss_server, the Play reviews
+    URL at play_reviews_server, and no delay or retry wait."""
     config = yaml.safe_load(
         (Path(__file__).resolve().parents[1] / 'config' / 'crawler_config.yml').read_text(encoding='utf-8')
     )
     config['global']['delay_between_requests'] = 0
     config['appstore']['reviews_rss_url'] = appstore_rss_server.url_template
+    _point_play_at(config, play_reviews_server)
     path = tmp_path / 'crawler_config.yml'
     path.write_text(yaml.safe_dump(config, allow_unicode=True), encoding='utf-8')
     return str(path)
@@ -887,7 +1050,7 @@ def backfill_db(test_db_engine, test_db_schema, test_db_url, monkeypatch):
     with BackfillDb.APPLICATION_NAME and BackfillDb.LOCK_TIMEOUT set on its connections.
 
     Fails up front if the database already holds rows without app_version: the backfill would
-    fetch those apps too, and for Play that means the live store.
+    fetch those apps too and count them in its report.
     """
     with test_db_engine.connect() as conn:
         stray = conn.execute(text("SELECT count(*) FROM app_reviews WHERE app_version IS NULL")).scalar_one()
@@ -909,18 +1072,20 @@ def backfill_db(test_db_engine, test_db_schema, test_db_url, monkeypatch):
 class CrawlConfig:
     """config/crawler_config.yml for a crawl test, written under ``tmp_path``.
 
-    The App Store RSS URL points at ``appstore_rss_server``, there is no delay, the crawler's
-    output directories live under ``tmp_path``, and each store reads its app ids from a file of
-    its own that starts empty, so that store's crawler raises before any request (Play never
-    reaches the live store) until set_app_ids fills it.
+    The App Store RSS URL points at ``appstore_rss_server`` and the Play reviews URL at
+    ``play_reviews_server`` (so no test reaches a live store), there is no delay or retry wait, the
+    crawler's output directories live under ``tmp_path``, and each store reads its app ids from a
+    file of its own that starts empty, so that store's crawler raises before any request until
+    set_app_ids fills it.
     """
 
-    def __init__(self, tmp_path: Path, rss_url_template: str):
+    def __init__(self, tmp_path: Path, rss_url_template: str, play_server: PlayReviewsServer):
         config = yaml.safe_load(
             (Path(__file__).resolve().parents[1] / 'config' / 'crawler_config.yml').read_text(encoding='utf-8')
         )
         config['global']['delay_between_requests'] = 0
         config['appstore']['reviews_rss_url'] = rss_url_template
+        _point_play_at(config, play_server)
         config['output']['base_directory'] = str(tmp_path / 'crawler_output')
         self.app_id_files = {store: tmp_path / f'{store}_app_ids.txt' for store in ('appstore', 'playstore')}
         for store, path in self.app_id_files.items():
@@ -935,7 +1100,9 @@ class CrawlConfig:
 
 
 @pytest.fixture
-def crawl_config(tmp_path, appstore_rss_server, test_db_schema, test_db_url, monkeypatch) -> CrawlConfig:
+def crawl_config(
+    tmp_path, appstore_rss_server, play_reviews_server, test_db_schema, test_db_url, monkeypatch
+) -> CrawlConfig:
     """CrawlConfig on the test database with Parquet writes off (no object store, no DB rows).
 
     The crawlers' DatabaseConnector is pointed at the test database through ``DATABASE_URL``;
@@ -943,7 +1110,7 @@ def crawl_config(tmp_path, appstore_rss_server, test_db_schema, test_db_url, mon
     """
     monkeypatch.setenv('DATABASE_URL', test_db_url)
     monkeypatch.setenv('ENABLE_PARQUET_WRITE', 'false')
-    return CrawlConfig(tmp_path, appstore_rss_server.url_template)
+    return CrawlConfig(tmp_path, appstore_rss_server.url_template, play_reviews_server)
 
 
 @pytest.fixture

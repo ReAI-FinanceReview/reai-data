@@ -551,15 +551,6 @@ http = [
 ]
 
 [[package]]
-name = "google-play-scraper"
-version = "1.2.7"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/db/29/3530af5fee212e7cdd31a5847ecb306c8202745f08dc608de10454a82499/google_play_scraper-1.2.7.tar.gz", hash = "sha256:284f321d1b2c39e39e97e490d51bc316e1d876802360efb7e7463b5c16ed4972", size = 41734, upload-time = "2024-06-07T01:03:11.325Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/33/f7/a23ef3cf8efc9ab3aee565971f59906811e6ce95475314ef7b18d02f30ba/google_play_scraper-1.2.7-py3-none-any.whl", hash = "sha256:a485510b09265f0096fc3813cfc26eef27e9a5c0035f99ee23f80e00de724530", size = 28988, upload-time = "2024-06-07T01:03:09.144Z" },
-]
-
-[[package]]
 name = "greenlet"
 version = "3.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1975,7 +1966,6 @@ dependencies = [
     { name = "datasets" },
     { name = "emoji" },
     { name = "flashtext" },
-    { name = "google-play-scraper" },
     { name = "konlpy" },
     { name = "nltk" },
     { name = "openai" },
@@ -2009,7 +1999,6 @@ requires-dist = [
     { name = "datasets", specifier = ">=4.8.4" },
     { name = "emoji", specifier = ">=2.15.0" },
     { name = "flashtext", specifier = ">=2.7" },
-    { name = "google-play-scraper", specifier = ">=1.2.7" },
     { name = "konlpy", specifier = ">=0.6.0" },
     { name = "nltk", specifier = ">=3.9.3" },
     { name = "openai", specifier = ">=2.29.0" },

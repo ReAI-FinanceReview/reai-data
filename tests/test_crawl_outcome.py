@@ -1,9 +1,10 @@
 """Store-level crawl outcomes and the crawl step (Issue #127).
 
-The App Store runs over real HTTP against ``appstore_rss_server``. Play is never crawled live:
-its decision, every app empty, is tested as the pure ``playstore_failure`` over results built
-from google-play-scraper-shaped reviews, and in the step tests its app-id file is left empty so
-``PlayStoreCrawler.run`` raises before any request. The database is the real test database;
+The App Store runs over real HTTP against ``appstore_rss_server``. Play's decision, every app
+empty, is tested here as the pure ``playstore_failure`` over results built from Play review dicts
+(``PlayStoreCrawler.run`` over ``play_reviews_server`` is in ``tests/test_playstore_reviews.py``),
+and in the step tests its app-id file is left empty so ``PlayStoreCrawler.run`` raises before any
+request. The database is the real test database;
 the re-run test also writes to a real MinIO bucket (``minio_bucket``), loads with the real
 ``BatchLoader`` and cleanses with the real ``ReviewCleaningPipeline``.
 """
@@ -35,24 +36,22 @@ NO_APP_IDS = 'ValueError: 앱 ID 파일에서 유효한 ID를 찾을 수 없습�
 
 
 def _play_review(review_id):
-    """One review dict as google-play-scraper's reviews() returns it."""
+    """One review dict as playstore_reviews.review_from_item returns it."""
     return {
         'reviewId': review_id,
         'userName': '사용자',
-        'userImage': 'https://play-lh.googleusercontent.com/a/example',
-        'content': '업데이트 후 로그인이 빨라졌어요',
         'score': 5,
-        'thumbsUpCount': 0,
-        'reviewCreatedVersion': '2.3.1',
+        'content': '업데이트 후 로그인이 빨라졌어요',
         'at': datetime(2026, 11, 25, 9, 0),
+        'thumbsUpCount': 0,
         'replyContent': None,
         'repliedAt': None,
-        'appVersion': '2.3.1',
+        'reviewCreatedVersion': '2.3.1',
     }
 
 
 def _play_result(app_id, reviews):
-    """The per-app result PlayStoreCrawler.run records for the reviews google-play-scraper returned."""
+    """The per-app result PlayStoreCrawler.run records for the reviews the Play client returned."""
     return AppCrawlResult(app_id, OUTCOME_OK if reviews else OUTCOME_FEED_EMPTY, fetched=len(reviews))
 
 

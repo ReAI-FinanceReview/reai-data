@@ -1,8 +1,8 @@
 # 크롤러 전역 설정
 global:
   delay_between_requests: 2        # 요청 간 대기시간 (초)
-  max_retries: 3                   # 최대 재시도 횟수
-  timeout: 30                      # 요청 타임아웃 (초)
+  max_retries: 3                   # ingestion_batch 재시도 한도(loader 의 DLQ). HTTP 요청 재시도가 아님: 요청 재시도는 playstore.max_retries(Play 전용)뿐
+  timeout: 30                      # 요청 타임아웃 (초). App Store RSS 와 Play 요청이 함께 씀
 
 # App Store 크롤러 설정
 appstore:
@@ -23,6 +23,14 @@ playstore:
   country: "kr"                    # 국가 코드
   reviews_per_app: 10              # 앱당 리뷰 수 (테스트용)
   sort_order: "newest"             # 정렬 순서
+  # 아래 넷은 리뷰 클라이언트(src/crawlers/playstore_reviews.py)를 쓰는 PlayStoreCrawler 와 app_version 백필이 함께 읽고, 코드 기본값은 없음.
+  # 요청 timeout 은 global.timeout 을 따름
+  reviews_url: "https://play.google.com/_/PlayStoreUi/data/batchexecute?hl={language}&gl={country}"  # 리뷰 조회 batchexecute 엔드포인트
+  reviews_rpc_id: "oCPfdb"         # 리뷰 목록 RPC id (f.req 본문에 들어감)
+  max_retries: 2                   # 일시 오류(연결, 본문 도중 끊김, timeout, HTTP 429/5xx, payload 없는 PlayGatewayError) 때 첫 요청 뒤 재시도 횟수. TLS 실패는 재시도하지 않음
+  retry_backoff_seconds: 5         # n번째 재시도 전 n × 이 값(초)만큼 대기
+  # 평소 수집(PlayStoreCrawler) 전용이고 코드 기본값은 없음
+  page_size: 200                   # 요청 1회에 받는 최대 리뷰 수. reviews_per_app 이 더 크면 continuation token 으로 나눠 받음
   # app_version 백필(scripts/backfill_app_version.py) 전용. 평소 수집에는 쓰지 않고 코드 기본값도 없음
   backfill_page_size: 200          # 요청 1회(continuation token 1쪽)에 받는 리뷰 수
   backfill_max_reviews_per_app: 3000  # 앱당 조회 상한. 조회한 리뷰 수가 이 값에 닿으면 cap_reached 로 멈춤

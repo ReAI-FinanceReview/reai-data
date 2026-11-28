@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-27T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-28T00:00:00Z -->
 
 # config
 
@@ -12,7 +12,7 @@ environment variables, and `paths.yml` only references them via `${VARIABLE}` pl
 
 | File | Description |
 |------|-------------|
-| `crawler_config.yml` | Default config for every component (`config_path` default). Global delay/retry/timeout, per-store country/language/page counts, output settings, and app-id file locations. `appstore.reviews_rss_url` (the RSS URL template), `appstore.rss_page_size` (entries on a full RSS page) and `appstore.max_consecutive_empty_feeds` (apps in a row that read no review before the App Store is treated as down) are read by both `AppStoreCrawler` and the `app_version` backfill through `src/crawlers/appstore_rss.py`. `playstore.backfill_page_size` and `playstore.backfill_max_reviews_per_app` are read only by the backfill (`src/crawlers/app_version_backfill.py`) |
+| `crawler_config.yml` | Default config for every component (`config_path` default). Global delay/retry/timeout, per-store country/language/page counts, output settings, and app-id file locations. `appstore.reviews_rss_url` (the RSS URL template), `appstore.rss_page_size` (entries on a full RSS page) and `appstore.max_consecutive_empty_feeds` (apps in a row that read no review before the App Store is treated as down) are read by both `AppStoreCrawler` and the `app_version` backfill through `src/crawlers/appstore_rss.py`. `playstore.reviews_url` (the Play batchexecute URL template), `playstore.reviews_rpc_id`, `playstore.max_retries` and `playstore.retry_backoff_seconds` (transient-failure retries) are read by both `PlayStoreCrawler` and the backfill through `src/crawlers/playstore_reviews.py`, whose request timeout is `global.timeout`; `playstore.page_size` (reviews per request) only by `PlayStoreCrawler`. `playstore.backfill_page_size` and `playstore.backfill_max_reviews_per_app` are read only by the backfill (`src/crawlers/app_version_backfill.py`) |
 | `paths.yml` | Medallion storage layout (`bronze_dir`, `silver_dir`, `gold_dir`, `embeddings_dir`, `logs_dir`) built from `${PARQUET_BASE_PATH}`; read by `src/utils/path_resolver.py`, which no production code imports |
 | `logging_config.yml` | Logging dictConfig actually loaded by `src/utils/logger.py:30`: console + rotating `logs/crawler/info.log` and `logs/error/error.log` (10 MB × 5) |
 | `logging.yml` | Near-identical logging config that no code references; `logging_config.yml` is the live one |
@@ -34,9 +34,11 @@ environment variables, and `paths.yml` only references them via `${VARIABLE}` pl
   `playstore.reviews_per_app: 10`); raise them deliberately, not incidentally. The
   `app_version` backfill ignores `appstore.max_reviews_per_app` and reads every page up to
   `appstore.pages_to_crawl`.
-- `appstore.reviews_rss_url`, `appstore.rss_page_size`, `appstore.max_consecutive_empty_feeds`
-  and every key the backfill reads have no coded default:
-  `AppStoreCrawler.__init__` and the backfill's `load_settings` index the parsed YAML directly, so
+- `appstore.reviews_rss_url`, `appstore.rss_page_size`, `appstore.max_consecutive_empty_feeds`,
+  the Play client keys above (`playstore.language` and `playstore.country` included),
+  `playstore.page_size` and every key the backfill reads have no coded default:
+  `AppStoreCrawler.__init__`, `PlayStoreCrawler.__init__` (through `play_reviews_settings`) and
+  the backfill's `load_settings` index the parsed YAML directly, so
   a missing key fails with `KeyError` instead of falling back to a guessed value. Keep them in
   any alternative config passed with `--config`.
 - `output.*` in `crawler_config.yml` describes the legacy CSV dump path. The production Bronze and

@@ -1,12 +1,13 @@
 """app_version backfill from a store re-fetch (Issue #125).
 
 Store payloads are shaped like real responses: App Store entries copy the keys of the
-customerreviews RSS JSON (``rss_review_entry`` in conftest), Play reviews copy the dict
-google-play-scraper returns (naive ``at``). The App Store fetcher is driven over real HTTP against
-``appstore_rss_server`` on 127.0.0.1, and the database is the real test database. Play paging is
-covered through ``scan_play_page``, the decision step of its loop, because the loop's only other
-line is the live google-play-scraper call.
+customerreviews RSS JSON (``rss_review_entry`` in conftest), Play reviews copy the dict the Play
+review client returns (naive ``at``), and Play pages are batchexecute answers in the shape captured
+from the live store (``play_review_item`` / ``play_reviews_server`` in conftest). Both fetchers are
+driven over real HTTP against the local servers on 127.0.0.1, and the database is the real test
+database. Play paging decisions are also covered on their own through ``scan_play_page``.
 """
+import re
 import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,7 @@ from src.crawlers.app_version_backfill import (
     backfill_app_versions,
     count_targets_without_app,
     fetch_appstore_versions,
+    fetch_playstore_versions,
     load_settings,
     load_targets,
     match_versions,
@@ -47,6 +49,7 @@ from src.crawlers.app_version_backfill import (
 from src.crawlers.appstore_crawler import AppStoreCrawler
 from src.crawlers.appstore_rss import appstore_feed_complete, appstore_review_entries
 from src.crawlers.playstore_crawler import PlayStoreCrawler
+from tests.conftest import PLAY_REVIEW_AT, PlayAnswer, PlayReviewsServer
 from src.models.apps import App
 from src.models.enums import PlatformType
 
@@ -74,19 +77,17 @@ RSS_APP_METADATA_ENTRY = {
 
 
 def _play_review(review_id, version, at=datetime(2026, 8, 10, 9, 0)):
-    """One review dict as google-play-scraper's reviews() returns it."""
+    """One review dict as playstore_reviews.review_from_item returns it."""
     return {
         'reviewId': review_id,
         'userName': '사용자',
-        'userImage': 'https://play-lh.googleusercontent.com/a/example',
-        'content': '업데이트 후 로그인이 빨라졌어요',
         'score': 5,
-        'thumbsUpCount': 0,
-        'reviewCreatedVersion': version,
+        'content': '업데이트 후 로그인이 빨라졌어요',
         'at': at,
+        'thumbsUpCount': 0,
         'replyContent': None,
         'repliedAt': None,
-        'appVersion': version,
+        'reviewCreatedVersion': version,
     }
 
 
@@ -113,7 +114,7 @@ def test_appstore_extractors_read_rss_entry(rss_review_entry):
     assert AppStoreCrawler._extract_app_version(rss_review_entry('14807491528')) is None
 
 
-def test_playstore_extractors_read_scraper_review():
+def test_playstore_extractors_read_client_review():
     review = _play_review('65e580b6-c58a-41d6-9216-57445e548778', '2.3.1')
 
     assert PlayStoreCrawler._extract_platform_review_id(review) == '65e580b6-c58a-41d6-9216-57445e548778'
@@ -291,7 +292,7 @@ def _play_target(**reviewed_at):
 
 
 def test_scan_play_first_page_empty_is_feed_empty_and_unverified():
-    """google-play-scraper answers a failed first request with an empty page and no token."""
+    """Play answers an app with no review, or an app id it does not know, with an empty page."""
     result = FetchResult()
 
     stop = scan_play_page(result, [], False, _play_target(a=REVIEWED_AT), max_reviews=3000)
@@ -323,7 +324,7 @@ def test_scan_play_last_page_is_only_provisionally_exhausted():
 @pytest.mark.parametrize('first_ids, first_has_next_page, second_ids, second_has_next_page, expected', [
     (['r1', 'r2', 'r3'], False, ['r1', 'r2', 'r3'], False, STOP_EXHAUSTED),
     (['r1', 'r2', 'r3'], False, ['r3', 'r1', 'r2'], False, STOP_EXHAUSTED),
-    # The first answer was cut short by a failed request inside reviews(); the second is whole.
+    # The first answer was short; the second is whole.
     (['r1', 'r2'], False, ['r1', 'r2', 'r3'], False, STOP_END_NOT_CONFIRMED),
     (['r1', 'r2', 'r3'], False, ['r1', 'r2'], False, STOP_END_NOT_CONFIRMED),
     (['r1', 'r2', 'r3'], False, ['r1', 'r2', 'r9'], False, STOP_END_NOT_CONFIRMED),
@@ -403,7 +404,7 @@ def test_scan_play_cap_leaves_targets_unverified():
 def test_scan_play_pages_on_until_past_the_oldest_target():
     target = _play_target(new=REVIEWED_AT, old=REVIEWED_AT - timedelta(days=200))
     result = FetchResult()
-    # Naive local times, as google-play-scraper builds them; the test host runs in UTC.
+    # Naive local times, as the Play client builds them; the test host runs in UTC.
     between = [_play_review('new', '3.0.0', at=datetime(2026, 5, 1, 9, 0))]
     older = [_play_review('x', '1.0.0', at=datetime(2025, 12, 1, 9, 0))]
 
@@ -424,6 +425,101 @@ def test_scan_play_stops_once_every_target_matched():
 
 
 # ========================================
+# D2. PLAY FETCH OVER HTTP (play_reviews_server)
+# ========================================
+
+PLAY_PAGE_SIZE = 3
+
+
+@pytest.fixture
+def play_settings(backfill_config):
+    """Backfill settings with Play pointed at play_reviews_server, three reviews per page."""
+    return replace(load_settings(backfill_config), playstore_page_size=PLAY_PAGE_SIZE)
+
+
+def _serve_play(server, play_review_item, count, app_id='com.example.bank'):
+    """``count`` reviews p0, p1, ... newest first, review p{i} written against version 2.{i}.0."""
+    server.set_reviews(app_id, [play_review_item(f'p{i}', f'2.{i}.0', at=PLAY_REVIEW_AT - i) for i in range(count)])
+
+
+def test_fetch_playstore_follows_tokens_until_every_target_matched(
+    play_reviews_server, play_settings, play_review_item
+):
+    _serve_play(play_reviews_server, play_review_item, 7)
+
+    result = fetch_playstore_versions(_play_target(p1=REVIEWED_AT, p4=REVIEWED_AT), play_settings)
+
+    assert (result.stop_reason, result.complete, result.error) == (STOP_ALL_MATCHED, True, None)
+    assert (result.found, result.fetched) == ({'p1': '2.1.0', 'p4': '2.4.0'}, 6)
+    [first, second] = play_reviews_server.requests_for('com.example.bank')
+    assert first == (PLAY_PAGE_SIZE, None) and second[0] == PLAY_PAGE_SIZE and second[1] is not None
+
+
+def test_fetch_playstore_confirms_the_end_with_a_second_request(
+    play_reviews_server, play_settings, play_review_item
+):
+    _serve_play(play_reviews_server, play_review_item, 4)  # page 2 holds p3 alone, without a token
+
+    result = fetch_playstore_versions(_play_target(p3=REVIEWED_AT, gone=REVIEWED_AT), play_settings)
+
+    assert (result.stop_reason, result.complete, result.found) == (STOP_EXHAUSTED, True, {'p3': '2.3.0'})
+    requests = play_reviews_server.requests_for('com.example.bank')
+    assert len(requests) == 3 and requests[1] == requests[2]  # the last page, asked twice alike
+
+
+def test_fetch_playstore_end_is_not_confirmed_when_the_second_answer_has_a_token(
+    play_reviews_server, play_settings, play_review_item
+):
+    _serve_play(play_reviews_server, play_review_item, 4)  # page 2 holds p3 alone, without a token
+    again_with_token = PlayReviewsServer.envelope(
+        play_settings.playstore_client.rpc_id,
+        PlayReviewsServer.page_payload([play_review_item('p3', '2.3.0', at=PLAY_REVIEW_AT - 3)], 'tok-more'),
+    )
+    play_reviews_server.push('com.example.bank', PlayAnswer(), PlayAnswer(), PlayAnswer(body=again_with_token))
+
+    result = fetch_playstore_versions(_play_target(p3=REVIEWED_AT, gone=REVIEWED_AT), play_settings)
+
+    assert (result.stop_reason, result.complete, result.found) == (STOP_END_NOT_CONFIRMED, False, {'p3': '2.3.0'})
+    requests = play_reviews_server.requests_for('com.example.bank')
+    assert len(requests) == 3 and requests[1] == requests[2]
+
+
+@pytest.mark.parametrize('answers, failed_page, found', [
+    ([PlayAnswer(status=404)], 1, {}),
+    ([PlayAnswer(body='not a batchexecute answer')], 1, {}),
+    ([PlayAnswer(), PlayAnswer(status=404)], 2, {'p1': '2.1.0'}),
+    # Page 2 (p3, no token) is read; asking for it the second time fails.
+    ([PlayAnswer(), PlayAnswer(), PlayAnswer(status=404)], 2, {'p1': '2.1.0', 'p3': '2.3.0'}),
+])
+def test_fetch_playstore_failed_request_is_an_error_keeping_earlier_matches(
+    answers, failed_page, found, play_reviews_server, play_settings, play_review_item
+):
+    _serve_play(play_reviews_server, play_review_item, 4)
+    play_reviews_server.push('com.example.bank', *answers)
+
+    result = fetch_playstore_versions(
+        _play_target(p1=REVIEWED_AT, p3=REVIEWED_AT, gone=REVIEWED_AT), play_settings
+    )
+
+    assert (result.stop_reason, result.complete, result.found) == (STOP_ERROR, False, found)
+    assert result.error.startswith(f'page {failed_page}: PlayReviewsError(')
+    assert len(play_reviews_server.requests_for('com.example.bank')) == len(answers)
+
+
+def test_fetch_playstore_server_errors_are_retried_before_the_error(
+    play_reviews_server, play_settings, play_review_item
+):
+    _serve_play(play_reviews_server, play_review_item, 4)
+    attempts = play_settings.playstore_client.max_retries + 1
+    play_reviews_server.push('com.example.bank', *[PlayAnswer(status=500)] * attempts)
+
+    result = fetch_playstore_versions(_play_target(p1=REVIEWED_AT), play_settings)
+
+    assert result.stop_reason == STOP_ERROR and f'{attempts} attempts failed' in result.error
+    assert len(play_reviews_server.requests_for('com.example.bank')) == attempts
+
+
+# ========================================
 # E. SETTINGS
 # ========================================
 
@@ -434,6 +530,8 @@ def test_load_settings_reads_crawler_config():
     assert 0 < SETTINGS.playstore_page_size <= SETTINGS.playstore_max_reviews_per_app
     assert SETTINGS.delay_seconds >= 0
     assert '{page}' in SETTINGS.appstore_reviews_rss_url
+    assert {'{language}', '{country}'} <= set(re.findall(r'\{\w+\}', SETTINGS.playstore_client.url_template))
+    assert SETTINGS.playstore_client.timeout_seconds == SETTINGS.timeout_seconds
 
 
 def test_load_settings_fails_on_missing_backfill_key(tmp_path):
@@ -768,3 +866,40 @@ def test_backfill_stops_asking_the_app_store_after_consecutive_empty_feeds(
         assert appstore_rss_server.requested_pages(store_id) == []
     assert all((a.unverified, a.unmatched_confirmed) == (2, 0) for a in report.apps)
     assert report.has_unverified and not report.has_errors
+
+
+@pytest.mark.requires_db
+def test_backfill_fills_play_versions_and_confirms_the_end(
+    backfill_db, backfill_config, play_reviews_server, play_review_item
+):
+    app_id = backfill_db.seed_app(
+        PLAYSTORE, 'com.example.play', [('a', None), ('b', None), ('gone', None), ('set', '9.9.9')]
+    )
+    play_reviews_server.set_reviews('com.example.play', [
+        play_review_item('a', '2.3.1'), play_review_item('b', None),
+        play_review_item('other', '2.3.1'), play_review_item('set', '1.0.0'),
+    ])
+
+    report = backfill_app_versions(backfill_config, (PLAYSTORE,), apply=True)
+
+    [app] = report.apps
+    assert (app.targets, app.matched, app.matched_with_version, app.updated) == (3, 2, 1, 1)
+    assert (app.unmatched_confirmed, app.unverified, app.stop_reason, app.error) == (1, 0, STOP_EXHAUSTED, None)
+    assert backfill_db.versions(app_id) == {'a': '2.3.1', 'b': None, 'gone': None, 'set': '9.9.9'}
+    page_size = SETTINGS.playstore_page_size
+    assert play_reviews_server.requests_for('com.example.play') == [(page_size, None), (page_size, None)]
+    assert not report.has_errors and not report.has_unverified
+
+
+@pytest.mark.requires_db
+def test_backfill_play_request_failure_is_an_error_row(backfill_db, backfill_config, play_reviews_server):
+    app_id = backfill_db.seed_app(PLAYSTORE, 'com.example.down', [('a', None), ('b', None)])
+    play_reviews_server.push('com.example.down', PlayAnswer(status=404))
+
+    report = backfill_app_versions(backfill_config, (PLAYSTORE,), apply=True)
+
+    [app] = report.apps
+    assert (app.stop_reason, app.unverified, app.unmatched_confirmed, app.updated) == (STOP_ERROR, 2, 0, 0)
+    assert app.error.startswith('page 1: PlayReviewsError(')
+    assert report.has_errors
+    assert backfill_db.versions(app_id) == {'a': None, 'b': None}

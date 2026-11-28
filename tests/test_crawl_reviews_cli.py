@@ -2,8 +2,8 @@
 
 The DAG runs this script once per store (``--store appstore`` / ``--store playstore``) and reads
 only its exit code: 0 when the step succeeded, 1 when it failed; 2 stays argparse's usage error.
-``main()`` runs against the real test database and the local RSS server from conftest; the Play
-app-id file stays empty, so PlayStoreCrawler raises before any request reaches the live store.
+``main()`` runs against the real test database and the local RSS and Play servers from conftest;
+the Play app-id file stays empty, so PlayStoreCrawler raises before any request.
 
 ``scripts`` is not a package, so the module is loaded by file path, as in
 ``tests/test_backfill_app_version_cli.py``.

@@ -1,4 +1,4 @@
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-26T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-28T00:00:00Z -->
 
 # reai-data
 
@@ -67,7 +67,8 @@ The suite tests against real PostgreSQL — SQLite substitutes and mocked databa
 (Testing Requirements) describes; that file holds the one canonical command, and the other
 `AGENTS.md` files only name the modules to pass to it.
 
-Markers registered in `tests/conftest.py:667`: `slow`, `integration`, `requires_db`.
+Markers registered by `pytest_configure` in `tests/conftest.py`: `slow`, `integration`,
+`requires_db`.
 CI (`.github/workflows/bootstrap-db.yml`) runs only the bootstrap-focused subset
 (`tests/test_ci_workflows.py tests/test_bootstrap_db.py tests/test_local_dev_setup.py
 tests/test_alembic_config.py`) and, in a separate DB-free job, the AGENTS.md guard
@@ -96,7 +97,8 @@ boundary is documented in `docs/backend-datamart-contract.md`.
 (MinIO/S3), `pyarrow` + `pandas` (Parquet), `pydantic` (schema validation), `openai` +
 `sentence-transformers` + `transformers` + `torch` (embeddings/LLM), `snorkel` (weak supervision),
 `konlpy` + `nltk` + `flashtext` + `emoji` (Korean text processing),
-`google-play-scraper` + `requests` (crawling), `uuid6`, `pyyaml`, `python-dotenv`.
+`requests` (crawling; the Play reviews client is in-house, `src/crawlers/playstore_reviews.py`),
+`uuid6`, `pyyaml`, `python-dotenv`.
 
 ### Keeping These Files True
 

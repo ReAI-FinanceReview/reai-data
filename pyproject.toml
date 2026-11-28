@@ -10,7 +10,6 @@ dependencies = [
     "datasets>=4.8.4",
     "emoji>=2.15.0",
     "flashtext>=2.7",
-    "google-play-scraper>=1.2.7",
     "konlpy>=0.6.0",
     "nltk>=3.9.3",
     "openai>=2.29.0",

@@ -4,7 +4,6 @@ Crawl 단계: API → Parquet 쓰기 + ingestion_batch PENDING 등록
 Load 단계(BatchLoader)에서 Parquet → ReviewMasterIndex 적재
 """
 
-from google_play_scraper import reviews, Sort, app as gp_app
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional
 from uuid import UUID
@@ -19,6 +18,7 @@ from .crawl_outcome import (
     playstore_failure,
 )
 from .exceptions import ParquetWriteError
+from .playstore_reviews import PlayReviewsError, fetch_reviews_page, play_reviews_settings
 from src.utils.db_connector import DatabaseConnector
 from src.models.base import Base
 from src.models.enums import PlatformType
@@ -36,9 +36,10 @@ class PlayStoreCrawler(BaseCrawler):
         super().__init__(config_path)
 
         # Play Store 특화 설정
-        self.language = self.config.get('playstore', {}).get('language', 'ko')
-        self.country = self.config.get('playstore', {}).get('country', 'kr')
         self.reviews_per_app = self.config.get('playstore', {}).get('reviews_per_app', 100)
+        # 리뷰 클라이언트 설정: app_version 백필과 같은 키를 읽으며 기본값이 없다
+        self.play_client = play_reviews_settings(self.config)
+        self.page_size = self.config['playstore']['page_size']
 
         # 앱 ID 파일 경로
         self.app_ids_file = self.config.get('app_ids', {}).get('playstore', 'config/app_ids/playstore_app_ids.txt')
@@ -74,46 +75,54 @@ class PlayStoreCrawler(BaseCrawler):
             reviewed_at = reviewed_at.replace(tzinfo=timezone.utc)
         return reviewed_at
 
-    def get_playstore_reviews(
-        self,
-        app_id: str,
-        lang: str = None,
-        country: str = None,
-        count: int = None
-    ) -> List[Dict[str, Any]]:
-        """지정된 앱 ID로 Google Play Store 리뷰를 가져옵니다."""
-        if lang is None:
-            lang = self.language
-        if country is None:
-            country = self.country
+    def get_playstore_reviews(self, app_id: str, count: int = None) -> List[Dict[str, Any]]:
+        """최신 리뷰를 count건(기본 playstore.reviews_per_app)까지 가져옵니다.
+
+        쪽은 _read_reviews가 읽습니다. 요청이 실패하면 PlayReviewsError를 그대로 올리고 앞서
+        읽은 리뷰는 돌려주지 않습니다(빈 목록으로 바꾸지 않음). run()은 _read_reviews로 그
+        리뷰까지 남깁니다.
+        """
+        reviews, error = self._read_reviews(app_id, count)
+        if error is not None:
+            raise error
+        return reviews
+
+    def _read_reviews(
+        self, app_id: str, count: int = None
+    ) -> Tuple[List[Dict[str, Any]], Optional[PlayReviewsError]]:
+        """최신 리뷰를 count건(기본 playstore.reviews_per_app)까지 읽고 (읽은 리뷰, 오류)를 돌려줍니다.
+
+        요청 1회에 playstore.page_size건까지 받고, 더 필요하면 continuation token으로 다음 쪽을
+        요청합니다. 토큰 없는 쪽이 오면 거기서 멈춥니다. 요청이 실패하거나 리뷰 없이 토큰만 있는
+        쪽이 오면(같은 쪽을 끝없이 요청하지 않도록) 거기서 멈추고, 그때까지 읽은 리뷰와
+        PlayReviewsError를 돌려줍니다. 끝까지 읽으면 오류는 None입니다.
+        """
         if count is None:
             count = self.reviews_per_app
 
+        self.logger.info(f"Play Store 리뷰 수집 시작 - 앱 ID: {app_id}, 개수: {count}")
+        result: List[Dict[str, Any]] = []
+        token = None
         try:
-            self.logger.info(f"Play Store 리뷰 수집 시작 - 앱 ID: {app_id}, 개수: {count}")
+            while len(result) < count:
+                if token is not None:
+                    self.wait_between_requests()
+                page = fetch_reviews_page(
+                    app_id, min(self.page_size, count - len(result)), self.play_client, token
+                )
+                if not page.reviews and page.next_token is not None:
+                    raise PlayReviewsError(
+                        f'a page without reviews came with a next-page token after {len(result)} reviews'
+                    )
+                result.extend(page.reviews)
+                token = page.next_token
+                if token is None:
+                    break
+        except PlayReviewsError as exc:
+            return result, exc
 
-            result, _ = reviews(
-                app_id,
-                lang=lang,
-                country=country,
-                sort=Sort.NEWEST,
-                count=count
-            )
-
-            self.logger.info(f"앱 ID {app_id}: {len(result)}개 리뷰 수집 완료")
-            return result
-
-        except Exception as e:
-            self.logger.error(f"앱 ID {app_id}의 리뷰 데이터를 가져오지 못했습니다: {e}")
-            return []
-
-    def get_app_details(self, app_id: str) -> Optional[Dict[str, Any]]:
-        """Play Store 앱 상세 정보를 가져옵니다."""
-        try:
-            return gp_app(app_id, lang=self.language, country=self.country)
-        except Exception as e:
-            self.logger.error(f"앱 상세 정보 가져오기 실패 - {app_id}: {e}")
-            return None
+        self.logger.info(f"앱 ID {app_id}: {len(result)}개 리뷰 수집 완료")
+        return result, None
 
     def _build_parquet_records(
         self,
@@ -160,8 +169,10 @@ class PlayStoreCrawler(BaseCrawler):
     def run(self) -> StoreCrawlSummary:
         """크롤러 실행: 모든 앱 순회 후 하루치 단일 파일을 MinIO에 업로드하고 결과를 돌려준다.
 
-        앱 하나가 리뷰 0건(feed_empty)이거나 실패한(error) 것은 경고다. 모든 앱이 0건이면
-        (playstore_failure) 모은 것이 없으니 ``failure``를 채워 돌려준다.
+        앱 하나가 리뷰 0건(feed_empty)이거나 실패한(error) 것은 경고다. 요청이 실패한 앱은
+        error가 되고, 그 전 쪽에서 읽은 리뷰는 레코드로 만들어 남긴다(fetched는 읽은 건수, 첫
+        요청이 실패하면 0). 모든 앱이 0건이면(playstore_failure) 모은 것이 없으니 ``failure``를
+        채워 돌려준다.
         """
         self.logger.info("Play Store 크롤러 실행 시작")
 
@@ -181,22 +192,30 @@ class PlayStoreCrawler(BaseCrawler):
 
             reviews_data = []
             try:
-                app_details = self.get_app_details(app_id)
-                app_name = app_details.get('title') if app_details else f'app_{app_id}'
+                reviews_data, error = self._read_reviews(app_id)
+                if error is not None:
+                    self.logger.error(
+                        f"앱 ID {app_id} 리뷰 요청 실패 (앞서 읽은 {len(reviews_data)}건은 남김): {error!r}"
+                    )
 
-                reviews_data = self.get_playstore_reviews(app_id)
-
-                if not reviews_data:
-                    result = AppCrawlResult(app_id, OUTCOME_FEED_EMPTY)
-                else:
+                new = 0
+                if reviews_data:
+                    # 카탈로그(apps)에 행이 있으면 그 이름을 그대로 두고, 없을 때만 이 이름으로 만든다
                     records = self.collect_app_records(
-                        app_id, app_name, reviews_data, self._build_parquet_records
+                        app_id, f'app_{app_id}', reviews_data, self._build_parquet_records
                     )
                     all_records.extend(records)
-                    self.logger.info(f"앱 ID {app_id}: 리뷰 {len(reviews_data)}건, 신규 {len(records)}건")
+                    new = len(records)
+                    self.logger.info(f"앱 ID {app_id}: 리뷰 {len(reviews_data)}건, 신규 {new}건")
+
+                if error is not None:
                     result = AppCrawlResult(
-                        app_id, OUTCOME_OK, fetched=len(reviews_data), new=len(records)
+                        app_id, OUTCOME_ERROR, fetched=len(reviews_data), new=new, detail=repr(error)
                     )
+                elif not reviews_data:
+                    result = AppCrawlResult(app_id, OUTCOME_FEED_EMPTY)
+                else:
+                    result = AppCrawlResult(app_id, OUTCOME_OK, fetched=len(reviews_data), new=new)
 
             except Exception as e:
                 self.logger.exception(f"앱 ID {app_id} 크롤링 실패: {e}")

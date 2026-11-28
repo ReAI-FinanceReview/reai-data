@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-25T00:00:00Z -->
+<!-- Generated: 2026-08-10T08:45:46Z | Updated: 2026-11-28T00:00:00Z -->
 
 # src/schemas/parquet
 
@@ -41,8 +41,9 @@ None.
 PYTHONPATH=. uv run pytest tests/test_parquet_schemas.py tests/test_parquet_writer.py -q
 ```
 No test compares the two stores' records field by field: `tests/test_crawler_consistency.py` uses
-stand-in records rather than `AppReviewSchema`, and the only Play Store crawler test
-(`tests/test_bronze_loading.py`) checks its `app_version` mapping.
+stand-in records rather than `AppReviewSchema`. For the Play Store, `tests/test_bronze_loading.py`
+checks the `app_version` mapping, and `tests/test_playstore_reviews.py` runs `PlayStoreCrawler.run`
+into a real MinIO bucket and checks the Bronze record fields it writes.
 
 ### Common Patterns
 Pydantic v2 `BaseModel` with `ConfigDict`, `Field(default_factory=...)` for generated values, and
