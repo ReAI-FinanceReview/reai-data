@@ -988,6 +988,12 @@ def play_reviews_server(monkeypatch):
     server.close()
 
 
+def _point_play_at(config: Dict[str, Any], server: PlayReviewsServer) -> None:
+    """Send the config's Play requests to ``server`` and retry without waiting."""
+    config['playstore']['reviews_url'] = server.url_template
+    config['playstore']['retry_backoff_seconds'] = 0
+
+
 @pytest.fixture
 def backfill_config(tmp_path, appstore_rss_server) -> str:
     """config/crawler_config.yml with the RSS URL pointed at appstore_rss_server and no delay."""
@@ -1100,18 +1106,20 @@ def backfill_db(test_db_engine, test_db_schema, test_db_url, monkeypatch):
 class CrawlConfig:
     """config/crawler_config.yml for a crawl test, written under ``tmp_path``.
 
-    The App Store RSS URL points at ``appstore_rss_server``, there is no delay, the crawler's
-    output directories live under ``tmp_path``, and each store reads its app ids from a file of
-    its own that starts empty, so that store's crawler raises before any request (Play never
-    reaches the live store) until set_app_ids fills it.
+    The App Store RSS URL points at ``appstore_rss_server`` and the Play reviews URL at
+    ``play_reviews_server`` (so no test reaches a live store), there is no delay or retry wait, the
+    crawler's output directories live under ``tmp_path``, and each store reads its app ids from a
+    file of its own that starts empty, so that store's crawler raises before any request until
+    set_app_ids fills it.
     """
 
-    def __init__(self, tmp_path: Path, rss_url_template: str):
+    def __init__(self, tmp_path: Path, rss_url_template: str, play_server: PlayReviewsServer):
         config = yaml.safe_load(
             (Path(__file__).resolve().parents[1] / 'config' / 'crawler_config.yml').read_text(encoding='utf-8')
         )
         config['global']['delay_between_requests'] = 0
         config['appstore']['reviews_rss_url'] = rss_url_template
+        _point_play_at(config, play_server)
         config['output']['base_directory'] = str(tmp_path / 'crawler_output')
         self.app_id_files = {store: tmp_path / f'{store}_app_ids.txt' for store in ('appstore', 'playstore')}
         for store, path in self.app_id_files.items():
@@ -1126,7 +1134,9 @@ class CrawlConfig:
 
 
 @pytest.fixture
-def crawl_config(tmp_path, appstore_rss_server, test_db_schema, test_db_url, monkeypatch) -> CrawlConfig:
+def crawl_config(
+    tmp_path, appstore_rss_server, play_reviews_server, test_db_schema, test_db_url, monkeypatch
+) -> CrawlConfig:
     """CrawlConfig on the test database with Parquet writes off (no object store, no DB rows).
 
     The crawlers' DatabaseConnector is pointed at the test database through ``DATABASE_URL``;
@@ -1134,7 +1144,7 @@ def crawl_config(tmp_path, appstore_rss_server, test_db_schema, test_db_url, mon
     """
     monkeypatch.setenv('DATABASE_URL', test_db_url)
     monkeypatch.setenv('ENABLE_PARQUET_WRITE', 'false')
-    return CrawlConfig(tmp_path, appstore_rss_server.url_template)
+    return CrawlConfig(tmp_path, appstore_rss_server.url_template, play_reviews_server)
 
 
 @pytest.fixture

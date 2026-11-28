@@ -29,6 +29,8 @@ playstore:
   reviews_rpc_id: "oCPfdb"         # 리뷰 목록 RPC id (f.req 본문에 들어감)
   max_retries: 2                   # 일시 오류(연결, timeout, HTTP 429/5xx, PlayGatewayError) 때 첫 요청 뒤 재시도 횟수
   retry_backoff_seconds: 5         # n번째 재시도 전 n × 이 값(초)만큼 대기
+  # 평소 수집(PlayStoreCrawler) 전용이고 코드 기본값은 없음
+  page_size: 200                   # 요청 1회에 받는 최대 리뷰 수. reviews_per_app 이 더 크면 continuation token 으로 나눠 받음
   # app_version 백필(scripts/backfill_app_version.py) 전용. 평소 수집에는 쓰지 않고 코드 기본값도 없음
   backfill_page_size: 200          # 요청 1회(continuation token 1쪽)에 받는 리뷰 수
   backfill_max_reviews_per_app: 3000  # 앱당 조회 상한. 조회한 리뷰 수가 이 값에 닿으면 cap_reached 로 멈춤

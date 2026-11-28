@@ -480,8 +480,8 @@ def test_appstore_app_version_written_to_parquet(
 def test_playstore_review_created_version_written_to_parquet(test_db_session, temp_bronze_dir):
     """Play `reviewCreatedVersion` becomes `app_version`; a review without one stays None.
 
-    google-play-scraper fills `reviewCreatedVersion` and `appVersion` from the same
-    payload element and returns None for both when the reviewer's version is unknown.
+    The Play review client returns None for `reviewCreatedVersion` when the reviewer's version
+    is unknown.
     """
     from datetime import datetime, timezone
 
@@ -495,7 +495,6 @@ def test_playstore_review_created_version_written_to_parquet(test_db_session, te
             'at': reviewed_at,
             'replyContent': None,
             'reviewCreatedVersion': '7.12.0',
-            'appVersion': '7.12.0',
         },
         {
             'reviewId': 'play_version_review_2',
@@ -505,7 +504,6 @@ def test_playstore_review_created_version_written_to_parquet(test_db_session, te
             'at': reviewed_at,
             'replyContent': None,
             'reviewCreatedVersion': None,
-            'appVersion': None,
         },
     ]
     crawler = _make_crawler(test_db_session, temp_bronze_dir, crawler_cls=PlayStoreCrawler)
