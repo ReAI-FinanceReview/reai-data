@@ -21,6 +21,7 @@ from sqlalchemy import text
 from src.crawlers.crawl_outcome import OUTCOME_ERROR, OUTCOME_FEED_EMPTY, OUTCOME_OK
 from src.crawlers.playstore_crawler import PlayStoreCrawler
 from src.crawlers.playstore_reviews import (
+    GATEWAY_ERROR_MARKER,
     PlayPage,
     PlayReviewsError,
     fetch_reviews_page,
@@ -132,13 +133,29 @@ def test_play_gateway_error_is_retried_then_the_page_is_read(play_reviews_server
     assert len(play_reviews_server.requests_for(APP)) == 2
 
 
-def test_play_gateway_error_on_every_attempt_raises(play_reviews_server, settings):
+@pytest.mark.parametrize('body', [
+    pytest.param(PlayReviewsServer.gateway_error_body(RPC_ID), id='entry_without_payload'),
+    pytest.param(PlayReviewsServer.PREFIX + '[' * 100000 + GATEWAY_ERROR_MARKER, id='too_deep_to_parse'),
+])
+def test_play_gateway_error_on_every_attempt_raises(play_reviews_server, settings, body):
     attempts = settings.max_retries + 1
-    play_reviews_server.push(APP, *[PlayAnswer(body=PlayReviewsServer.gateway_error_body(RPC_ID))] * attempts)
+    play_reviews_server.push(APP, *[PlayAnswer(body=body)] * attempts)
 
     with pytest.raises(PlayReviewsError, match='last: PlayGatewayError'):
         fetch_reviews_page(APP, 10, settings)
     assert len(play_reviews_server.requests_for(APP)) == attempts
+
+
+def test_a_review_quoting_the_play_gateway_error_name_is_read_at_once(
+    play_reviews_server, settings, play_review_item
+):
+    content = f'앱을 열면 {GATEWAY_ERROR_MARKER} 라고 떠요'
+    play_reviews_server.set_reviews(APP, [play_review_item('r-0', content=content)])
+
+    [review] = fetch_reviews_page(APP, 10, settings).reviews
+
+    assert review['content'] == content
+    assert len(play_reviews_server.requests_for(APP)) == 1
 
 
 @pytest.mark.parametrize('body', [

@@ -162,11 +162,25 @@ def parse_reviews_response(text: str, rpc_id: str) -> PlayPage:
     return PlayPage([review_from_item(item) for item in items], token)
 
 
+def _has_payload(text: str, rpc_id: str) -> bool:
+    """Whether the body holds a ``wrb.fr`` entry for ``rpc_id`` with a string payload; a body that
+    does not parse has none."""
+    try:
+        envelope = json.loads(text.removeprefix(_RESPONSE_PREFIX))
+        return any(
+            isinstance(item, list) and item[:2] == [_RESPONSE_ENTRY, rpc_id]
+            and len(item) > 2 and isinstance(item[2], str)
+            for item in envelope
+        )
+    except (ValueError, TypeError, RecursionError):
+        return False
+
+
 def _post(url: str, form: Dict[str, str], settings: PlayReviewsSettings) -> str:
     """POST with TLS verification and the timeout, retrying transient failures with linear backoff.
 
-    Retried: connection errors, timeouts, HTTP 429 and 5xx, and a body carrying PlayGatewayError.
-    Any other HTTP error status is raised at once.
+    Retried: connection errors, timeouts, HTTP 429 and 5xx, and a body without a payload that
+    carries PlayGatewayError. Any other HTTP error status is raised at once.
     """
     attempts = settings.max_retries + 1
     failure: Optional[str] = None
@@ -190,7 +204,10 @@ def _post(url: str, form: Dict[str, str], settings: PlayReviewsSettings) -> str:
             response.raise_for_status()
         except requests.HTTPError as exc:
             raise PlayReviewsError(f'HTTP {status}') from exc
-        if GATEWAY_ERROR_MARKER in response.text:
+        # No live PlayGatewayError answer has been captured, so its shape is unknown and the name is
+        # matched anywhere in the body, as google-play-scraper 1.2.7 did, but only in a body without
+        # a payload: a page's review text can contain the name too.
+        if GATEWAY_ERROR_MARKER in response.text and not _has_payload(response.text, settings.rpc_id):
             failure, cause = 'PlayGatewayError', None
             continue
         return response.text
