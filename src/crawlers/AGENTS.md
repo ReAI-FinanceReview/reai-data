@@ -137,15 +137,15 @@ the uploaded object. It drives `AppStoreCrawler` with stand-in records, so no te
 Store and Play Store output. `tests/test_bronze_loading.py` covers the Parquet → DB handoff and
 each store's `app_version` mapping into Bronze. `tests/test_playstore_reviews.py` covers the Play
 client over real HTTP against the local `play_reviews_server` (first, next, last and empty page,
-HTTP errors, server-error, dropped-connection and PlayGatewayError retries, a review quoting the
-PlayGatewayError name read at once, a TLS failure raised at once, timeout, malformed bodies,
-reviews missing a required field or shifted by one position, a bad token, field extraction with
-and without reply and version, and the default TLS context left alone on import, checked in a
-fresh interpreter) and `PlayStoreCrawler.run` over it (every app empty or failing fails the store,
-one failed app is a warning, a review whose positions moved makes its app an error, a page without
-reviews but with a token ends its app as an error, a later page failing keeps the earlier reviews
-into Bronze, paging up to `reviews_per_app`, reviews into Bronze through a real MinIO bucket with
-the catalog app name kept).
+HTTP errors, HTTP 429 / 5xx, dropped-connection and PlayGatewayError retries, the linear backoff, a
+review quoting the PlayGatewayError name read at once, a TLS failure raised at once, timeout,
+malformed bodies, reviews missing a required field or shifted by one position, a bad token, field
+extraction with and without reply and version, and the default TLS context left alone on import,
+checked in a fresh interpreter) and `PlayStoreCrawler.run` over it (every app empty or failing fails
+the store, one failed app is a warning, a review whose positions moved makes its app an error, a
+page without reviews but with a token ends its app as an error, a later page failing keeps the
+earlier reviews into Bronze, paging up to `reviews_per_app`, reviews into Bronze through a real
+MinIO bucket with the catalog app name kept).
 `tests/test_app_version_backfill.py` covers the backfill: `fetch_appstore_versions`,
 `fetch_playstore_versions` and `backfill_app_versions` run over real HTTP against the local
 `appstore_rss_server` and `play_reviews_server` (conftest) and against committed rows

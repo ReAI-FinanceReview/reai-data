@@ -104,17 +104,32 @@ def test_a_client_error_status_raises_at_once(play_reviews_server, settings, pla
     assert len(play_reviews_server.requests_for(APP)) == 1
 
 
-def test_a_server_error_is_retried_and_raised_once_retries_run_out(play_reviews_server, settings, play_review_item):
+@pytest.mark.parametrize('status', [429, 500, 503])
+def test_a_transient_status_is_retried_and_raised_once_retries_run_out(
+    play_reviews_server, settings, play_review_item, status
+):
     play_reviews_server.set_reviews(APP, _items(play_review_item, 'r', 3))
     attempts = settings.max_retries + 1
-    play_reviews_server.push(APP, *[PlayAnswer(status=500)] * attempts)
+    play_reviews_server.push(APP, *[PlayAnswer(status=status)] * attempts)
 
-    with pytest.raises(PlayReviewsError, match=f'{attempts} attempts failed, last: HTTP 500'):
+    with pytest.raises(PlayReviewsError, match=f'{attempts} attempts failed, last: HTTP {status}'):
         fetch_reviews_page(APP, 10, settings)
     assert len(play_reviews_server.requests_for(APP)) == attempts
 
-    play_reviews_server.push(APP, PlayAnswer(status=503))  # one failure, then the page
+    play_reviews_server.push(APP, PlayAnswer(status=status))  # one failure, then the page
     assert len(fetch_reviews_page(APP, 10, settings).reviews) == 3
+
+
+def test_retries_wait_the_backoff_times_the_retry_number(play_reviews_server, settings):
+    backoff, retries = 0.05, 2
+    waiting = replace(settings, retry_backoff_seconds=backoff, max_retries=retries)
+    play_reviews_server.push(APP, *[PlayAnswer(status=500)] * (retries + 1))
+
+    started = time.monotonic()
+    with pytest.raises(PlayReviewsError):
+        fetch_reviews_page(APP, 10, waiting)
+
+    assert time.monotonic() - started >= backoff * sum(range(1, retries + 1))  # 1 × backoff, then 2 ×
 
 
 def test_a_timeout_raises(play_reviews_server, settings, play_review_item):
@@ -201,7 +216,6 @@ def test_a_review_quoting_the_play_gateway_error_name_is_read_at_once(
     PlayReviewsServer.envelope(RPC_ID, None, [3]),                       # what the live store sends for a bad token
     PlayReviewsServer.envelope(RPC_ID, 'not json'),
     PlayReviewsServer.envelope(RPC_ID, '[]'),
-    PlayReviewsServer.envelope(RPC_ID, '[{"reviews": 1}, [null, ["token"]], null]'),
 ])
 def test_a_malformed_response_raises(play_reviews_server, settings, body):
     play_reviews_server.push(APP, PlayAnswer(body=body))
@@ -220,6 +234,14 @@ def test_a_malformed_response_raises(play_reviews_server, settings, body):
     pytest.param(_page_body({}, None), 'reviews dict', id='reviews_empty_object'),
     pytest.param(_page_body(0, None), 'reviews int', id='reviews_zero'),
     pytest.param(_page_body([REQUIRED_ONLY_ITEM], 'abc'), 'token slot str', id='token_slot_string'),
+    # Each rule alone: valid reviews with a bad token, and bad reviews with a valid token.
+    pytest.param(_page_body([REQUIRED_ONLY_ITEM], [None, ['token']]), 'token list', id='token_list'),
+    pytest.param(_page_body([REQUIRED_ONLY_ITEM], [None, 123]), 'token int', id='token_int'),
+    pytest.param(_page_body({'reviews': 1}, [None, 'token']), 'reviews dict', id='reviews_object_with_token'),
+    pytest.param(
+        PlayReviewsServer.envelope(RPC_ID, PlayReviewsServer.page_payload([], None))[len(PlayReviewsServer.PREFIX):],
+        'does not start with', id='valid_envelope_without_prefix',
+    ),
 ])
 def test_a_malformed_response_raises_naming_what_is_wrong(play_reviews_server, settings, body, match):
     play_reviews_server.push(APP, PlayAnswer(body=body))

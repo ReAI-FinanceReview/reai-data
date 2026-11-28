@@ -49,7 +49,7 @@ from src.crawlers.app_version_backfill import (
 from src.crawlers.appstore_crawler import AppStoreCrawler
 from src.crawlers.appstore_rss import appstore_feed_complete, appstore_review_entries
 from src.crawlers.playstore_crawler import PlayStoreCrawler
-from tests.conftest import PLAY_REVIEW_AT, PlayAnswer
+from tests.conftest import PLAY_REVIEW_AT, PlayAnswer, PlayReviewsServer
 from src.models.apps import App
 from src.models.enums import PlatformType
 
@@ -465,6 +465,23 @@ def test_fetch_playstore_confirms_the_end_with_a_second_request(
     assert (result.stop_reason, result.complete, result.found) == (STOP_EXHAUSTED, True, {'p3': '2.3.0'})
     requests = play_reviews_server.requests_for('com.example.bank')
     assert len(requests) == 3 and requests[1] == requests[2]  # the last page, asked twice alike
+
+
+def test_fetch_playstore_end_is_not_confirmed_when_the_second_answer_has_a_token(
+    play_reviews_server, play_settings, play_review_item
+):
+    _serve_play(play_reviews_server, play_review_item, 4)  # page 2 holds p3 alone, without a token
+    again_with_token = PlayReviewsServer.envelope(
+        play_settings.playstore_client.rpc_id,
+        PlayReviewsServer.page_payload([play_review_item('p3', '2.3.0', at=PLAY_REVIEW_AT - 3)], 'tok-more'),
+    )
+    play_reviews_server.push('com.example.bank', PlayAnswer(), PlayAnswer(), PlayAnswer(body=again_with_token))
+
+    result = fetch_playstore_versions(_play_target(p3=REVIEWED_AT, gone=REVIEWED_AT), play_settings)
+
+    assert (result.stop_reason, result.complete, result.found) == (STOP_END_NOT_CONFIRMED, False, {'p3': '2.3.0'})
+    requests = play_reviews_server.requests_for('com.example.bank')
+    assert len(requests) == 3 and requests[1] == requests[2]
 
 
 @pytest.mark.parametrize('answers, failed_page, found', [
