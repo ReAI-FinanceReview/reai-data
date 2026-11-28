@@ -1,0 +1,209 @@
+"""Play 스토어 리뷰를 batchexecute로 한 쪽씩 읽는 자체 클라이언트 (Issue #133)
+
+평소 크롤(PlayStoreCrawler.get_playstore_reviews)과 app_version 백필(app_version_backfill.fetch_playstore_versions)이
+같은 코드로 읽는다. google-play-scraper 1.2.7의 리뷰 조회(features/reviews.py)를 대신한다.
+
+- 요청: ``playstore.reviews_url``(언어, 국가를 채운 batchexecute URL)에 ``f.req`` 폼을 POST한다.
+  ``f.req``는 RPC id(``playstore.reviews_rpc_id``)와 조회 배열
+  ``[null,[2,정렬,[개수,null,토큰],null,[null × 9]],["앱ID",7]]``이다. 정렬은 최신순만 쓴다.
+- 응답: 앞의 ``)]}'``를 떼고 JSON으로 읽어 ``["wrb.fr", RPC id, payload, ...]`` 항목을 찾는다.
+  payload(JSON 문자열)의 ``[0]``이 리뷰 목록, ``[-2][-1]``이 다음 쪽 토큰이다. 마지막 쪽은
+  ``[-2]``가 null이다(2026-11-28 실측: 끝까지 넘긴 앱 5개 모두 덜 찬 쪽에 토큰 없음).
+- 요청 한 번이 한 쪽이다. 요청이 실패하면(HTTP 상태, 연결, timeout, 재시도 뒤에도 남은
+  PlayGatewayError, 모양이 깨진 응답) ``PlayReviewsError``를 올린다. 피드의 끝(토큰 없음)이나
+  빈 목록과는 섞이지 않는다.
+- TLS는 requests가 검증하고, 프로세스의 기본 TLS 컨텍스트는 건드리지 않는다.
+"""
+
+import json
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from http import HTTPStatus
+from typing import Any, Dict, List, Optional, Tuple
+
+import requests
+
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+# Fixed parts of the request and response format, as google-play-scraper 1.2.7 sends and reads them
+# (constants/request.py `_Reviews`, utils/request.py, constants/regex.py `REVIEWS`).
+_QUERY_KIND = 2  # first element of the review query
+_SORT_NEWEST = 2  # google_play_scraper.Sort.NEWEST
+_FILTER_SLOTS = 9  # [null, score filter, ..., device filter]; both filters stay null
+_APP_ID_KIND = 7  # marker that follows the app id
+_RPC_MODE = 'generic'
+_RESPONSE_PREFIX = ")]}'"
+_RESPONSE_ENTRY = 'wrb.fr'
+GATEWAY_ERROR_MARKER = 'com.google.play.gateway.proto.PlayGatewayError'
+
+# Positions inside one review item (google-play-scraper 1.2.7 `ElementSpecs.Review`, without
+# `userImage` and the duplicate `appVersion`). A missing position reads as None, as it does there.
+# Positions the library does not map are not read.
+_REVIEW_FIELDS = {
+    'reviewId': (0,),
+    'userName': (1, 0),
+    'score': (2,),
+    'content': (4,),
+    'at': (5, 0),  # epoch seconds
+    'thumbsUpCount': (6,),
+    'replyContent': (7, 1),
+    'repliedAt': (7, 2, 0),  # epoch seconds; the whole [7] is null when there is no reply
+    'reviewCreatedVersion': (10,),
+}
+_TIMESTAMP_FIELDS = ('at', 'repliedAt')
+
+
+class PlayReviewsError(Exception):
+    """A Play reviews request failed; never the end of the feed, which is a page without a token."""
+
+
+@dataclass(frozen=True)
+class PlayReviewsSettings:
+    """Client settings, read from crawler_config.yml by ``play_reviews_settings`` with no coded fallbacks."""
+
+    url_template: str
+    rpc_id: str
+    language: str
+    country: str
+    timeout_seconds: float
+    max_retries: int
+    retry_backoff_seconds: float
+
+
+def play_reviews_settings(config: Dict[str, Any]) -> PlayReviewsSettings:
+    """Client settings from a parsed crawler_config.yml; a missing key raises ``KeyError``.
+
+    The request timeout is ``global.timeout``, the one the App Store RSS requests use.
+    """
+    play = config['playstore']
+    return PlayReviewsSettings(
+        url_template=play['reviews_url'],
+        rpc_id=play['reviews_rpc_id'],
+        language=play['language'],
+        country=play['country'],
+        timeout_seconds=config['global']['timeout'],
+        max_retries=play['max_retries'],
+        retry_backoff_seconds=play['retry_backoff_seconds'],
+    )
+
+
+@dataclass
+class PlayPage:
+    """One page of reviews, newest first. ``next_token`` is None on the last page."""
+
+    reviews: List[Dict[str, Any]]
+    next_token: Optional[str]
+
+
+def _compact_json(value: Any) -> str:
+    return json.dumps(value, separators=(',', ':'))
+
+
+def request_form(app_id: str, count: int, token: Optional[str], rpc_id: str) -> Dict[str, str]:
+    """The ``f.req`` form for one page: the first page without ``token``, a later one with it."""
+    paging = [count] if token is None else [count, None, token]
+    query = [None, [_QUERY_KIND, _SORT_NEWEST, paging, None, [None] * _FILTER_SLOTS], [app_id, _APP_ID_KIND]]
+    return {'f.req': _compact_json([[[rpc_id, _compact_json(query), None, _RPC_MODE]]])}
+
+
+def _lookup(item: Any, path: Tuple[int, ...]) -> Any:
+    value = item
+    for index in path:
+        try:
+            value = value[index]
+        except (IndexError, KeyError, TypeError):
+            return None
+    return value
+
+
+def review_from_item(item: Any) -> Dict[str, Any]:
+    """One review dict with the keys and value types google-play-scraper 1.2.7 returned.
+
+    ``at`` and ``repliedAt`` are naive local time (``datetime.fromtimestamp``), as they were there;
+    callers rely on that for ``at`` (PlayStoreCrawler._parse_reviewed_at,
+    app_version_backfill.scan_play_page).
+    """
+    review = {key: _lookup(item, path) for key, path in _REVIEW_FIELDS.items()}
+    for key in _TIMESTAMP_FIELDS:
+        try:
+            review[key] = datetime.fromtimestamp(review[key])
+        except (TypeError, ValueError, OverflowError, OSError):
+            review[key] = None
+    return review
+
+
+def parse_reviews_response(text: str, rpc_id: str) -> PlayPage:
+    """Read one batchexecute response body; a body of any other shape raises ``PlayReviewsError``."""
+    if not text.startswith(_RESPONSE_PREFIX):
+        raise PlayReviewsError(f'response does not start with {_RESPONSE_PREFIX!r}: {text[:80]!r}')
+    try:
+        envelope = json.loads(text[len(_RESPONSE_PREFIX):])
+        entry = next(
+            item for item in envelope
+            if isinstance(item, list) and item[:2] == [_RESPONSE_ENTRY, rpc_id]
+        )
+    except (ValueError, TypeError, StopIteration) as exc:
+        raise PlayReviewsError(f'no {_RESPONSE_ENTRY} {rpc_id} entry in the response: {exc!r}') from exc
+    if not isinstance(entry[2], str):
+        # Seen with a bad continuation token: ["wrb.fr", rpc_id, null, null, null, [3], "generic"].
+        raise PlayReviewsError(f'{rpc_id} answered without a payload: {entry!r}')
+    try:
+        payload = json.loads(entry[2])
+        items = payload[0] or []
+        tail = payload[-2]
+        token = tail[-1] if tail else None
+    except (ValueError, TypeError, IndexError, KeyError) as exc:
+        raise PlayReviewsError(f'malformed {rpc_id} payload: {exc!r}') from exc
+    if not isinstance(items, list) or not (token is None or isinstance(token, str)):
+        raise PlayReviewsError(f'malformed {rpc_id} payload: reviews {type(items).__name__}, token {token!r}')
+    return PlayPage([review_from_item(item) for item in items], token)
+
+
+def _post(url: str, form: Dict[str, str], settings: PlayReviewsSettings) -> str:
+    """POST with TLS verification and the timeout, retrying transient failures with linear backoff.
+
+    Retried: connection errors, timeouts, HTTP 429 and 5xx, and a body carrying PlayGatewayError.
+    Any other HTTP error status is raised at once.
+    """
+    attempts = settings.max_retries + 1
+    failure: Optional[str] = None
+    cause: Optional[BaseException] = None
+    for attempt in range(attempts):
+        if attempt:
+            logger.warning(f"🤖 Play 리뷰 요청 재시도 {attempt}/{settings.max_retries}: {failure}")
+            time.sleep(settings.retry_backoff_seconds * attempt)
+        try:
+            response = requests.post(url, data=form, timeout=settings.timeout_seconds, verify=True)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            failure, cause = repr(exc), exc
+            continue
+        except requests.RequestException as exc:
+            raise PlayReviewsError(f'request failed: {exc!r}') from exc
+        status = response.status_code
+        if status == HTTPStatus.TOO_MANY_REQUESTS or status >= HTTPStatus.INTERNAL_SERVER_ERROR:
+            failure, cause = f'HTTP {status}', None
+            continue
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise PlayReviewsError(f'HTTP {status}') from exc
+        if GATEWAY_ERROR_MARKER in response.text:
+            failure, cause = 'PlayGatewayError', None
+            continue
+        return response.text
+    raise PlayReviewsError(f'{attempts} attempts failed, last: {failure}') from cause
+
+
+def fetch_reviews_page(
+    app_id: str, count: int, settings: PlayReviewsSettings, token: Optional[str] = None
+) -> PlayPage:
+    """Request one page of up to ``count`` newest reviews: the first page, or the one ``token`` names.
+
+    Raises ``PlayReviewsError`` when the request fails or the response cannot be read.
+    """
+    url = settings.url_template.format(language=settings.language, country=settings.country)
+    text = _post(url, request_form(app_id, count, token, settings.rpc_id), settings)
+    return parse_reviews_response(text, settings.rpc_id)

@@ -6,6 +6,7 @@ including:
 - Temporary storage fixtures (Parquet directories)
 - Mock data generators (sample reviews, apps)
 - Mock API fixtures (App Store, Play Store)
+- Real local HTTP servers for the App Store RSS and the Play reviews batchexecute endpoint
 - Database state helpers (pre-populated tables)
 
 Architecture:
@@ -22,10 +23,12 @@ import os
 import json
 import re
 import threading
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
+from urllib.parse import parse_qs, urlsplit
 from uuid6 import uuid7
 
 import yaml
@@ -793,6 +796,194 @@ def appstore_rss_server(monkeypatch):
     no_proxy = os.environ.get('NO_PROXY', '')
     monkeypatch.setenv('NO_PROXY', ','.join(filter(None, [no_proxy, '127.0.0.1'])))
     server = AppStoreRssServer()
+    yield server
+    server.close()
+
+
+# ========================================
+# PLAY REVIEWS (Issue #133)
+# ========================================
+
+PLAY_REVIEW_AT = 1795507631  # epoch seconds of a synthetic review (2026-11-24 UTC)
+PLAY_AVATAR_URL = 'https://play-lh.googleusercontent.com/a/example'
+
+
+def _play_review_item(
+    review_id: str,
+    version: Optional[str] = None,
+    *,
+    at: int = PLAY_REVIEW_AT,
+    score: int = 4,
+    content: str = '업데이트 후 로그인이 빨라졌어요',
+    user_name: str = '사용자',
+    thumbs_up: int = 0,
+    reply: Optional[str] = None,
+    replied_at: Optional[int] = None,
+) -> List[Any]:
+    """One review array of a Play batchexecute reviews payload, laid out as on live pages
+    (2026-11-28, ko/kr): 17 elements, [5] = [epoch seconds, nanos], [7] = [replier, reply,
+    [epoch seconds, nanos]] or null, [9] author info, [10] the version or null. Values are synthetic.
+    """
+    avatar = [None, 2, None, [None, None, PLAY_AVATAR_URL]]
+    return [
+        review_id,
+        [user_name, avatar],
+        score,
+        None,
+        content,
+        [at, 0],
+        thumbs_up,
+        None if reply is None else ['테스트은행', reply, [replied_at, 0]],
+        None,
+        [f'author-{review_id}', user_name, None, [avatar, False], avatar],
+        version,
+        None, None, None, None, None,
+        1,
+    ]
+
+
+@pytest.fixture
+def play_review_item():
+    """Builder for Play review arrays: ``play_review_item(review_id, version=None, **fields)``."""
+    return _play_review_item
+
+
+@dataclass
+class PlayAnswer:
+    """A one-off answer queued with PlayReviewsServer.push: an HTTP ``status``, a raw ``body``
+    (``None``: the page the request asks for), after waiting ``delay`` seconds."""
+
+    status: int = 200
+    body: Optional[str] = None
+    delay: float = 0
+
+
+class PlayReviewsServer:
+    """A real HTTP server on 127.0.0.1 that answers the Play batchexecute reviews POST.
+
+    Each app serves a list of review arrays, newest first. A request reads ``count`` of them from
+    the start, or from where its continuation token points, and the answer carries a next-page
+    token only while reviews remain: that is how the live store answered (2026-11-28: full pages
+    with a token, a last partial page without one). An app with no reviews answers an empty page
+    without a token, as the live store does for an app id it does not know; an unknown token
+    answers the entry without a payload the live store sends for a bad token.
+    """
+
+    PATH = '/_/PlayStoreUi/data/batchexecute'
+    PREFIX = ")]}'\n\n"
+
+    def __init__(self):
+        self.reviews: Dict[str, List[List[Any]]] = {}
+        self.answers: Dict[str, List[PlayAnswer]] = {}
+        self.requests: List[Dict[str, Any]] = []
+        self._tokens: Dict[str, tuple] = {}
+        self._release = threading.Event()
+        play = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                url = urlsplit(self.path)
+                if url.path != play.PATH:
+                    self.send_error(404)
+                    return
+                length = int(self.headers.get('Content-Length', 0))
+                form = parse_qs(self.rfile.read(length).decode('utf-8'))
+                [[[rpc_id, query_json, _, _]]] = json.loads(form['f.req'][0])
+                query = json.loads(query_json)
+                paging = query[1][2]
+                request = {
+                    'app_id': query[2][0], 'count': paging[0], 'token': paging[2] if len(paging) > 2 else None,
+                    'sort': query[1][1], 'rpc_id': rpc_id, 'query': parse_qs(url.query),
+                }
+                play.requests.append(request)
+                queued = play.answers.get(request['app_id'])
+                answer = queued.pop(0) if queued else PlayAnswer()
+                if answer.delay:
+                    play._release.wait(answer.delay)
+                if answer.status != 200:
+                    self.send_error(answer.status)
+                    return
+                body = answer.body if answer.body is not None else play.page_body(request)
+                data = body.encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        self._httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True
+        )
+        self._thread.start()
+        port = self._httpd.server_address[1]
+        self.url_template = f'http://127.0.0.1:{port}{self.PATH}?hl={{language}}&gl={{country}}'
+
+    @classmethod
+    def envelope(cls, rpc_id: str, payload: Optional[str], error: Optional[List[Any]] = None) -> str:
+        """A response body: the ``)]}'`` prefix, then the wrb.fr entry and the two trailing entries."""
+        entries = [
+            ['wrb.fr', rpc_id, payload, None, None, error, 'generic'],
+            ['di', 48],
+            ['af.httprm', 47, '-7539252846892424692', 28],
+        ]
+        return cls.PREFIX + json.dumps(entries, separators=(',', ':'))
+
+    @classmethod
+    def page_payload(cls, items: List[List[Any]], token: Optional[str]) -> str:
+        payload = [items or None, [None, token] if token else None, [[None, [[1800], None, [72000]]]]]
+        return json.dumps(payload, separators=(',', ':'))
+
+    @classmethod
+    def gateway_error_body(cls, rpc_id: str) -> str:
+        """An entry without a payload whose error names PlayGatewayError. Not captured live: the
+        detail around the name is made up; the name is what google-play-scraper 1.2.7 matched."""
+        detail = [['type.googleapis.com/com.google.play.gateway.proto.PlayGatewayError', []]]
+        return cls.envelope(rpc_id, None, [8, None, detail])
+
+    def page_body(self, request: Dict[str, Any]) -> str:
+        app_id, count, token = request['app_id'], request['count'], request['token']
+        if token is None:
+            offset = 0
+        elif self._tokens.get(token, (None,))[0] == app_id:
+            offset = self._tokens[token][1]
+        else:
+            return self.envelope(request['rpc_id'], None, [3])
+        items = self.reviews.get(app_id, [])
+        end = offset + count
+        next_token = None
+        if end < len(items):
+            next_token = f'tok-{app_id}-{end}'
+            self._tokens[next_token] = (app_id, end)
+        return self.envelope(request['rpc_id'], self.page_payload(items[offset:end], next_token))
+
+    def set_reviews(self, app_id: str, items: List[List[Any]]) -> None:
+        self.reviews[app_id] = items
+
+    def push(self, app_id: str, *answers: PlayAnswer) -> None:
+        """Answer the next requests for ``app_id`` with ``answers``, in order, then serve pages again."""
+        self.answers.setdefault(app_id, []).extend(answers)
+
+    def requests_for(self, app_id: str) -> List[tuple]:
+        """(count, token) of each request for ``app_id``, in order."""
+        return [(r['count'], r['token']) for r in self.requests if r['app_id'] == app_id]
+
+    def close(self) -> None:
+        self._release.set()
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join()
+
+
+@pytest.fixture
+def play_reviews_server(monkeypatch):
+    """PlayReviewsServer for the test; requests to it bypass any configured HTTP proxy."""
+    no_proxy = os.environ.get('NO_PROXY', '')
+    monkeypatch.setenv('NO_PROXY', ','.join(filter(None, [no_proxy, '127.0.0.1'])))
+    server = PlayReviewsServer()
     yield server
     server.close()
 
