@@ -428,6 +428,59 @@ def test_crawler_pages_with_tokens_up_to_reviews_per_app(crawl_config, play_revi
 
 
 @pytest.mark.requires_db
+def test_a_page_without_reviews_but_with_a_token_ends_the_app_as_an_error(
+    crawl_config, play_reviews_server, play_review_item
+):
+    page_size, app_id = 4, 'com.example.looping'
+    _set_play_config(crawl_config, page_size=page_size, reviews_per_app=10)
+    play_reviews_server.set_reviews(app_id, _items(play_review_item, 'looping', 10))
+    empty_with_token = PlayAnswer(
+        body=PlayReviewsServer.envelope(RPC_ID, PlayReviewsServer.page_payload([], 'tok-again'))
+    )
+    # Each such answer asks for one more page; five are queued so a crawler that follows them ends.
+    play_reviews_server.push(app_id, PlayAnswer(), *[empty_with_token] * 5)
+    crawl_config.set_app_ids('playstore', app_id)
+
+    [app] = PlayStoreCrawler(crawl_config.path).run().apps
+
+    assert (app.outcome, app.fetched) == (OUTCOME_ERROR, page_size)
+    assert 'a page without reviews came with a next-page token' in app.detail
+    assert len(play_reviews_server.requests_for(app_id)) == 2
+
+
+@pytest.mark.requires_db
+def test_a_later_page_failing_keeps_the_reviews_read_before_it(
+    crawl_config, play_reviews_server, play_review_item, minio_bucket, test_db_engine, monkeypatch
+):
+    from src.utils.minio_client import MinIOClient
+
+    monkeypatch.setenv('ENABLE_PARQUET_WRITE', 'true')
+    page_size, app_id = 4, 'com.example.partial'
+    _set_play_config(crawl_config, page_size=page_size, reviews_per_app=10)
+    play_reviews_server.set_reviews(app_id, _items(play_review_item, 'partial', 10))
+    play_reviews_server.push(app_id, PlayAnswer(), PlayAnswer(status=404))  # the second page fails
+    crawl_config.set_app_ids('playstore', app_id)
+    storage_path = None
+    try:
+        summary = PlayStoreCrawler(crawl_config.path).run()
+        storage_path = summary.storage_path
+
+        [app] = summary.apps
+        assert (app.outcome, app.fetched, app.new) == (OUTCOME_ERROR, page_size, page_size)
+        assert app.detail.startswith('PlayReviewsError(') and 'HTTP 404' in app.detail
+        assert summary.failure is None and storage_path is not None
+        rows = MinIOClient().get_parquet(storage_path).to_pylist()
+        assert sorted(row['platform_review_id'] for row in rows) == [f'partial-{i}' for i in range(page_size)]
+        assert len(play_reviews_server.requests_for(app_id)) == 2
+    finally:
+        with test_db_engine.begin() as conn:
+            conn.execute(text('DELETE FROM ingestion_batch WHERE storage_path = :path'), {'path': storage_path})
+            conn.execute(
+                text("DELETE FROM apps WHERE platform_type = 'PLAYSTORE' AND platform_app_id = :id"), {'id': app_id}
+            )
+
+
+@pytest.mark.requires_db
 def test_crawled_reviews_reach_bronze_and_apps_keep_their_catalog_name(
     crawl_config, play_reviews_server, play_review_item, minio_bucket, test_db_engine, monkeypatch
 ):

@@ -58,9 +58,10 @@ class StoreCrawlSummary:
 def playstore_failure(apps: Sequence[AppCrawlResult]) -> Optional[str]:
     """The Play store fails when every app came back with zero reviews.
 
-    An app whose request failed is ``error`` with zero reviews, and Play answers an app id it does
-    not know with an empty page, so one such app is a warning, while every app empty or failing
-    at once is the store or the client failing.
+    An app whose first request failed is ``error`` with zero reviews (a later page failing keeps
+    the reviews read before it), and Play answers an app id it does not know with an empty page,
+    so one such app is a warning, while every app empty or failing at once is the store or the
+    client failing.
     """
     if apps and all(app.fetched == 0 for app in apps):
         return f'Play Store: 앱 {len(apps)}개 모두 리뷰 0건'

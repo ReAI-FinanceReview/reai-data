@@ -1,6 +1,6 @@
 """Play 스토어 리뷰를 batchexecute로 한 쪽씩 읽는 자체 클라이언트 (Issue #133)
 
-평소 크롤(PlayStoreCrawler.get_playstore_reviews)과 app_version 백필(app_version_backfill.fetch_playstore_versions)이
+평소 크롤(PlayStoreCrawler._read_reviews)과 app_version 백필(app_version_backfill.fetch_playstore_versions)이
 같은 코드로 읽는다. google-play-scraper 1.2.7의 리뷰 조회(features/reviews.py)를 대신한다.
 
 - 요청: ``playstore.reviews_url``(언어, 국가를 채운 batchexecute URL)에 ``f.req`` 폼을 POST한다.
